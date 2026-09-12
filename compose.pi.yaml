@@ -1,0 +1,19 @@
+# pi5-s2 overlay. The Telegram bot already owns 127.0.0.1:8081.
+# Join the shared gateway network; do not attach to korail-bot networks.
+services:
+  api:
+    container_name: teum-mobile-api
+    ports: !override
+      - "127.0.0.1:8082:8081"
+    environment:
+      MOBILE_ORIGINS: https://localhost,capacitor://localhost,https://teum.thsvkd.dev,https://teum.thsvkd.dev:4443
+    networks:
+      - default
+      - edge
+  redis:
+    container_name: teum-mobile-redis
+
+networks:
+  edge:
+    external: true
+    name: edge

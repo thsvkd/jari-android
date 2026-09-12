@@ -75,6 +75,7 @@ def test_server_identity_is_only_identity_and_logout_revokes(api, monkeypatch):
         "favourites",
         "notify",
         "devices",
+        "invites",
     ],
 )
 def test_every_mutation_needs_session(api, path):
@@ -114,6 +115,44 @@ def test_railway_auth_failure_does_not_revoke_app_session(api):
     )
     assert response.status_code == 428
     assert client.get("/api/mobile/status", headers=headers).status_code == 200
+
+
+def test_only_admin_can_create_invites(api):
+    client, identity, _ = api
+    alice = signup(api, "alice")
+    forbidden = client.post(
+        "/api/mobile/invites",
+        headers={"Authorization": "Bearer " + alice["token"]},
+        json={"ttlHours": 24},
+    )
+    assert forbidden.status_code == 403
+    identity.ensure_admin("operator", "a long admin passphrase")
+    admin = client.post(
+        "/api/mobile/auth/login",
+        json={
+            "username": "operator",
+            "password": "a long admin passphrase",
+            "role": "admin",
+        },
+    )
+    assert admin.status_code == 200
+    created = client.post(
+        "/api/mobile/invites",
+        headers={"Authorization": "Bearer " + admin.json["token"]},
+        json={"ttlHours": 24},
+    )
+    assert created.status_code == 200
+    assert len(created.json["invite"]) >= 16
+    guest = client.post(
+        "/api/mobile/auth/register",
+        json={
+            "username": "chosen",
+            "password": "a long secure passphrase",
+            "invite": created.json["invite"],
+        },
+    )
+    assert guest.status_code == 200
+    assert guest.json["user"]["role"] == "member"
 
 
 def test_overly_nested_payload_is_a_client_error(api):

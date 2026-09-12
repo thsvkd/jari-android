@@ -6,7 +6,7 @@ from functools import wraps
 from flask import Flask, g, jsonify, request
 from werkzeug.exceptions import HTTPException
 
-from korail_bot.mobile.identity import AuthError
+from korail_bot.mobile.identity import AuthError, timestamp
 from korail_bot.services.mini_app_gateway import MiniAppError
 
 PREFIX = "/api/mobile"
@@ -129,7 +129,10 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
             return jsonify(
                 identity.register(username, payload.get("password"), payload.get("invite"))
             )
-        return jsonify(identity.login(username, payload.get("password")))
+        role = payload.get("role")
+        if role not in {None, "admin", "member"}:
+            raise AuthError("로그인 경로를 확인해주세요.", 400)
+        return jsonify(identity.login(username, payload.get("password"), expected_role=role))
 
     @app.post(PREFIX + "/auth/logout")
     @authenticated
@@ -137,11 +140,28 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
         identity.revoke(g.token)
         return jsonify(ok=True)
 
+    @app.post(PREFIX + "/invites")
+    @authenticated
+    def create_invite():
+        if g.user.get("role") != "admin":
+            raise AuthError("관리자만 초대 코드를 만들 수 있습니다.", 403)
+        hours = g.payload.get("ttlHours", 24)
+        if hours is None:
+            hours = 24
+        if not isinstance(hours, int) or isinstance(hours, bool) or not 1 <= hours <= 168:
+            raise AuthError("초대 유효 시간은 1시간에서 7일 사이로 정해주세요.", 400)
+        token = identity.create_invite(ttl=hours * 3600)
+        return jsonify(
+            invite=token,
+            ttlHours=hours,
+            expiresAt=timestamp(identity.clock() + hours * 3600),
+        )
+
     @app.post(PREFIX + "/bootstrap")
     @authenticated
     def bootstrap():
         result = gateway.bootstrap(g.user["storage_id"])
-        result["user"] = {key: g.user[key] for key in ("id", "username")}
+        result["user"] = {key: g.user[key] for key in ("id", "username", "role")}
         result["capabilities"] = {
             "korail": booking_available,
             "srt": False,

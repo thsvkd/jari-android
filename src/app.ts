@@ -101,7 +101,9 @@ export class TeumApp {
   private trainOptions: TrainOption[] = [];
   private trainListTruncated = false;
   private notifications: NotificationItem[] = [];
+  private authGate: "choose" | "admin" | "guest" = "choose";
   private authMode: "login" | "register" = "login";
+  private invitePreview = "";
   private scheduleOpen = false;
   private accessRequired = false;
   private accessRequestPending = false;
@@ -148,7 +150,9 @@ export class TeumApp {
     this.trainOptions = [];
     this.trainListTruncated = false;
     this.notifications = [];
+    this.authGate = "choose";
     this.authMode = "login";
+    this.invitePreview = "";
     this.scheduleOpen = false;
     this.accessRequired = false;
     this.accessRequestPending = false;
@@ -550,6 +554,7 @@ export class TeumApp {
       <section class="profile-card"><span class="profile-avatar">${escapeHtml((state.user?.username || "나").slice(0, 1))}</span><div><b>${escapeHtml(state.user?.username || "여행자")}</b><small>초대로 함께하는 틈</small></div></section>
       <section class="settings-section"><p class="eyebrow">RAILWAY ACCOUNT</p><button class="settings-row" data-view="rail-account"><span><b>코레일 계정</b><small>${state.rail.registered ? "연결됨 · 예약 준비 완료" : "연결되지 않음"}</small></span><em>${state.rail.registered ? "관리" : "연결"} →</em></button><div class="settings-row disabled"><span><b>SRT 계정</b><small>현재 서버에서 지원하지 않아요</small></span><em>이용 불가</em></div></section>
       <section class="settings-section"><p class="eyebrow">NOTIFICATIONS</p><div class="settings-row static"><span><b>검색 진행 알림</b><small>${notifyAvailable ? "서버가 검색 경과를 알려주는 간격" : "현재 서버에서 설정을 지원하지 않아요"}</small></span><div class="stepper small"><button data-action="notify-minus" ${notifyAvailable ? "" : "disabled"}>−</button><output>${notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가"}</output><button data-action="notify-plus" ${notifyAvailable ? "" : "disabled"}>＋</button></div></div><button class="settings-row" data-action="request-push" ${pushAvailable ? "" : "disabled"}><span><b>기기 푸시 알림</b><small>${pushAvailable ? "Android 알림 권한 설정" : "Firebase가 구성되지 않아 사용할 수 없어요"}</small></span><em>${pushAvailable ? "설정" : "이용 불가"}</em></button></section>
+      ${state.user?.role === "admin" ? `<section class="settings-section"><p class="eyebrow">INVITES</p><button class="settings-row" data-action="create-invite"><span><b>선택받은 자 초대 코드</b><small>한 번만 쓸 수 있는 코드를 만듭니다</small></span><em>만들기 →</em></button>${this.invitePreview ? `<div class="invite-card"><p>이 코드는 지금만 다시 보여줍니다. 선택받은 자에게 전해주세요.</p><code>${escapeHtml(this.invitePreview)}</code><div class="invite-actions"><button class="button primary" data-action="copy-invite" type="button">복사</button><button class="button ghost" data-action="dismiss-invite" type="button">닫기</button></div></div>` : ""}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">APP</p><button class="settings-row" data-action="theme"><span><b>화면 테마</b><small>시스템과 별도로 바꿀 수 있어요</small></span><em>${this.theme === "dark" ? "다크" : "라이트"}</em></button><div class="settings-row static"><span><b>앱 버전</b><small>서버 ${escapeHtml(state.version)}</small></span><em>Beta</em></div></section>
       <button class="button ghost danger" data-action="app-logout">앱에서 로그아웃</button>`;
   }
@@ -569,18 +574,37 @@ export class TeumApp {
       return `<div class="auth-shell with-demo"><aside class="demo-banner" data-demo-banner aria-label="데모 상태"><b>데모 모드</b><span>실제 조회·예약 없음</span></aside><div class="auth-art"><span class="orbit one"></span><span class="orbit two"></span><i>틈</i></div><section class="auth-card"><p class="eyebrow">FIXTURE ONLY</p><h1>자격증명 없이\n둘러보세요.</h1><p>데모는 샘플 데이터만 사용하며 로그인이나 철도 요청을 보내지 않습니다.</p><button class="button primary" data-action="demo-enter">샘플 화면 시작 <span>→</span></button></section></div>`;
     }
     const register = this.authMode === "register";
+    const admin = this.authGate === "admin";
+    const choosing = this.authGate === "choose";
+    const title = choosing
+      ? "누구로\n들어오세요."
+      : admin
+        ? "관리자로\n들어갑니다."
+        : register
+          ? "초대받은 틈으로\n들어오세요."
+          : "선택받은 자로\n이어갑니다.";
+    const copy = choosing
+      ? "관리자는 아이디와 비밀번호로, 선택받은 자는 초대 코드로 처음 계정을 만듭니다."
+      : admin
+        ? "운영자 아이디와 비밀번호를 입력하세요."
+        : register
+          ? "받은 코드로 아이디와 비밀번호를 정합니다."
+          : "이미 만든 아이디와 비밀번호로 들어옵니다.";
     return `<div class="auth-shell ${this.options.demoMode ? "with-demo" : ""}">
       ${this.options.demoMode ? '<aside class="demo-banner" data-demo-banner aria-label="데모 상태"><b>데모 모드</b><span>실제 조회·예약 없음</span></aside>' : ""}
       <div class="auth-art"><span class="orbit one"></span><span class="orbit two"></span><i>틈</i></div>
-      <section class="auth-card"><p class="eyebrow">A LITTLE SPACE FOR YOUR JOURNEY</p><h1>${register ? "초대받은 틈으로\n들어오세요." : "기다림은 가볍게.\n여행은 그대로."}</h1><p>${register ? "초대 코드로 나만의 앱 계정을 만듭니다." : "로그인하면 서버에서 기다리는 여정을 이어서 보여드려요."}</p>
-        <div class="segmented"><button data-auth-mode="login" class="${register ? "" : "active"}">로그인</button><button data-auth-mode="register" class="${register ? "active" : ""}">초대 코드로 가입</button></div>
+      <section class="auth-card"><p class="eyebrow">A LITTLE SPACE FOR YOUR JOURNEY</p><h1>${title}</h1><p>${copy}</p>
+        ${choosing ? `<div class="gate-list"><button class="gate-card" data-auth-gate="admin" type="button"><b>관리자</b><small>아이디와 비밀번호로 들어갑니다</small></button><button class="gate-card" data-auth-gate="guest" type="button"><b>선택받은 자</b><small>로그인하거나 초대 코드로 처음 설정합니다</small></button></div>` : ""}
+        ${admin ? `<form id="auth-form" class="form-stack"><label class="field"><span>관리자 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label><label class="field"><span>관리자 비밀번호</span><input name="password" type="password" minlength="12" maxlength="128" autocomplete="current-password" required></label>${this.renderError()}<button class="button primary" type="submit">관리자로 들어가기 <span>→</span></button></form><button class="text-button" data-auth-gate="choose" type="button">다른 방법으로</button>` : ""}
+        ${this.authGate === "guest" ? `<div class="segmented"><button data-auth-mode="login" class="${register ? "" : "active"}" type="button">로그인</button><button data-auth-mode="register" class="${register ? "active" : ""}" type="button">처음 설정</button></div>
         <form id="auth-form" class="form-stack">
           <label class="field"><span>앱 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label>
           <label class="field"><span>앱 비밀번호</span><input name="password" type="password" minlength="12" maxlength="128" autocomplete="${register ? "new-password" : "current-password"}" required></label>
-          ${register ? '<label class="field"><span>일회용 초대 코드</span><input name="invite" minlength="16" maxlength="128" autocomplete="one-time-code" required></label>' : ""}
+          ${register ? '<label class="field"><span>최초 설정용 코드</span><input name="invite" minlength="16" maxlength="128" autocomplete="one-time-code" required></label>' : ""}
           ${this.renderError()}
-          <button class="button primary" type="submit">${register ? "가입하고 시작하기" : "로그인"} <span>→</span></button>
+          <button class="button primary" type="submit">${register ? "계정 만들고 시작하기" : "로그인"} <span>→</span></button>
         </form>
+        <button class="text-button" data-auth-gate="choose" type="button">다른 방법으로</button>` : ""}
         ${this.options.demoMode ? '<button class="text-button demo-enter" data-action="demo-enter">샘플 화면 바로 보기</button>' : ""}
         <p class="auth-note">앱 계정과 코레일 계정은 서로 다릅니다. 결제는 코레일에서 직접 진행합니다.</p>
       </section>
@@ -826,6 +850,14 @@ export class TeumApp {
       this.navigate(view);
       return;
     }
+    const authGate = button.dataset.authGate;
+    if (authGate === "choose" || authGate === "admin" || authGate === "guest") {
+      this.authGate = authGate;
+      this.authMode = "login";
+      this.error = "";
+      this.render();
+      return;
+    }
     const authMode = button.dataset.authMode;
     if (authMode === "login" || authMode === "register") {
       this.authMode = authMode;
@@ -966,6 +998,26 @@ export class TeumApp {
       case "request-push":
         void this.options.onRequestPush?.();
         break;
+      case "create-invite":
+        void this.run(async (isCurrent) => {
+          const result = await this.api.createInvite({ ttlHours: 72 });
+          if (!isCurrent()) return;
+          this.invitePreview = result.invite;
+          this.showToast("초대 코드를 만들었어요. 지금 화면에만 다시 보입니다.");
+        });
+        break;
+      case "copy-invite":
+        if (this.invitePreview) {
+          void navigator.clipboard?.writeText(this.invitePreview).then(
+            () => this.showToast("초대 코드를 복사했어요."),
+            () => this.showToast("복사를 지원하지 않는 기기입니다. 코드를 직접 전달해주세요."),
+          );
+        }
+        break;
+      case "dismiss-invite":
+        this.invitePreview = "";
+        this.render();
+        break;
       case "rail-logout":
         if (window.confirm("코레일 계정 연결을 해제할까요? 진행 중인 검색은 별도로 중지해야 합니다.")) {
           void this.run(async (isCurrent) => {
@@ -1021,9 +1073,13 @@ export class TeumApp {
     const invite = String(data.get("invite") || "").trim();
     await this.run(async (isCurrent) => {
       const result =
-        this.authMode === "register"
+        this.authMode === "register" && this.authGate === "guest"
           ? await this.api.registerApp({ username, password, invite })
-          : await this.api.login({ username, password });
+          : await this.api.login({
+              username,
+              password,
+              role: this.authGate === "admin" ? "admin" : "member",
+            });
       if (!isCurrent()) return;
       if (!result.token) {
         this.error = "서버가 로그인 세션을 발급하지 않았습니다.";

@@ -43,7 +43,8 @@ class IdentityStore:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS users (
                     id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL, storage_id INTEGER UNIQUE NOT NULL
+                    password_hash TEXT NOT NULL, storage_id INTEGER UNIQUE NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'member'
                 );
                 CREATE TABLE IF NOT EXISTS invites (
                     hash TEXT PRIMARY KEY, expires REAL NOT NULL, redeemed REAL
@@ -56,6 +57,11 @@ class IdentityStore:
                     key TEXT PRIMARY KEY, expires REAL NOT NULL, count INTEGER NOT NULL
                 );
             """)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(users)")}
+            if "role" not in columns:
+                db.execute(
+                    "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'"
+                )
 
     @contextmanager
     def connect(self):
@@ -101,10 +107,10 @@ class IdentityStore:
             ).rowcount
             if not changed:
                 raise AuthError("초대 코드가 유효하지 않거나 만료되었습니다.", 403)
-            user = {"id": "mobile_" + secrets.token_hex(16), "username": username}
+            user = {"id": "mobile_" + secrets.token_hex(16), "username": username, "role": "member"}
             try:
                 db.execute(
-                    "INSERT INTO users VALUES (?, ?, ?, ?)",
+                    "INSERT INTO users (id, username, password_hash, storage_id, role) VALUES (?, ?, ?, ?, 'member')",
                     (
                         user["id"],
                         username,
@@ -116,6 +122,40 @@ class IdentityStore:
                 raise AuthError("사용할 수 없는 앱 아이디입니다.", 409) from exc
             return self._session(db, user)
 
+    def ensure_admin(self, username, password):
+        username = self.credentials(username, password)
+        hashed = generate_password_hash(password, method=PASSWORD_METHOD)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+            if existing:
+                db.execute(
+                    "UPDATE users SET password_hash=?, role='admin' WHERE id=?",
+                    (hashed, existing["id"]),
+                )
+                return {"id": existing["id"], "username": username, "role": "admin"}
+            user = {
+                "id": "mobile_" + secrets.token_hex(16),
+                "username": username,
+                "role": "admin",
+            }
+            db.execute(
+                "INSERT INTO users (id, username, password_hash, storage_id, role) VALUES (?, ?, ?, ?, 'admin')",
+                (
+                    user["id"],
+                    username,
+                    hashed,
+                    -(2**51 + secrets.randbelow(2**50)),
+                ),
+            )
+            return user
+
+    def _public_user(self, user):
+        role = dict(user).get("role", "member")
+        if role not in {"admin", "member"}:
+            role = "member"
+        return {"id": user["id"], "username": user["username"], "role": role}
+
     def _session(self, db, user):
         token = secrets.token_urlsafe(32)
         expires = self.clock() + self.session_ttl
@@ -123,11 +163,11 @@ class IdentityStore:
         db.execute("INSERT INTO sessions VALUES (?, ?, ?)", (digest(token), user["id"], expires))
         return {
             "token": token,
-            "user": {"id": user["id"], "username": user["username"]},
+            "user": self._public_user(user),
             "expiresAt": timestamp(expires),
         }
 
-    def login(self, username, password):
+    def login(self, username, password, expected_role=None):
         username = self.credentials(username, password)
         with self.connect() as db:
             user = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
@@ -137,6 +177,14 @@ class IdentityStore:
             valid = check_password_hash(encoded, password)
             if user is None or not valid:
                 raise AuthError()
+            role = self._public_user(user)["role"]
+            if expected_role in {"admin", "member"} and role != expected_role:
+                raise AuthError(
+                    "관리자 계정이 아닙니다."
+                    if expected_role == "admin"
+                    else "선택받은 자 화면에서 관리자로 들어갈 수 없습니다.",
+                    403,
+                )
             return self._session(db, user)
 
     def authenticate(self, token):
@@ -149,7 +197,13 @@ class IdentityStore:
             ).fetchone()
         if user is None:
             raise AuthError("앱 로그인이 만료되었습니다. 다시 로그인해주세요.")
-        return {key: user[key] for key in ("id", "username", "storage_id")}
+        public = self._public_user(user)
+        return {
+            "id": public["id"],
+            "username": public["username"],
+            "role": public["role"],
+            "storage_id": user["storage_id"],
+        }
 
     def revoke(self, token):
         with self.connect() as db:

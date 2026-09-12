@@ -4,6 +4,7 @@ import type {
   BootstrapState,
   Conditions,
   Favourite,
+  InviteResult,
   MobileApi,
   NotificationItem,
   PendingReservation,
@@ -141,6 +142,7 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
   return {
     registerApp: (input) => request<AuthResult>("/auth/register", { body: input, authenticated: false }),
     login: (input) => request<AuthResult>("/auth/login", { body: input, authenticated: false }),
+    createInvite: (input = {}) => request<InviteResult>("/invites", { body: input }),
     logoutApp: async () => {
       const generation = options.tokenStorage.generation();
       const token = await options.tokenStorage.read();

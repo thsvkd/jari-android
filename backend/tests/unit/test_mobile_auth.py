@@ -76,3 +76,23 @@ def test_limits_survive_restart_and_reset_only_after_window(tmp_path):
     assert not IdentityStore(store.path, clock=lambda: now[0]).allow("one", 1, 60)
     now[0] += 61
     assert store.allow("one", 1, 60)
+
+
+def test_admin_login_is_separate_from_invited_members(tmp_path):
+    store = IdentityStore(tmp_path / "identity.sqlite3")
+    admin = store.ensure_admin("thsvkd", "a long admin passphrase")
+    assert admin["role"] == "admin"
+    invited = store.register("alice", "a long secure passphrase", store.create_invite())
+    assert invited["user"]["role"] == "member"
+    session = store.login("thsvkd", "a long admin passphrase", expected_role="admin")
+    assert session["user"]["role"] == "admin"
+    with pytest.raises(AuthError) as member_door:
+        store.login("thsvkd", "a long admin passphrase", expected_role="member")
+    assert member_door.value.status == 403
+    with pytest.raises(AuthError) as admin_door:
+        store.login("alice", "a long secure passphrase", expected_role="admin")
+    assert admin_door.value.status == 403
+    store.ensure_admin("thsvkd", "a replaced admin passphrase")
+    store.login("thsvkd", "a replaced admin passphrase", expected_role="admin")
+    with pytest.raises(AuthError):
+        store.login("thsvkd", "a long admin passphrase", expected_role="admin")

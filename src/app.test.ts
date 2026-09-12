@@ -228,6 +228,7 @@ describe("concept C application shell", () => {
     const app = new TeumApp(root, createDemoApi(), { demoMode: false });
     mounted.push(app);
     await app.start(false);
+    root.querySelector<HTMLButtonElement>("[data-auth-gate='guest']")?.click();
 
     const username = root.querySelector<HTMLInputElement>("[name='username']")!;
     const password = root.querySelector<HTMLInputElement>("[name='password']")!;
@@ -390,7 +391,7 @@ it.each(["logout", "auth expiry", "direct switch"])("clears all personal UI stat
   } else if (transition === "auth expiry") {
     api.search = async () => { throw new ApiError("expired", 401, "auth"); };
     root.querySelector<HTMLButtonElement>("[data-action='start-now']")!.click();
-    await vi.waitFor(() => expect(root.querySelector("#auth-form")).not.toBeNull());
+    await vi.waitFor(() => expect(root.querySelector("[data-auth-gate='admin']")).not.toBeNull());
   } else {
     await app.start(true);
   }
@@ -398,7 +399,7 @@ it.each(["logout", "auth expiry", "direct switch"])("clears all personal UI stat
   expect(root.textContent).not.toContain("PRIVATE_A");
   if (transition !== "direct switch") {
     expect(app).toMatchObject({ state: null, conditions: null, history: [], busy: false });
-    expect(root.querySelector("#auth-form")).not.toBeNull();
+    expect(root.querySelector("[data-auth-gate='admin']")).not.toBeNull();
   }
 });
 
@@ -441,6 +442,7 @@ it("discards a deferred login token after the auth generation is reset", async (
   const app = new TeumApp(root, { ...createDemoApi(), login: () => pending.promise }, { demoMode: false, onToken });
   mounted.push(app);
   await app.start(false);
+  root.querySelector<HTMLButtonElement>("[data-auth-gate='guest']")!.click();
   edit(root, "username", "private_A");
   edit(root, "password", "private_A_password");
   root.querySelector("#auth-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -448,8 +450,8 @@ it("discards a deferred login token after the auth generation is reset", async (
   pending.resolve({ token: "A", user: { id: "A", username: "private_A" }, expiresAt: "future" });
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(onToken).not.toHaveBeenCalled();
-  expect(root.querySelector<HTMLInputElement>("[name='username']")!.value).toBe("");
-  expect(root.querySelector<HTMLInputElement>("[name='password']")!.value).toBe("");
+  expect(root.querySelector("#auth-form")).toBeNull();
+  expect(root.querySelector("[data-auth-gate='guest']")).not.toBeNull();
 });
 
 it("keeps the seat arrangement when passenger controls temporarily hide it", async () => {

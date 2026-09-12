@@ -312,6 +312,18 @@ small { color: var(--muted); }
 .segmented { display: grid; grid-template-columns: 1fr 1fr; margin: 22px 0 18px; padding: 4px; border-radius: 13px; background: color-mix(in srgb, var(--muted) 11%, transparent); }
 .segmented button { min-height: 38px; border-radius: 10px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 650; }
 .segmented button.active { background: var(--surface); color: var(--text); box-shadow: 0 3px 12px rgb(20 30 45 / 8%); }
+.gate-list { display: grid; gap: 10px; margin: 22px 0 8px; }
+.gate-card {
+  display: grid; gap: 4px; width: 100%; padding: 16px 18px; border-radius: 16px;
+  background: var(--surface); color: var(--text); text-align: left;
+  box-shadow: 0 8px 24px rgb(20 30 45 / 6%);
+}
+.gate-card b { font-size: 16px; letter-spacing: -.4px; }
+.gate-card small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.invite-card { margin: 10px 12px 14px; padding: 14px; border-radius: 14px; background: var(--accent-soft); }
+.invite-card p { margin: 0 0 10px; color: var(--accent-ink); font-size: 11px; line-height: 1.5; }
+.invite-card code { display: block; padding: 10px; border-radius: 10px; background: var(--surface); font-size: 12px; word-break: break-all; }
+.invite-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
 .auth-note { margin: 21px 0 0; color: var(--muted); font-size: 9px; line-height: 1.65; text-align: center; }
 .demo-enter { display: block; margin: 12px auto 0; }
 

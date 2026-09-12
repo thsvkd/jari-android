@@ -96,16 +96,16 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
   });
   running = asSearch(initialConditions, ["015", "019"]);
 
-  const auth = (username: string): AuthResult => ({
+  const auth = (username: string, role: AuthResult["user"]["role"] = "member"): AuthResult => ({
     token: `demo-${username}`,
-    user: { id: "demo-user", username },
+    user: { id: "demo-user", username, role },
     expiresAt: new Date(clock().getTime() + 86_400_000).toISOString(),
   });
 
   const bootstrap = (): BootstrapState => ({
     version: "demo",
     timeZone: "Asia/Seoul",
-    user: { id: "demo-user", username: "여행자" },
+    user: { id: "demo-user", username: "여행자", role: "member" },
     rail: {
       registered,
       stations,
@@ -133,8 +133,13 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
   });
 
   return {
-    registerApp: async (input) => auth(input.username),
-    login: async (input) => auth(input.username),
+    registerApp: async (input) => auth(input.username, "member"),
+    login: async (input) => auth(input.username, input.role ?? "member"),
+    createInvite: async () => ({
+      invite: "demo-invite-code-not-for-railway",
+      ttlHours: 24,
+      expiresAt: new Date(clock().getTime() + 86_400_000).toISOString(),
+    }),
     logoutApp: async () => ({ ok: true }),
     bootstrap: async () => bootstrap(),
     railwayRegister: async () => {

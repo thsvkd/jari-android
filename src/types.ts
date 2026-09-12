@@ -12,9 +12,12 @@ export interface Capabilities {
   lastChecked: boolean;
 }
 
+export type AppRole = "admin" | "member";
+
 export interface AppUser {
   id: string;
   username: string;
+  role?: AppRole;
 }
 
 export interface AuthResult {
@@ -149,9 +152,16 @@ export interface StatusResult {
   pending: PendingReservation[];
 }
 
+export interface InviteResult {
+  invite: string;
+  ttlHours: number;
+  expiresAt: string;
+}
+
 export interface MobileApi {
   registerApp(input: { username: string; password: string; invite: string }): Promise<AuthResult>;
-  login(input: { username: string; password: string }): Promise<AuthResult>;
+  login(input: { username: string; password: string; role?: AppRole }): Promise<AuthResult>;
+  createInvite(input?: { ttlHours?: number }): Promise<InviteResult>;
   logoutApp(): Promise<{ ok: boolean }>;
   bootstrap(): Promise<BootstrapState>;
   railwayRegister(input: { username: string; password: string }): Promise<{ registered: boolean }>;
