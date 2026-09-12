@@ -1,0 +1,17 @@
+{
+  "name": "틈 · 내 여행의 빈자리",
+  "short_name": "틈",
+  "lang": "ko-KR",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f5f7f8",
+  "theme_color": "#4e67d8",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

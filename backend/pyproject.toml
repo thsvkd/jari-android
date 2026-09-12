@@ -1,0 +1,187 @@
+[project]
+name = "korail-ktx-bot"
+# The one place a release edits the number. korail_bot.__version__ reads it
+# back out of the installed metadata, and `make lock` has to follow a bump so
+# that scripts/server.sh - which syncs with --frozen before serving - is not
+# stopped by a lockfile still naming the old one.
+#
+# Written in PEP 440's canonical form, because that is what comes back out:
+# packaging normalises on the way in, so a "4.2.0-beta.1" declared here is
+# read as "4.2.0b1" everywhere it matters - the log line, the announcement,
+# and the key the release notes are looked up under.
+version = "4.8.0b1"
+description = "매진된 KTX 열차를 모니터링하다 좌석이 나오면 예약해주는 텔레그램 봇"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+
+dependencies = [
+    "flask>=3.1",
+    "flask-restful>=0.3.10",
+    "flask-cors>=6.0.2",
+    "requests>=2.32",
+    # hiredis is the C parser redis-py picks up automatically when present.
+    "redis[hiredis]>=7.0",
+    # Used directly by korail_bot.utils.crypto. It used to arrive only as a
+    # transitive dependency of pyopenssl, which nothing imports.
+    "cryptography>=46.0",
+    "korail2",
+    # Production WSGI server. Deliberately single-process: app.py starts the
+    # Telegram poller and the search-process registry at import time, so a
+    # forking server with several workers would give the bot token competing
+    # getUpdates consumers (Telegram answers the second one with a 409).
+    "waitress>=3.0",
+    "tzdata>=2025.2",
+    "psutil>=7.0",
+]
+
+[project.optional-dependencies]
+# Kept separate so `uv sync` on a dev box does not need a Docker daemon just
+# to import the test helpers.
+containers = ["testcontainers[redis]>=4.8"]
+mobile-push = [
+    "firebase-admin>=7.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/thsvkd/korail_KTX_macro_telegrambot"
+# The repository this one was forked from. Kept in the metadata because most
+# of the original author's code is still here - see the attribution section
+# of the README.
+Original = "https://github.com/GeunSam2/korail_KTX_macro_telegrambot"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "freezegun>=1.5",
+    "testcontainers[redis]>=4.8",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "types-requests",
+    "types-waitress",
+    "pre-commit>=4.0",
+    "fakeredis>=2.31",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.uv.sources]
+# Fork carrying the Dynapath bypass. Pinned to the branch; uv records the
+# resolved commit in uv.lock, so builds stay reproducible.
+korail2 = { git = "https://github.com/dhfhfk/korail2.git", rev = "bypassDynapath" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/korail_bot"]
+
+# --------------------------------------------------------------------- ruff
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src", "tests"]
+# .claude holds scratch git worktrees with their own copy of the tree; linting
+# them reports every finding twice, against files that are not this checkout.
+#
+# *.md because the formatter also rewrites Python code blocks inside Markdown.
+# The snippets in the docs are illustrations - several quote module paths or
+# older APIs on purpose - and restyling them without correcting them makes the
+# documentation look maintained when it is not.
+extend-exclude = [".claude", ".omc", "*.md"]
+
+[tool.ruff.lint]
+select = [
+    "F",   # pyflakes
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+]
+ignore = [
+    # The codebase logs with f-strings in ~250 places. Converting them is a
+    # code change rather than a toolchain one, so the rule stays off until
+    # that is done deliberately.
+    "G004",
+    # Long messages sent to Telegram are more readable unwrapped.
+    "E501",
+    "B008",
+    # The bot writes Korean, and its messages carry symbols such as 'ℹ' that
+    # this rule reads as ambiguous look-alikes for ASCII.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    # The nested conditionals this flags each carry a comment explaining that
+    # specific condition. Collapsing them into one `and` loses the anchor for
+    # those comments, which is a worse trade here than the extra indent.
+    "SIM102",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Re-exports.
+"src/korail_bot/**/__init__.py" = ["F401"]
+# Tests reach into private helpers and shadow names on purpose. RUF059 fires
+# on `valid, error = validate(...)` where only `valid` is asserted on, which
+# reads better than renaming half the tuple to `_error`.
+"tests/**" = ["B011", "SIM117", "RUF059"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["korail_bot"]
+
+# ------------------------------------------------------------------- pytest
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests/unit"]
+addopts = ["--strict-markers", "--strict-config", "-ra"]
+markers = [
+    "redis_container: needs a real Redis (testcontainers starts one; requires Docker)",
+]
+filterwarnings = [
+    # A warning fails the run. The suite is at zero, and a deprecation is the
+    # notice that a dependency is going to break us on some later release -
+    # worth seeing when the bump lands rather than when the API is gone.
+    # Silence one with an explicit ignore below, deliberately.
+    "error",
+    # testcontainers 4.x deprecates its own decorator internally.
+    "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning",
+]
+
+# --------------------------------------------------------------------- mypy
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src"]
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "src"
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# Neither of these ships type information.
+module = ["korail2.*", "flask_restful.*"]
+ignore_missing_imports = true
+
+# ----------------------------------------------------------------- coverage
+
+[tool.coverage.run]
+source = ["src/korail_bot"]
+branch = true
+
+[tool.coverage.report]
+# An abstract method's body is unreachable by construction - the same
+# category as the `raise NotImplementedError` beside it here, and the reason
+# StorageInterface's several dozen `pass` statements were dragging the total
+# down while representing no logic anyone could get wrong.
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@abstractmethod"]

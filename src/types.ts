@@ -1,0 +1,173 @@
+export type SearchHealth = "healthy" | "running" | "stale" | "error" | "unavailable" | "unknown";
+
+export interface Capabilities {
+  korail: boolean;
+  srt: boolean;
+  waitlist: boolean;
+  scheduledSearch: boolean;
+  durableNotifications: boolean;
+  favourites: boolean;
+  notificationSettings: boolean;
+  push: boolean;
+  lastChecked: boolean;
+}
+
+export interface AppUser {
+  id: string;
+  username: string;
+}
+
+export interface AuthResult {
+  token: string;
+  user: AppUser;
+  expiresAt: string;
+}
+
+export interface RailState {
+  registered: boolean;
+  stations: string[];
+  majorStations: string[];
+  displayName: string;
+}
+
+export interface Conditions {
+  v: 1;
+  action: "prepare_search";
+  dep_date: string;
+  src_station: string;
+  dst_station: string;
+  dep_time: string;
+  max_dep_time: string;
+  train_type: "1" | "2";
+  seat_option: "1" | "2" | "3" | "4";
+  passenger_count: number;
+  seat_strategy: "1" | "2";
+  seat_preference: string;
+  trains?: string[];
+}
+
+export interface SearchDescription {
+  depDate: string;
+  srcLocate: string;
+  dstLocate: string;
+  depTime: string;
+  maxDepTime: string;
+  trainTypeShow: string;
+  specialInfoShow: string;
+  passengerCount: number;
+  seatStrategy: string;
+  seatPreference: string;
+  selectedTrains: string[];
+}
+
+export interface RunningSearch extends SearchDescription {
+  startedAt: string | null;
+  health?: SearchHealth;
+  lastCheckedAt?: string | null;
+  attemptCount?: number | null;
+  elapsedSeconds?: number | null;
+}
+
+export interface ScheduledSearch {
+  startAt: string | null;
+  timeZone: string;
+  search: SearchDescription;
+}
+
+export interface PendingReservation {
+  reservationId: string | null;
+  trainInfo: string;
+  expiresAt: string | null;
+  seatNumber: string | number | null;
+}
+
+export interface Favourite {
+  id: string;
+  name: string;
+  route: string;
+  window: string;
+  conditions: Conditions;
+}
+
+export interface NotificationItem {
+  id: string;
+  text: string;
+  createdAt: string;
+  kind: string;
+}
+
+export interface BootstrapState {
+  version: string;
+  timeZone: string;
+  user?: AppUser;
+  rail: RailState;
+  running: RunningSearch | null;
+  scheduled: ScheduledSearch | null;
+  pending: PendingReservation[];
+  favourites: Favourite[];
+  notifyMinutes: number;
+  draft: Conditions | null;
+  paymentUrl: string;
+  capabilities: Capabilities;
+  pushAvailable?: boolean;
+  notifications?: { pushAvailable: boolean };
+  demo?: boolean;
+}
+
+export interface TrainOption {
+  no: string;
+  label: string;
+  dep_time?: string;
+  arr_time?: string;
+  name?: string;
+  soldout: boolean;
+}
+
+export interface BookingPayload {
+  conditions: Conditions;
+  trains: string[];
+}
+
+export interface TrainsResult {
+  trains: TrainOption[];
+  truncated: boolean;
+  passengerCount: number;
+}
+
+export interface SearchResult {
+  started: boolean;
+  needsAccessRequest?: boolean;
+  accessRequestPending?: boolean;
+  trialUsed?: number | null;
+  trialLimit?: number | null;
+  running?: RunningSearch | null;
+}
+
+export interface StatusResult {
+  running: RunningSearch | null;
+  scheduled: ScheduledSearch | null;
+  pending: PendingReservation[];
+}
+
+export interface MobileApi {
+  registerApp(input: { username: string; password: string; invite: string }): Promise<AuthResult>;
+  login(input: { username: string; password: string }): Promise<AuthResult>;
+  logoutApp(): Promise<{ ok: boolean }>;
+  bootstrap(): Promise<BootstrapState>;
+  railwayRegister(input: { username: string; password: string }): Promise<{ registered: boolean }>;
+  railwayLogout(): Promise<{ registered: boolean }>;
+  trains(payload: { conditions: Conditions }): Promise<TrainsResult>;
+  search(payload: BookingPayload): Promise<SearchResult>;
+  schedule(payload: BookingPayload & { start_at: string }): Promise<{ scheduled: boolean; startAt: string }>;
+  cancelSearch(): Promise<{ stopped: boolean; unscheduled: boolean }>;
+  cancelReservations(): Promise<{ cancelled: boolean; pending: PendingReservation[] }>;
+  requestAccess(): Promise<{ requested: boolean; approved?: boolean }>;
+  favourites(): Promise<{ favourites: Favourite[] } | Favourite[]>;
+  saveFavourite(payload: { conditions: Conditions; name?: string }): Promise<{ saved: boolean; favourites: Favourite[] }>;
+  deleteFavourite(id: string): Promise<{ deleted: boolean; favourites: Favourite[] }>;
+  setNotify(minutes: number): Promise<{ notifyMinutes: number }>;
+  notifications(): Promise<{ items: NotificationItem[]; pushAvailable: boolean }>;
+  registerDevice(token: string): Promise<{ ok?: boolean; pushAvailable?: boolean }>;
+  deleteDevice(token: string): Promise<{ ok?: boolean; pushAvailable?: boolean }>;
+  status(): Promise<StatusResult>;
+}

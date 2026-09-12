@@ -1,0 +1,47 @@
+name: teum
+services:
+  api:
+    build: ./backend
+    environment:
+      MOBILE_SECRET_FILE: /run/secrets/mobile_secret
+      MOBILE_DATA_DIR: /data
+      MOBILE_REDIS_URL: redis://redis:6379/0
+      MOBILE_ORIGINS: https://localhost,capacitor://localhost
+    secrets:
+      - mobile_secret
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - identity:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+secrets:
+  mobile_secret:
+    file: ./backend/.secrets/mobile.key
+volumes:
+  identity:
+  redis:
