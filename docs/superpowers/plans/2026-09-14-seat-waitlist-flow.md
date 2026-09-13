@@ -130,6 +130,8 @@ git commit -m "취소표 대기 좌석 계획을 구조화한다"
 
 ### Task 3: 코레일 좌석 조회와 지정 예약 어댑터
 
+**상태: 완료**
+
 **Files:**
 - Modify: `backend/src/korail_bot/services/korail_service.py`
 - Create: `backend/src/korail_bot/services/seat_map_service.py`

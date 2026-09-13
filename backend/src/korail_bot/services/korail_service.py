@@ -22,6 +22,7 @@ from korail_mobile_api import (
     KorailConfig,
     KorailPassengerCounts,
     KorailReservationJobType,
+    KorailSeatAssignment,
     KorailSeatClass,
     MutationConsent,
     TrainSearchQuery,
@@ -29,7 +30,7 @@ from korail_mobile_api import (
 from korail_mobile_api.constants import KORAIL_STANDBY_WAIT_FLAG
 
 from korail_bot.config.settings import settings
-from korail_bot.models import ReservationOutcome, SeatPreference
+from korail_bot.models import ReservationOutcome, SeatPreference, SeatTarget
 from korail_bot.services.rail_service import (
     DuplicateReservationError,
     RailService,
@@ -307,6 +308,84 @@ class KorailService(RailService):
                 and int(str(train.departure_time)[:4]) < int(max_dep_time)
             ]
         return trains
+
+    def search_selectable_trains(self, **kwargs) -> list:
+        """Search using the same current API whose train objects seat reads require."""
+        return self.search_waitlist_trains(**kwargs)
+
+    @staticmethod
+    def _seat_class(seat_class: str) -> KorailSeatClass:
+        try:
+            return {
+                "general": KorailSeatClass.GENERAL,
+                "special": KorailSeatClass.SPECIAL,
+            }[seat_class]
+        except KeyError as exc:
+            raise ValueError("좌석 등급은 일반실 또는 특실이어야 합니다.") from exc
+
+    def seat_cars(self, train, seat_class: str, passenger_count: int = 1):
+        """Read cars for a current train result and cabin class."""
+        client = self._modern_client
+        if not self._logged_in or client is None:
+            raise ValueError("좌석을 조회하려면 먼저 로그인해 주세요.")
+        cabin = self._seat_class(seat_class)
+        return client.get_seat_cars(
+            train,
+            passenger_count=passenger_count,
+            room_class_code=cabin.value,
+        )
+
+    def seat_inventory(
+        self, train, car_no: int, seat_class: str, passenger_count: int = 1
+    ):
+        """Read the current sellability and layout for one car."""
+        client = self._modern_client
+        if not self._logged_in or client is None:
+            raise ValueError("좌석을 조회하려면 먼저 로그인해 주세요.")
+        cabin = self._seat_class(seat_class)
+        return client.get_seat_inventory(
+            train,
+            car_no,
+            passenger_count=passenger_count,
+            room_class_code=cabin.value,
+        )
+
+    def reserve_designated(
+        self,
+        train,
+        inventory,
+        targets: list[SeatTarget],
+        *,
+        passenger_count: int,
+        seat_class: str,
+    ):
+        """Reserve only sellable wire seats from the freshly read inventory."""
+        client = self._modern_client
+        if not self._logged_in or client is None:
+            raise ValueError("좌석을 예약하려면 먼저 로그인해 주세요.")
+        if passenger_count < 1 or len(targets) != passenger_count:
+            raise ValueError("선택한 좌석 수와 승객 수가 같아야 합니다.")
+        if inventory.car_no is None or any(target.car_no != inventory.car_no for target in targets):
+            raise ValueError("한 번의 지정 예약에서는 같은 호차의 좌석만 선택할 수 있습니다.")
+
+        physical_by_number = {seat.seat_no: seat for seat in inventory.seats}
+        assignments = []
+        for target in targets:
+            physical = physical_by_number.get(target.seat_no)
+            if physical is None or physical.sale_possible != "Y":
+                raise ValueError("선택한 좌석 중 현재 판매 가능한 좌석이 없습니다.")
+            if physical.specification != target.label:
+                raise ValueError("좌석 정보가 바뀌었습니다. 좌석표를 다시 불러와 주세요.")
+            assignments.append(KorailSeatAssignment.from_inventory(inventory, physical))
+
+        return client.reserve(
+            train,
+            consent=MutationConsent(allow_reserve=True, dry_run=False),
+            passengers=KorailPassengerCounts(adult=passenger_count),
+            seat_class=self._seat_class(seat_class),
+            job_type=KorailReservationJobType.SEAT_DESIGNATED,
+            seats=assignments,
+        )
 
     @staticmethod
     def describe_waitlist_train(train) -> dict:
