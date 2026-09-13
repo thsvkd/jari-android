@@ -439,6 +439,8 @@ git commit -m "취소표 대기 좌석 후보와 부분 예약을 보여준다"
 
 ### Task 9: 읽기 전용 실서비스 좌석표 검증
 
+**상태: 완료**
+
 **Files:**
 - Create: `backend/scripts/verify_mobile_seat_inventory.py`
 - Create: `backend/tests/unit/test_seat_inventory_evidence.py`

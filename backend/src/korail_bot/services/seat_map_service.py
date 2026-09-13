@@ -39,7 +39,11 @@ class SeatMapService:
         self._ttl = ttl
         self._clock = clock or (lambda: datetime.now(UTC))
         self._token_factory = token_factory or (lambda: token_urlsafe(24))
-        self._family_attribute_codes = frozenset(family_attribute_codes or ())
+        # Live Korail verification on 2026-09-14 identified requested-seat
+        # attribute 015 as the explicit 4-person companion-seat marker.
+        self._family_attribute_codes = frozenset(
+            {"015"} if family_attribute_codes is None else family_attribute_codes
+        )
         self._entries: dict[str, _TrainEntry] = {}
 
     def remember_train(self, owner_id: str, train: object) -> str:
@@ -93,7 +97,8 @@ class SeatMapService:
             family_label = ""
             codes = {seat.other_attribute_code, seat.requested_attribute_code}
             if self._family_attribute_codes.intersection(codes):
-                family_label = seat.message.strip() or "가족석"
+                message = seat.message.strip()
+                family_label = "4인 동반석" if "4인 동반석" in message else message or "가족석"
             seats.append(
                 {
                     "carNo": car_no,
