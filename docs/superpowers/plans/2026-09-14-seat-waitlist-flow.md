@@ -22,6 +22,8 @@
 - 실제 예약·취소와 서버 재시작 전에는 현재 검색·예약 상태를 확인한다.
 - 비밀번호·토큰·Firebase 설정·서명키를 커밋하거나 검증 자료에 남기지 않는다.
 
+실행 순서는 Task 1, 2, 3, 9, 4, 5, 6, 7, 8, 10으로 한다. 실제 좌석표의 지원 범위를 읽기 전용으로 먼저 확인한 뒤 API와 화면 계약을 확정한다.
+
 ---
 
 ### Task 1: 기준선과 즐겨찾기 계약
@@ -35,11 +37,11 @@
 - Consumes: `MobileApi.saveFavourite`, `MobileApi.deleteFavourite`, `conditionsToDraft`.
 - Produces: 즐겨찾기가 날짜·열차 번호·좌석 후보를 복원하지 않는 회귀 테스트와 깨끗한 4.8.1 기준선.
 
-- [ ] **Step 1: 오래된 버전 기대값을 현재 패키지 버전으로 고친다**
+- [x] **Step 1: 오래된 버전 기대값을 현재 패키지 버전으로 고친다**
 
 `src/app.test.ts`의 설정 화면 기대값을 `v4.8.1`로 바꾼다. 제품 코드를 테스트에 맞춰 낮추지 않는다.
 
-- [ ] **Step 2: 즐겨찾기 전체 왕복 테스트를 실패하는 형태로 확장한다**
+- [x] **Step 2: 즐겨찾기 전체 왕복 테스트를 실패하는 형태로 확장한다**
 
 `test_real_gateway_delegates_booking_schedule_and_favourites`에서 저장 응답과 GET 응답의 `conditions`에 `dep_date`, `trains`, `seat_targets`가 없음을 확인하고, 프런트 테스트에서는 즐겨찾기를 누른 뒤 다음 날 날짜, 빈 열차 선택, 원래 구간·시간·등급이 복원되는지 확인한다.
 
@@ -51,19 +53,19 @@ assert "seat_targets" not in conditions
 assert http.get("/api/mobile/favourites", headers=headers).json["favourites"]
 ```
 
-- [ ] **Step 3: 테스트를 실행해 실제 결함을 구분한다**
+- [x] **Step 3: 테스트를 실행해 실제 결함을 구분한다**
 
 Run: `npm test -- src/app.test.ts`와 `uv run --frozen pytest tests/unit/test_mobile_booking.py -q`
 
 Expected: 버전 기대값 수정 후 통과한다. 즐겨찾기 왕복이 실패하면 그 실패가 가리키는 최소 코드만 수정한다.
 
-- [ ] **Step 4: 저장·불러오기·삭제 결과를 다시 검증한다**
+- [x] **Step 4: 저장·불러오기·삭제 결과를 다시 검증한다**
 
 Run: `npm test -- src/app.test.ts backend`가 아니라 프런트와 백엔드 명령을 각각 실행한다.
 
 Expected: 프런트 대상 테스트와 `test_mobile_booking.py`가 모두 통과한다.
 
-- [ ] **Step 5: 커밋한다**
+- [x] **Step 5: 커밋한다**
 
 ```powershell
 git add src/app.test.ts src/app.ts src/model.ts backend/tests/unit/test_mobile_booking.py backend/src/korail_bot/services/mini_app_gateway.py
@@ -527,4 +529,3 @@ git commit -m "실제 좌석 선택과 취소표 대기를 완성한다"
 ```
 
 무단으로 원격 푸시, GitHub 릴리스 생성, 결제, 기존 예약 취소를 하지 않는다.
-

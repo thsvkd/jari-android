@@ -84,6 +84,13 @@ def test_real_gateway_delegates_booking_schedule_and_favourites(tmp_path, monkey
         "/api/mobile/favourites", headers=headers, json={"conditions": conditions, "name": "집으로"}
     )
     assert saved.status_code == 200
+    saved_condition = saved.json["favourites"][0]["conditions"]
+    assert saved_condition.get("dep_date", "") == ""
+    assert saved_condition.get("trains", []) == []
+    assert "seat_targets" not in saved_condition
+    listed = http.get("/api/mobile/favourites", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json["favourites"] == saved.json["favourites"]
     fav_id = saved.json["favourites"][0]["id"]
     bob = runtime.identity.register(
         "bobby", "a long secure passphrase", runtime.identity.create_invite()

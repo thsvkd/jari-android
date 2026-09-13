@@ -190,7 +190,7 @@ describe("concept C application shell", () => {
     expect(adminRoot.querySelector(".admin-only-badge")?.textContent).toBe("관리자 전용");
     expect(adminRoot.textContent).toContain("회원 가입 권한은 관리자만 발급할 수 있어요");
     expect(adminRoot.querySelector("[data-action='create-invite']")).not.toBeNull();
-    expect(adminRoot.textContent).toContain("v4.8.0");
+    expect(adminRoot.textContent).toContain("v4.8.1");
     expect(adminRoot.textContent).not.toContain("베타");
 
     const memberState = await demoApi.bootstrap();
@@ -241,6 +241,27 @@ describe("concept C application shell", () => {
     expect(root.textContent).toContain("즐겨찾기를 이용할 수 없어요");
     app.navigate("settings");
     expect(root.querySelector<HTMLButtonElement>("[data-action='notify-plus']")?.disabled).toBe(true);
+  });
+
+  it("loads a favourite as a fresh journey without a stale train selection", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-14T03:00:00+09:00"));
+    const demo = createDemoApi();
+    const state = await demo.bootstrap();
+    state.favourites[0]!.conditions = {
+      ...state.favourites[0]!.conditions,
+      dep_date: "",
+      trains: ["015"],
+    };
+    const { app, root } = await mountLive({ bootstrap: async () => state });
+
+    app.navigate("favourites");
+    root.querySelector<HTMLButtonElement>("[data-use-favourite='demo-home']")!.click();
+
+    expect(root.querySelector<HTMLInputElement>("[name='dep_date']")!.value).toBe("2026-09-15");
+    expect(root.querySelector<HTMLInputElement>("[name='src_station']")!.value).toBe("서울");
+    expect(root.querySelector<HTMLInputElement>("[name='dst_station']")!.value).toBe("부산");
+    expect(root.querySelector("[data-train='015']")).toBeNull();
   });
 
   it("offers the real access-request action when the server requires approval", async () => {
