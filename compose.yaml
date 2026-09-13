@@ -4,11 +4,13 @@ services:
     build: ./backend
     environment:
       MOBILE_SECRET_FILE: /run/secrets/mobile_secret
+      MOBILE_FCM_CREDENTIALS: /run/secrets/firebase_admin
       MOBILE_DATA_DIR: /data
       MOBILE_REDIS_URL: redis://redis:6379/0
       MOBILE_ORIGINS: https://localhost,capacitor://localhost
     secrets:
       - mobile_secret
+      - firebase_admin
     ports:
       - "127.0.0.1:8081:8081"
     volumes:
@@ -42,6 +44,8 @@ services:
 secrets:
   mobile_secret:
     file: ./backend/.secrets/mobile.key
+  firebase_admin:
+    file: ./backend/.secrets/firebase-admin.json
 volumes:
   identity:
   redis:

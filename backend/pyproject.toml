@@ -9,7 +9,7 @@ name = "korail-ktx-bot"
 # packaging normalises on the way in, so a "4.2.0-beta.1" declared here is
 # read as "4.2.0b1" everywhere it matters - the log line, the announcement,
 # and the key the release notes are looked up under.
-version = "4.8.0b1"
+version = "4.8.0"
 description = "매진된 KTX 열차를 모니터링하다 좌석이 나오면 예약해주는 텔레그램 봇"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -26,6 +26,7 @@ dependencies = [
     # transitive dependency of pyopenssl, which nothing imports.
     "cryptography>=46.0",
     "korail2",
+    "korail-mobile-api",
     # Production WSGI server. Deliberately single-process: app.py starts the
     # Telegram poller and the search-process registry at import time, so a
     # forking server with several workers would give the bot token competing
@@ -71,6 +72,7 @@ default-groups = ["dev"]
 # Fork carrying the Dynapath bypass. Pinned to the branch; uv records the
 # resolved commit in uv.lock, so builds stay reproducible.
 korail2 = { git = "https://github.com/dhfhfk/korail2.git", rev = "bypassDynapath" }
+korail-mobile-api = { git = "https://github.com/yakisoba0728/korail-mobile-api.git", rev = "e798fbcf08e56297b4d16a5c300bd7a4f167722d" }
 
 [build-system]
 requires = ["hatchling"]

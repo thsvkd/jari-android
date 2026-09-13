@@ -47,7 +47,7 @@ class Notifications:
                     if value:
                         text = text.replace(value, "[보호된 정보]")
             except Exception:
-                return "예약 상태가 변경되었습니다. 앱에서 확인해주세요."
+                return "예약 상태가 바뀌었어요. 앱에서 확인해 주세요."
         text = re.sub(r"01[016789][- ]?\d{3,4}[- ]?\d{4}", "[전화번호]", str(text))
         # Shared services still speak the old chat vocabulary. Make their
         # suggested actions usable from this standalone application.
@@ -111,11 +111,11 @@ class Notifications:
             ).fetchone()
             if existing and existing["owner"] != owner:
                 raise AuthError(
-                    "다른 앱 계정에 연결된 기기입니다. 이전 계정에서 해제해주세요.", 409
+                    "이미 다른 앱 계정에 연결된 기기예요. 이전 계정에서 먼저 해제해 주세요.", 409
                 )
             count = db.execute("SELECT count(*) FROM devices WHERE owner=?", (owner,)).fetchone()[0]
             if not existing and count >= 10:
-                raise AuthError("등록 가능한 기기 수를 초과했습니다.", 409)
+                raise AuthError("등록할 수 있는 기기 수를 넘었어요.", 409)
             db.execute(
                 "INSERT OR IGNORE INTO devices VALUES (?, ?, ?)",
                 (digest(token), owner, self.box.encrypt(token)),
@@ -188,7 +188,7 @@ def configured_fcm(credentials_path):
             messaging.Message(
                 token=token,
                 notification=messaging.Notification(
-                    title="틈", body="새 알림이 도착했습니다. 앱에서 확인해주세요."
+                    title="틈", body="새 알림이 왔어요. 앱에서 확인해 주세요."
                 ),
                 data={"eventId": event_id},
                 android=messaging.AndroidConfig(priority="high"),

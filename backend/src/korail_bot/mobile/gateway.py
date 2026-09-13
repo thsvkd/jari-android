@@ -27,7 +27,7 @@ class MobileSubmission(MiniAppSubmission):
     def _validated_station(cls, payload, key):
         value = cls._text(payload, key)
         if value not in FALLBACK_STATIONS:
-            raise MiniAppDataError("지원하는 역 이름을 선택해주세요.")
+            raise MiniAppDataError("목록에서 지원하는 역을 선택해 주세요.")
         return value
 
 
@@ -85,19 +85,19 @@ class MobileGateway(MiniAppGateway):
         if isinstance(conditions, dict):
             operator = conditions.get("operator", payload.get("operator", "korail"))
             if not isinstance(operator, str) or operator not in {"korail", "KORAIL", "KTX"}:
-                raise MiniAppError("이 서버는 코레일만 지원합니다.", 422)
+                raise MiniAppError("현재는 코레일만 이용할 수 있어요.", 422)
             if conditions.get("waitlist") or payload.get("waitlist"):
-                raise MiniAppError("예약대기는 아직 지원하지 않습니다.", 422)
+                raise MiniAppError("예약 대기는 아직 지원하지 않아요.", 422)
             preference = conditions.get("seat_preference", "")
             if not isinstance(preference, str):
-                raise MiniAppError("좌석 조건을 확인해주세요.")
+                raise MiniAppError("좌석 조건을 확인해 주세요.")
             decoded = SeatPreference.decode(preference)
             if decoded.encode() != preference:
-                raise MiniAppError("좌석 조건은 A,D:3-5 형식으로 입력해주세요.")
+                raise MiniAppError("좌석 조건은 A,D:3-5 형식으로 입력해 주세요.")
             if any(
                 row is not None and not 1 <= row <= 99 for row in (decoded.row_min, decoded.row_max)
             ) or (decoded.row_min and decoded.row_max and decoded.row_min > decoded.row_max):
-                raise MiniAppError("좌석 행 범위는 1~99 사이에서 순서대로 입력해주세요.")
+                raise MiniAppError("좌석 번호는 1~99 사이에서 작은 번호부터 입력해 주세요.")
         try:
             return MobileSubmission.parse(json.dumps(conditions, ensure_ascii=False))
         except (MiniAppDataError, TypeError, ValueError) as exc:
@@ -110,7 +110,7 @@ class MobileGateway(MiniAppGateway):
         result = self.cancel_search(chat_id)
         if not result["stopped"] and self.storage.get_running_reservation(chat_id):
             raise MiniAppError(
-                "검색을 중지하지 못했습니다. 다시 중지한 뒤 계정을 해제해주세요.", 409
+                "검색을 중지하지 못했어요. 검색을 다시 중지한 뒤 계정 연결을 해제해 주세요.", 409
             )
         self.storage.delete_resume_credentials(chat_id)
         self.storage.delete_user_session(chat_id)
@@ -159,7 +159,7 @@ class UnavailableGateway:
     def __getattr__(self, name):
         def unavailable(*args, **kwargs):
             raise MiniAppError(
-                "예약 서버가 연결되지 않았습니다. 현재 앱 계정 기능만 사용할 수 있습니다.", 503
+                "예약 서버에 연결되지 않았어요. 지금은 앱 계정 기능만 이용할 수 있어요.", 503
             )
 
         return unavailable

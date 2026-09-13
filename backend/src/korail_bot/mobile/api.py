@@ -30,19 +30,19 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
 
     @app.errorhandler(HTTPException)
     def http_error(exc):
-        return jsonify(error="요청을 확인해주세요."), exc.code
+        return jsonify(error="요청 내용을 확인해 주세요."), exc.code
 
     @app.errorhandler(Exception)
     def internal_error(exc):
         # Upstream exception strings can contain railway credentials.
         app.logger.error("Mobile request failed (%s)", type(exc).__name__)
-        return jsonify(error="처리 중 문제가 생겼습니다. 잠시 후 다시 시도해주세요."), 500
+        return jsonify(error="처리 중 문제가 생겼어요. 잠시 후 다시 시도해 주세요."), 500
 
     @app.before_request
     def validate_request():
         origin = request.headers.get("Origin")
         if origin and origin not in origins:
-            raise AuthError("허용되지 않은 앱 출처입니다.", 403)
+            raise AuthError("이 주소에서는 앱에 접속할 수 없어요.", 403)
 
     @app.after_request
     def response_headers(response):
@@ -66,18 +66,18 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
         try:
             payload = request.get_json(silent=True)
         except RecursionError as exc:
-            raise AuthError("JSON 중첩이 너무 깊습니다.", 400) from exc
+            raise AuthError("요청 내용이 너무 복잡해요.", 400) from exc
         if not isinstance(payload, dict):
-            raise AuthError("JSON 객체를 보내주세요.", 400)
+            raise AuthError("JSON 객체 형식으로 보내 주세요.", 400)
 
         pending = [(payload, 0)]
         while pending:
             value, depth = pending.pop()
             if depth > 16:
-                raise AuthError("JSON 중첩이 너무 깊습니다.", 400)
+                raise AuthError("요청 내용이 너무 복잡해요.", 400)
             if isinstance(value, dict):
                 if IDENTITY_FIELDS.intersection(value):
-                    raise AuthError("사용자 식별자는 서버에서 결정합니다.", 400)
+                    raise AuthError("사용자 식별자는 요청에 넣을 수 없어요.", 400)
                 pending.extend((item, depth + 1) for item in value.values())
             elif isinstance(value, list):
                 pending.extend((item, depth + 1) for item in value)
@@ -85,7 +85,7 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
 
     def limited(key, limit, window):
         if not identity.allow(key, limit, window):
-            raise AuthError("요청이 너무 잦습니다. 잠시 후 다시 시도해주세요.", 429)
+            raise AuthError("요청이 너무 많아요. 잠시 후 다시 시도해 주세요.", 429)
 
     def authenticated(view):
         @wraps(view)
@@ -131,7 +131,7 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
             )
         role = payload.get("role")
         if role not in {None, "admin", "member"}:
-            raise AuthError("로그인 경로를 확인해주세요.", 400)
+            raise AuthError("선택한 로그인 유형과 계정을 확인해 주세요.", 400)
         return jsonify(identity.login(username, payload.get("password"), expected_role=role))
 
     @app.post(PREFIX + "/auth/logout")
@@ -144,12 +144,12 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
     @authenticated
     def create_invite():
         if g.user.get("role") != "admin":
-            raise AuthError("관리자만 초대 코드를 만들 수 있습니다.", 403)
+            raise AuthError("초대 코드는 관리자만 만들 수 있어요.", 403)
         hours = g.payload.get("ttlHours", 24)
         if hours is None:
             hours = 24
         if not isinstance(hours, int) or isinstance(hours, bool) or not 1 <= hours <= 168:
-            raise AuthError("초대 유효 시간은 1시간에서 7일 사이로 정해주세요.", 400)
+            raise AuthError("초대 코드의 유효 시간은 1시간에서 7일 사이로 정해 주세요.", 400)
         token = identity.create_invite(ttl=hours * 3600)
         return jsonify(
             invite=token,
@@ -203,7 +203,7 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
     def register_rail():
         for key in ("username", "password"):
             if not isinstance(g.payload.get(key), str) or not 1 <= len(g.payload[key]) <= 128:
-                raise AuthError("철도 로그인 정보를 확인해주세요.", 400)
+                raise AuthError("코레일 아이디와 비밀번호를 모두 입력해 주세요.", 400)
         return jsonify(
             gateway.register(g.user["storage_id"], g.payload["username"], g.payload["password"])
         )
@@ -241,14 +241,14 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
     def devices():
         if not notifications or not notifications.push_available:
             raise AuthError(
-                "서버에 푸시 알림이 설정되지 않았습니다. 앱 알림함을 이용해주세요.", 503
+                "휴대폰 알림 서비스가 아직 설정되지 않았어요. 앱 알림함을 이용해 주세요.", 503
             )
         token = g.payload.get("token")
         if not isinstance(token, str) or not 20 <= len(token) <= 4096:
-            raise AuthError("기기 토큰을 확인해주세요.", 400)
+            raise AuthError("휴대폰 알림 정보를 확인해 주세요.", 400)
         if request.method == "POST":
             if g.payload.get("platform") != "android":
-                raise AuthError("지원하지 않는 기기입니다.", 400)
+                raise AuthError("이 기기에서는 휴대폰 알림을 사용할 수 없어요.", 400)
             notifications.register_device(g.user["storage_id"], token)
         else:
             notifications.remove_device(g.user["storage_id"], token)

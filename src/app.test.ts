@@ -13,6 +13,35 @@ afterEach(() => {
 });
 
 describe("concept C application shell", () => {
+  it("exposes the active destination in the portrait bottom navigation", async () => {
+    const { app, root } = await mountLive();
+
+    expect(root.querySelector(".home-layout")).not.toBeNull();
+    expect(root.querySelector(".screen-home")).not.toBeNull();
+    expect(root.querySelector("[data-view='home'][aria-current='page']")).not.toBeNull();
+
+    app.navigate("activity");
+
+    expect(root.querySelector(".screen-activity")).not.toBeNull();
+    expect(root.querySelector("[data-view='activity'][aria-current='page']")).not.toBeNull();
+    expect(root.querySelector("[data-view='home'][aria-current='page']")).toBeNull();
+  });
+
+  it("uses accessible icon controls for notifications and back navigation", async () => {
+    const { root } = await mountLive();
+    const notificationButton = root.querySelector<HTMLButtonElement>("[aria-label='알림 열기']");
+
+    expect(notificationButton?.querySelector("svg")).not.toBeNull();
+    expect(root.querySelector(".brand-mark")?.textContent).toBe("");
+
+    notificationButton?.click();
+    const backButton = root.querySelector<HTMLButtonElement>("[aria-label='뒤로가기']");
+    expect(backButton?.querySelector("svg")).not.toBeNull();
+
+    backButton?.click();
+    expect(root.querySelector(".screen-home")).not.toBeNull();
+  });
+
   it.each(["running", "scheduled"])("prioritizes payment without borrowing the %s journey", async (other) => {
     const demo = createDemoApi();
     const state = await demo.bootstrap();
@@ -50,9 +79,9 @@ describe("concept C application shell", () => {
     if (scenario === "offline") vi.useFakeTimers();
     const { root } = await mountLive({ bootstrap: async () => state, ...(scenario === "offline" ? { status: async () => { throw new Error("network unavailable"); } } : {}) });
     if (scenario === "offline") await vi.advanceTimersByTimeAsync(30_000);
-    const wanted = { unavailable: "철도 조회를 완료하지 못했어요", stale: "최근 조회가 오래됐어요", idle: "기다리는 여정이 없어요", scheduled: "예약한 시각에 검색을 시작해요", pending: "빈자리를 찾았어요", offline: "현재 상태를 확인할 수 없어요" };
+    const wanted = { unavailable: "철도 조회를 완료하지 못했어요", stale: "한동안 조회 결과가 없어요", idle: "진행 중인 검색이 없어요", scheduled: "예약한 시각에 검색을 시작해요", pending: "빈자리를 찾았어요", offline: "현재 상태를 확인할 수 없어요" };
     expect(root.querySelector("[data-search-status]")?.textContent).toContain(wanted[scenario]);
-    if (scenario !== "idle") expect(root.querySelector("[data-search-status]")?.textContent).not.toContain("기다리는 여정이 없어요");
+    if (scenario !== "idle") expect(root.querySelector("[data-search-status]")?.textContent).not.toContain("진행 중인 검색이 없어요");
   });
 
   it("keeps an unverified running search visible in the static status card", async () => {
@@ -82,11 +111,11 @@ describe("concept C application shell", () => {
     await app.start(true);
 
     expect(root.querySelector<HTMLElement>("[data-search-status]")?.dataset.state).toBe("running-unverified");
-    expect(root.textContent).toContain("서버에 검색이 등록되어 있어요");
+    expect(root.textContent).toContain("검색은 서버에 등록돼 있어요");
     expect(root.textContent).not.toContain("방금 확인");
   });
 
-  it("disables unsupported SRT, waitlist, and scheduled controls with reasons", async () => {
+  it("explains the integrated SRT routes and disables unsupported waitlist and scheduling", async () => {
     const demoApi = createDemoApi();
     const state = await demoApi.bootstrap();
     state.demo = false;
@@ -105,14 +134,45 @@ describe("concept C application shell", () => {
     await app.start(true);
     app.navigate("journey");
 
-    expect(root.querySelector<HTMLButtonElement>("[data-operator='srt']")?.disabled).toBe(true);
+    expect(root.querySelector("[data-operator='srt']")).toBeNull();
     expect(root.querySelector<HTMLInputElement>("[name='waitlist']")?.disabled).toBe(true);
-    expect(root.textContent).toContain("현재 서버에서 지원하지 않아요");
+    expect(root.textContent).toContain("기존 SRT 노선은 KTX로 통합됐어요");
+    expect(root.textContent).toContain("코레일 계정 하나로 검색하고 예약할 수 있어요");
 
     app.navigate("confirm");
     expect(root.querySelector<HTMLButtonElement>("[data-action='schedule-toggle']")?.disabled).toBe(
       true,
     );
+  });
+
+  it("marks membership controls as admin-only and hides them from members", async () => {
+    const demoApi = createDemoApi();
+    const adminState = await demoApi.bootstrap();
+    adminState.user = { id: "admin", username: "operator", role: "admin" };
+    const adminRoot = document.createElement("div");
+    document.body.append(adminRoot);
+    const adminApp = new TeumApp(adminRoot, { ...demoApi, bootstrap: async () => adminState }, { demoMode: false });
+    mounted.push(adminApp);
+    await adminApp.start(true);
+    adminApp.navigate("settings");
+
+    expect(adminRoot.querySelector(".admin-only-badge")?.textContent).toBe("관리자 전용");
+    expect(adminRoot.textContent).toContain("회원 가입 권한은 관리자만 발급할 수 있어요");
+    expect(adminRoot.querySelector("[data-action='create-invite']")).not.toBeNull();
+    expect(adminRoot.textContent).toContain("v4.8.0");
+    expect(adminRoot.textContent).not.toContain("베타");
+
+    const memberState = await demoApi.bootstrap();
+    memberState.user = { id: "member", username: "traveller", role: "member" };
+    const memberRoot = document.createElement("div");
+    document.body.append(memberRoot);
+    const memberApp = new TeumApp(memberRoot, { ...demoApi, bootstrap: async () => memberState }, { demoMode: false });
+    mounted.push(memberApp);
+    await memberApp.start(true);
+    memberApp.navigate("settings");
+
+    expect(memberRoot.querySelector(".admin-only-badge")).toBeNull();
+    expect(memberRoot.querySelector("[data-action='create-invite']")).toBeNull();
   });
 
   it("marks the fixture-only experience on every demo screen", async () => {
@@ -147,7 +207,7 @@ describe("concept C application shell", () => {
     app.navigate("journey");
     expect(root.querySelector<HTMLButtonElement>("#conditions-form button[type='submit']")?.disabled).toBe(true);
     app.navigate("favourites");
-    expect(root.textContent).toContain("즐겨찾기 기능을 지원하지 않아요");
+    expect(root.textContent).toContain("즐겨찾기를 이용할 수 없어요");
     app.navigate("settings");
     expect(root.querySelector<HTMLButtonElement>("[data-action='notify-plus']")?.disabled).toBe(true);
   });
@@ -202,7 +262,7 @@ describe("concept C application shell", () => {
     app.navigate("rail-account");
 
     expect(root.querySelector("input[type='password']")).toBeNull();
-    expect(root.textContent).toContain("자격증명을 입력받지 않아요");
+    expect(root.textContent).toContain("코레일 아이디와 비밀번호를 받지 않고");
   });
 
   it("does not trust telemetry fields when the server capability is off", async () => {
@@ -219,7 +279,7 @@ describe("concept C application shell", () => {
     await app.start(true);
 
     expect(root.querySelector<HTMLElement>("[data-search-status]")?.dataset.state).toBe("running-unverified");
-    expect(root.textContent).toContain("최근 조회 상태를 확인할 수 없어요");
+    expect(root.textContent).toContain("최근 조회 상태는 알 수 없어요");
   });
 
   it("matches the server app-account credential bounds", async () => {

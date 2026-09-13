@@ -17,7 +17,7 @@ _DUMMY_HASH = generate_password_hash("no such account", method=PASSWORD_METHOD)
 
 
 class AuthError(ValueError):
-    def __init__(self, message="인증 정보를 확인해주세요.", status=401):
+    def __init__(self, message="아이디나 비밀번호를 확인해 주세요.", status=401):
         super().__init__(message)
         self.status = status
 
@@ -87,15 +87,15 @@ class IdentityStore:
     @staticmethod
     def credentials(username, password):
         if not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_]{3,32}", username):
-            raise AuthError("앱 아이디는 영문·숫자·밑줄 3~32자로 입력해주세요.", 400)
+            raise AuthError("앱 아이디는 영문, 숫자, 밑줄로 3~32자까지 입력해 주세요.", 400)
         if not isinstance(password, str) or not 12 <= len(password) <= 128:
-            raise AuthError("앱 비밀번호는 12~128자로 입력해주세요.", 400)
+            raise AuthError("앱 비밀번호는 12~128자로 입력해 주세요.", 400)
         return username.lower()
 
     def register(self, username, password, invite):
         username = self.credentials(username, password)
         if not isinstance(invite, str) or not 16 <= len(invite) <= 128:
-            raise AuthError("초대 코드가 유효하지 않거나 만료되었습니다.", 403)
+            raise AuthError("초대 코드가 올바르지 않거나 만료됐어요.", 403)
         # Hash before the write transaction: password stretching must not hold
         # SQLite's exclusive writer lock while another friend is signing up.
         hashed = generate_password_hash(password, method=PASSWORD_METHOD)
@@ -106,7 +106,7 @@ class IdentityStore:
                 (self.clock(), digest(invite), self.clock()),
             ).rowcount
             if not changed:
-                raise AuthError("초대 코드가 유효하지 않거나 만료되었습니다.", 403)
+                raise AuthError("초대 코드가 올바르지 않거나 만료됐어요.", 403)
             user = {"id": "mobile_" + secrets.token_hex(16), "username": username, "role": "member"}
             try:
                 db.execute(
@@ -119,7 +119,7 @@ class IdentityStore:
                     ),
                 )
             except sqlite3.IntegrityError as exc:
-                raise AuthError("사용할 수 없는 앱 아이디입니다.", 409) from exc
+                raise AuthError("이미 사용 중인 앱 아이디예요.", 409) from exc
             return self._session(db, user)
 
     def ensure_admin(self, username, password):
@@ -180,9 +180,9 @@ class IdentityStore:
             role = self._public_user(user)["role"]
             if expected_role in {"admin", "member"} and role != expected_role:
                 raise AuthError(
-                    "관리자 계정이 아닙니다."
+                    "관리자 계정이 아니에요."
                     if expected_role == "admin"
-                    else "선택받은 자 화면에서 관리자로 들어갈 수 없습니다.",
+                    else "초대 회원 로그인 화면에서는 관리자 계정으로 로그인할 수 없어요.",
                     403,
                 )
             return self._session(db, user)
@@ -196,7 +196,7 @@ class IdentityStore:
                 (digest(token), self.clock()),
             ).fetchone()
         if user is None:
-            raise AuthError("앱 로그인이 만료되었습니다. 다시 로그인해주세요.")
+            raise AuthError("로그인이 만료됐어요. 다시 로그인해 주세요.")
         public = self._public_user(user)
         return {
             "id": public["id"],

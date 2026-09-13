@@ -16,7 +16,7 @@ import {
 document.documentElement.classList.toggle("native-platform", Capacitor.isNativePlatform());
 
 const root = document.querySelector<HTMLElement>("#app");
-if (!root) throw new Error("앱을 표시할 영역을 찾을 수 없습니다.");
+if (!root) throw new Error("앱을 표시할 영역을 찾을 수 없어요.");
 const rootElement = root;
 
 const query = new URLSearchParams(window.location.search);
@@ -46,7 +46,7 @@ async function launch(): Promise<void> {
         onBack: () => app?.back() ?? false,
         onPushToken: async (token) => {
           await api.registerDevice(token);
-          app?.notify("이 기기의 알림 토큰을 등록했어요.");
+          app?.notify("이 휴대폰에서 알림을 받을 수 있어요.");
         },
         onPushError: (message) => app?.notify(message),
         enablePushRegistration,
@@ -70,7 +70,7 @@ async function launch(): Promise<void> {
     const message =
       error instanceof ApiError || error instanceof Error
         ? error.message
-        : "앱을 시작하지 못했습니다.";
+        : "앱을 시작하지 못했어요.";
     const page = document.createElement("main");
     page.className = "fatal";
     const mark = document.createElement("span");
@@ -81,7 +81,7 @@ async function launch(): Promise<void> {
     detail.textContent = message;
     const hint = document.createElement("p");
     hint.className = "muted";
-    hint.textContent = "라이브 앱에는 HTTPS API 주소가 필요합니다. 로컬 화면 검토는 ?demo=1로 열 수 있어요.";
+    hint.textContent = "실서버를 사용하려면 HTTPS API 주소가 필요해요. 화면만 살펴보려면 주소 끝에 ?demo=1을 붙여 주세요.";
     page.append(mark, title, detail, hint);
     rootElement.replaceChildren(page);
   }

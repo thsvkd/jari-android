@@ -70,7 +70,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
   const notifications: NotificationItem[] = [
     {
       id: "demo-event-1",
-      text: "데모 모드입니다. 실제 열차 조회나 예약은 일어나지 않습니다.",
+      text: "데모 화면이에요. 실제로 열차를 조회하거나 예약하지 않아요.",
       createdAt: clock().toISOString(),
       kind: "demo",
     },

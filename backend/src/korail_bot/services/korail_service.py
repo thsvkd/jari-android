@@ -6,6 +6,7 @@ trains, and reserving one. The search loop that drives those calls is in
 """
 
 from contextlib import contextmanager
+from urllib.parse import urlsplit
 
 import requests
 from korail2 import AdultPassenger, NoResultsError, ReserveOption, SoldOutError, TrainType
@@ -16,6 +17,7 @@ from korail2 import Korail as K2MKorail
 # cancel_reservation below). TicketReservation is wrapped the same way, to
 # slip a seat-location code into a payload korail2 otherwise hard-codes.
 from korail2.korail2 import KORAIL_CANCEL, KORAIL_MOBILE, KORAIL_TICKETRESERVATION
+from korail_mobile_api import KorailClient, KorailConfig
 
 from korail_bot.config.settings import settings
 from korail_bot.models import ReservationOutcome, SeatPreference
@@ -110,6 +112,7 @@ class KorailService(RailService):
         """
         super().__init__(*args, **kwargs)
         self._korail_instance: K2MKorail | None = None
+        self._modern_client: KorailClient | None = None
 
         # Log class methods to verify correct version is loaded
         logger.debug(
@@ -159,6 +162,61 @@ class KorailService(RailService):
 
         return client
 
+    def _build_modern_client(self) -> KorailClient:
+        """Build the current Korail mobile client with DynaPath enabled."""
+        config_options = {"enable_dynapath": True}
+        if settings.KORAIL_APP_VERSION:
+            config_options["version"] = settings.KORAIL_APP_VERSION
+        return KorailClient(KorailConfig(**config_options))
+
+    def _activate_legacy_session(self, modern: KorailClient, session, username: str, password: str) -> None:
+        """Give the existing search/reservation adapter a freshly authenticated session."""
+        legacy = self._build_client(username, password)
+        legacy._session.cookies.set("JSESSIONID", session.jsessionid)
+        legacy._version = modern.config.version
+        legacy._key = session.raw.get("Key") or modern.config.key
+        legacy.membership_number = session.member_card_no
+        legacy.logined = True
+
+        def current_auth(url: str):
+            path = urlsplit(url).path
+            method = "GET" if url == KORAIL_TICKETRESERVATION else "POST"
+            return modern.http._dynapath_headers(method, path), None
+
+        legacy._get_auth_headers_and_sid = current_auth
+        self._korail_instance = legacy
+
+    def _login_with_current_api(self, username: str, password: str) -> bool:
+        candidate = self._build_modern_client()
+        try:
+            digits = "".join(character for character in username if character.isdigit())
+            if "@" in username:
+                input_flag = "5"
+            elif digits.startswith("01") and len(digits) in {10, 11}:
+                input_flag = "4"
+            else:
+                input_flag = "2"
+            session = candidate.login(username, password, input_flag=input_flag)
+            self._activate_legacy_session(candidate, session, username, password)
+        except Exception as exc:
+            candidate.close()
+            self._korail_instance = None
+            self._logged_in = False
+            logger.warning(
+                "Korail login failed for user %s (%s: %s)",
+                mask_phone(username),
+                type(exc).__name__,
+                exc,
+            )
+            return False
+
+        previous = self._modern_client
+        self._modern_client = candidate
+        if previous is not None:
+            previous.close()
+        self._logged_in = True
+        return True
+
     def login(self, username: str, password: str) -> bool:
         """
         Login to Korail with credentials.
@@ -170,22 +228,13 @@ class KorailService(RailService):
         Returns:
             True if login successful, False otherwise
         """
-        try:
-            self._korail_instance = self._build_client(username, password)
-            self._logged_in = self._korail_instance.login()
-
-            if self._logged_in:
-                self._username = username
-                self._password = password
-                self._schedule_next_relogin()
-                logger.info(f"Korail login successful for user: {mask_phone(username)}")
-            else:
-                logger.warning(f"Korail login failed for user: {mask_phone(username)}")
-
-            return self._logged_in
-        except Exception as e:
-            logger.error(f"Korail login error for user {mask_phone(username)}: {e}")
-            return False
+        self._logged_in = self._login_with_current_api(username, password)
+        if self._logged_in:
+            self._username = username
+            self._password = password
+            self._schedule_next_relogin()
+            logger.info("Korail login successful for user: %s", mask_phone(username))
+        return self._logged_in
 
     def _relogin(self) -> bool:
         """Attempt to re-login with stored credentials after session expiry."""
@@ -195,8 +244,7 @@ class KorailService(RailService):
 
         logger.debug("🔄 Session expired, attempting re-login...")
         try:
-            self._korail_instance = self._build_client(self._username, self._password)
-            self._logged_in = self._korail_instance.login()
+            self._logged_in = self._login_with_current_api(self._username, self._password)
             if self._logged_in:
                 self._relogin_count += 1
                 logger.debug(f"✅ Re-login successful (total: {self._relogin_count})")

@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
-RUN uv sync --frozen --no-dev --no-editable && useradd --uid 10001 --create-home app && mkdir /data && chown app:app /data
+RUN uv sync --frozen --no-dev --no-editable --extra mobile-push && useradd --uid 10001 --create-home app && mkdir /data && chown app:app /data
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 MOBILE_DATA_DIR=/data
 USER app
 EXPOSE 8081

@@ -102,6 +102,42 @@ def test_real_gateway_delegates_booking_schedule_and_favourites(tmp_path, monkey
     runtime.storage.close()
 
 
+def test_railway_registration_accepts_member_number_and_normalizes_phone(tmp_path, monkeypatch):
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = MobileRuntime(
+        MobileConfig(str(tmp_path / "app.sqlite3"), "a" * 40, "redis://localhost:1/1"),
+        redis_client=client,
+    )
+    rail = MagicMock()
+    rail.login.return_value = True
+    monkeypatch.setattr(runtime.gateway.conversation, "_rail_service", lambda owner: rail)
+    session = runtime.identity.register(
+        "alice", "a long secure passphrase", runtime.identity.create_invite()
+    )
+    owner = runtime.identity.authenticate(session["token"])["storage_id"]
+    http = runtime.app.test_client()
+    headers = {"Authorization": "Bearer " + session["token"]}
+
+    member = http.post(
+        "/api/mobile/register",
+        headers=headers,
+        json={"username": "2456789012", "password": "rail password"},
+    )
+    assert member.status_code == 200
+    rail.login.assert_called_with("2456789012", "rail password")
+    assert runtime.storage.get_onboarded_account(owner).korail_id == "2456789012"
+
+    phone = http.post(
+        "/api/mobile/register",
+        headers=headers,
+        json={"username": "01012345678", "password": "rail password"},
+    )
+    assert phone.status_code == 200
+    rail.login.assert_called_with("010-1234-5678", "rail password")
+    assert runtime.storage.get_onboarded_account(owner).korail_id == "010-1234-5678"
+    runtime.storage.close()
+
+
 def test_auth_only_runtime_requires_no_bot_redis_or_rail(tmp_path, monkeypatch):
     monkeypatch.delenv("BOTTOKEN", raising=False)
     runtime = MobileRuntime(MobileConfig(str(tmp_path / "app.sqlite3"), "a" * 40))

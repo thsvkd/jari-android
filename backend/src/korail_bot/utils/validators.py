@@ -93,6 +93,40 @@ class InputValidator:
         return None
 
     @staticmethod
+    def normalize_korail_login(identifier: str) -> str | None:
+        """Normalize a phone login or preserve a Korail membership number.
+
+        Korail accepts both identifiers, but only phone numbers should gain
+        hyphens. Membership numbers are sent exactly as digits so the Korail
+        client selects its membership-login mode.
+        """
+        if not identifier or not identifier.strip():
+            return None
+
+        identifier = identifier.strip()
+        phone = InputValidator.normalize_phone_number(identifier)
+        if phone:
+            return phone
+
+        # The Korail client documents eight-digit memberships, and current
+        # accounts can also present ten-digit membership numbers.
+        if re.fullmatch(r"\d{8}|\d{10}", identifier):
+            return identifier
+
+        return None
+
+    @staticmethod
+    def validate_korail_login(identifier: str) -> str | None:
+        """Validate a Korail phone number or membership number."""
+        if not identifier or not identifier.strip():
+            return "휴대전화 번호 또는 회원번호를 입력해 주세요."
+
+        if InputValidator.normalize_korail_login(identifier) is None:
+            return "휴대전화 번호 또는 8자리·10자리 회원번호를 확인해 주세요."
+
+        return None
+
+    @staticmethod
     def validate_date(date_str: str) -> str | None:
         """
         Validate date in YYYYMMDD format with enhanced validation.

@@ -46,7 +46,7 @@ class MobileReservationService(ReservationService):
             if session:
                 session.reset()
                 self.storage.save_user_session(session)
-            self.telegram.send_message(chat_id, "검색을 중지했습니다.")
+            self.telegram.send_message(chat_id, "검색을 중지했어요.")
             return True
 
     def _process_command(self, arguments):

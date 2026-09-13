@@ -97,7 +97,7 @@ export async function initializePlatform(
   }
 
   if (!options.onPushToken) {
-    options.onPushError?.("푸시 토큰을 서버에 등록할 설정이 없습니다.");
+    options.onPushError?.("휴대폰 알림을 서버에 등록할 설정이 없어요.");
     return { native: true, push: "unavailable" };
   }
 
@@ -109,7 +109,7 @@ export async function initializePlatform(
       : permissions;
 
   if (permission.receive !== "granted") {
-    options.onPushError?.("알림 권한이 허용되지 않았습니다.");
+    options.onPushError?.("알림 권한이 꺼져 있어요. 휴대폰 설정에서 권한을 허용해 주세요.");
     return { native: true, push: "unavailable" };
   }
 
@@ -117,7 +117,7 @@ export async function initializePlatform(
     try {
       await options.onPushToken?.(token.value);
     } catch {
-      options.onPushError?.("푸시 토큰을 서버에 등록하지 못했습니다.");
+      options.onPushError?.("휴대폰 알림을 서버에 등록하지 못했어요.");
     }
   });
   const registrationError = await PushNotifications.addListener(
@@ -133,7 +133,7 @@ export async function initializePlatform(
     await PushNotifications.register();
     return { native: true, push: "requested" };
   } catch {
-    options.onPushError?.("Firebase 설정이 없어 푸시 등록을 시작할 수 없습니다.");
+    options.onPushError?.("휴대폰 알림 서비스가 아직 설정되지 않았어요.");
     await Promise.all(removePushListeners.map((remove) => remove()));
     removePushListeners = [];
     return { native: true, push: "unavailable" };

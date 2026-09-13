@@ -78,17 +78,17 @@ export function resolveApiBase(configured: string, pageOrigin: string, native = 
   const candidate = configured.trim();
   if (!candidate) {
     if (native) {
-      throw new ApiError("Android 라이브 앱에는 HTTPS API 주소 설정이 필요합니다.", 0, "configuration");
+      throw new ApiError("Android 앱에서 실서버를 사용하려면 HTTPS API 주소가 필요해요.", 0, "configuration");
     }
     const page = new URL(pageOrigin);
     if (page.protocol !== "https:" && !LOCAL_HOSTS.has(page.hostname)) {
-      throw new ApiError("라이브 API는 HTTPS 주소가 필요합니다.", 0, "configuration");
+      throw new ApiError("실서버 API에는 HTTPS 주소가 필요해요.", 0, "configuration");
     }
     return "";
   }
   const url = new URL(candidate);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && LOCAL_HOSTS.has(url.hostname))) {
-    throw new ApiError("라이브 API는 HTTPS 주소가 필요합니다.", 0, "configuration");
+    throw new ApiError("실서버 API에는 HTTPS 주소가 필요해요.", 0, "configuration");
   }
   return url.href.replace(/\/$/, "");
 }
@@ -106,10 +106,10 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
     const generation = options.tokenStorage.generation();
     const token = authenticated ? await options.tokenStorage.read() : init.revokedToken ?? null;
     if (authenticated && generation !== options.tokenStorage.generation()) {
-      throw new ApiError("이전 로그인에서 시작한 요청입니다.", 0, "stale");
+      throw new ApiError("이전 로그인에서 시작한 요청이라 중단했어요.", 0, "stale");
     }
     if (authenticated && !token) {
-      throw new ApiError("로그인이 필요합니다.", 401, "auth");
+      throw new ApiError("로그인이 필요해요.", 401, "auth");
     }
     const headers = new Headers({ Accept: "application/json", "X-User-Timezone": timeZone });
     if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -123,13 +123,13 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
       });
     } catch {
-      throw new ApiError("서버에 연결하지 못했습니다. 네트워크를 확인해주세요.", 0, "offline");
+      throw new ApiError("서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요.", 0, "offline");
     }
 
     const payload = (await response.json().catch(() => ({}))) as { error?: unknown };
     if (!response.ok) {
       const message =
-        typeof payload.error === "string" ? payload.error : "요청을 처리하지 못했습니다.";
+        typeof payload.error === "string" ? payload.error : "요청을 처리하지 못했어요.";
       if (response.status === 401 && authenticated) {
         const expired = await options.tokenStorage.expire(token!, generation, options.onAuthExpired);
         throw new ApiError(message, response.status, expired ? "auth" : "stale");

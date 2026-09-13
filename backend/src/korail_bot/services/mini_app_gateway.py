@@ -232,21 +232,21 @@ class MiniAppGateway:
         """
         from korail_bot.utils.validators import InputValidator
 
-        error = InputValidator.validate_phone_number(username)
+        error = InputValidator.validate_korail_login(username)
         if error:
             raise MiniAppError(error)
         error = InputValidator.validate_password(password)
         if error:
             raise MiniAppError(error)
 
-        normalized = InputValidator.normalize_phone_number(username)
+        normalized = InputValidator.normalize_korail_login(username)
         if not normalized:
-            raise MiniAppError("휴대전화 번호를 다시 확인해주세요.")
+            raise MiniAppError("휴대전화 번호 또는 회원번호를 다시 확인해 주세요.")
 
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(normalized, password):
             raise MiniAppError(
-                "코레일 로그인에 실패했습니다. 회원번호와 비밀번호를 다시 확인해주세요.",
+                "코레일에 로그인하지 못했어요. 회원번호와 비밀번호를 다시 확인해 주세요.",
                 status=401,
             )
 
@@ -285,8 +285,8 @@ class MiniAppGateway:
         options = self.conversation.fetch_train_options(chat_id, session)
         if options is None:
             raise MiniAppError(
-                "지금은 열차 목록을 불러올 수 없습니다. "
-                "시간대 전체를 감시하도록 그대로 진행할 수 있습니다.",
+                "지금은 열차 목록을 불러올 수 없어요. "
+                "열차를 고르지 않고 시간대 전체 검색으로 계속할 수 있어요.",
                 status=503,
             )
 
@@ -341,7 +341,7 @@ class MiniAppGateway:
 
         if not outcome.started:
             raise MiniAppError(
-                outcome.error or "예약을 시작하지 못했습니다. 잠시 후 다시 시도해주세요.",
+                outcome.error or "빈자리 검색을 시작하지 못했어요. 잠시 후 다시 시도해 주세요.",
                 status=409,
             )
 
@@ -376,8 +376,8 @@ class MiniAppGateway:
         credentials = session.credentials
         if credentials is None or not credentials.korail_pw:
             raise MiniAppError(
-                "예약된 검색은 시작 시각에 다시 로그인해야 합니다. "
-                "계정을 다시 등록한 뒤 시도해주세요.",
+                "예약된 검색을 시작하려면 코레일에 다시 로그인해야 해요. "
+                "코레일 계정을 다시 연결한 뒤 시도해 주세요.",
                 status=409,
             )
 
@@ -452,13 +452,13 @@ class MiniAppGateway:
             MiniAppError: The railway did not confirm the cancellation
         """
         if not self.pending_payments.pending(chat_id):
-            raise MiniAppError("결제를 기다리는 예약이 없습니다.", status=404)
+            raise MiniAppError("결제를 기다리는 예약이 없어요.", status=404)
 
         if not self.pending_payments.cancel(chat_id):
             # The service has already said in the chat which of the several
             # reasons it was - mid-booking, login refused, railway refused.
             raise MiniAppError(
-                "예약을 취소하지 못했습니다. 대화창의 안내를 확인해주세요.", status=502
+                "예약을 취소하지 못했어요. 앱 알림을 확인해 주세요.", status=502
             )
 
         return {"cancelled": True, "pending": self._pending(chat_id)}
@@ -504,7 +504,7 @@ class MiniAppGateway:
     def delete_favourite(self, chat_id: int, fav_id: str) -> dict:
         """Forget one saved search."""
         if not self.storage.delete_favourite(chat_id, fav_id):
-            raise MiniAppError("그 즐겨찾기를 찾을 수 없습니다.", status=404)
+            raise MiniAppError("저장한 조건을 찾을 수 없어요.", status=404)
         return {"deleted": True, "favourites": self.favourites(chat_id)}
 
     def set_notify_minutes(self, chat_id: int, minutes: object) -> dict:
@@ -515,16 +515,16 @@ class MiniAppGateway:
         two surfaces cannot come to disagree about what an allowed interval is.
         """
         if isinstance(minutes, bool) or not isinstance(minutes, (int, str)):
-            raise MiniAppError("알림 간격을 숫자로 입력해주세요.")
+            raise MiniAppError("알림 간격을 숫자로 입력해 주세요.")
         try:
             value = int(minutes)
         except ValueError as exc:
-            raise MiniAppError("알림 간격을 숫자로 입력해주세요.") from exc
+            raise MiniAppError("알림 간격을 숫자로 입력해 주세요.") from exc
 
         low = settings.PROGRESS_REPORT_MIN_MINUTES
         high = settings.PROGRESS_REPORT_MAX_MINUTES
         if value != 0 and not low <= value <= high:
-            raise MiniAppError(f"알림 간격은 {low}분에서 {high}분 사이여야 합니다. (0은 끄기)")
+            raise MiniAppError(f"알림 간격은 {low}분에서 {high}분 사이여야 해요. 0을 입력하면 꺼져요.")
 
         self.storage.set_progress_report_minutes(chat_id, value)
         return {"notifyMinutes": value}
@@ -546,7 +546,7 @@ class MiniAppGateway:
         session = self.storage.get_user_session(chat_id) or UserSession(chat_id=chat_id)
         if session.last_action == UserProgress.FINDING_TICKET:
             raise MiniAppError(
-                "이미 검색이 진행 중입니다. 먼저 검색을 중지한 뒤 새로 시작해주세요.", status=409
+                "이미 검색 중이에요. 먼저 검색을 중지한 뒤 새로 시작해 주세요.", status=409
             )
 
         selected = list(session.train_info.get("selectedTrains") or [])
@@ -571,12 +571,12 @@ class MiniAppGateway:
         if self.conversation.uses_server_account(chat_id):
             if self.conversation._login_with_environment_credentials(chat_id, session):
                 return
-            raise MiniAppError("코레일 서버 계정으로 로그인하지 못했습니다.", status=502)
+            raise MiniAppError("코레일에 로그인하지 못했어요.", status=502)
 
         account = self.storage.get_onboarded_account(chat_id)
         if not account:
             raise MiniAppError(
-                "코레일 계정이 등록되어 있지 않습니다. 먼저 등록해주세요.",
+                "코레일 계정이 연결되지 않았어요. 먼저 계정을 연결해 주세요.",
                 status=428,
             )
 
@@ -584,7 +584,7 @@ class MiniAppGateway:
         if not rail.login(account.korail_id, account.korail_pw):
             self.storage.delete_onboarded_account(chat_id)
             raise MiniAppError(
-                "코레일 로그인이 만료되었습니다. 계정을 다시 등록해주세요.",
+                "코레일 로그인이 만료됐어요. 계정을 다시 연결해 주세요.",
                 status=401,
             )
 
@@ -596,7 +596,7 @@ class MiniAppGateway:
         import json
 
         if not isinstance(payload, dict):
-            raise MiniAppError("예약 조건을 읽을 수 없습니다.")
+            raise MiniAppError("예약 조건을 확인할 수 없어요.")
 
         conditions = payload.get("conditions", payload)
         try:
@@ -604,7 +604,7 @@ class MiniAppGateway:
         except MiniAppDataError as exc:
             raise MiniAppError(str(exc)) from exc
         except (TypeError, ValueError) as exc:
-            raise MiniAppError("예약 조건을 읽을 수 없습니다.") from exc
+            raise MiniAppError("예약 조건을 확인할 수 없어요.") from exc
 
     @staticmethod
     def _selected_trains(payload: dict) -> list[str]:
@@ -616,15 +616,15 @@ class MiniAppGateway:
         """
         raw = payload.get("trains") or []
         if not isinstance(raw, list):
-            raise MiniAppError("선택한 열차 목록을 읽을 수 없습니다.")
+            raise MiniAppError("선택한 열차 목록을 확인할 수 없어요.")
         if len(raw) > MAX_SELECTED_TRAINS:
-            raise MiniAppError(f"열차는 최대 {MAX_SELECTED_TRAINS}개까지 고를 수 있습니다.")
+            raise MiniAppError(f"열차는 최대 {MAX_SELECTED_TRAINS}개까지 고를 수 있어요.")
 
         numbers = []
         for item in raw:
             text = str(item).strip()
             if not text.isdigit() or len(text) > 5:
-                raise MiniAppError("열차 번호가 올바르지 않습니다.")
+                raise MiniAppError("열차 번호가 올바르지 않아요.")
             numbers.append(text)
         return numbers
 
@@ -633,16 +633,16 @@ class MiniAppGateway:
         """Read the scheduled start out of the request."""
         raw = payload.get("start_at")
         if not isinstance(raw, str) or not raw:
-            raise MiniAppError("검색을 시작할 시각을 골라주세요.")
+            raise MiniAppError("검색을 시작할 시각을 골라 주세요.")
         try:
             parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError as exc:
-            raise MiniAppError("검색 시작 시각을 읽을 수 없습니다.") from exc
+            raise MiniAppError("검색 시작 시각을 확인할 수 없어요.") from exc
         if parsed.tzinfo is None:
             # A bare wall clock is exactly what caused the nine-hour Docker
             # shift: there is no honest way for a UTC server to guess which
             # user's clock it came from.
-            raise MiniAppError("검색 시작 시각에 시간대 정보가 없습니다. 화면을 새로 열어주세요.")
+            raise MiniAppError("검색 시작 시각의 시간대 정보가 없어요. 화면을 새로 열어 주세요.")
         return as_utc(parsed)
 
     def _running(self, chat_id: int) -> dict | None:

@@ -121,7 +121,7 @@ class MobileRuntime:
                     continue
                 self.notifications.publish(
                     owner,
-                    f"예약한 좌석의 결제 시간이 약 {max(1, remaining // 60)}분 남았습니다. 철도 앱에서 결제해주세요.",
+                    f"예약한 좌석의 결제 시간이 약 {max(1, remaining // 60)}분 남았어요. 코레일 앱에서 결제해 주세요.",
                     kind="payment",
                     dedupe=f"payment:{owner}:{item.reservation_id}:{int(now.timestamp()) // 60}",
                 )
