@@ -41,6 +41,8 @@ class PendingReservation:
     # Which of several seats this is, for a random-seating run. None when the
     # booking is a single reservation and there is nothing to number.
     seat_number: int | None = None
+    seat_labels: list[str] | None = None
+    seat_class: str = ""
 
     def describe(self, timezone_name: str = "Asia/Seoul") -> str:
         """One line for /status, as short as it can be and still be useful."""
@@ -105,6 +107,8 @@ class PendingPaymentService:
                     reservation_id=single.reservation_id,
                     train_info=single.train_info,
                     expires_at=single.expires_at,
+                    seat_labels=list(single.seat_labels),
+                    seat_class=single.seat_class,
                 )
             ]
 

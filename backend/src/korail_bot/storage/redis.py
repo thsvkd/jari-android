@@ -1338,6 +1338,8 @@ class RedisStorage(StorageInterface):
             "train_no": status.train_no,
             "dep_date": status.dep_date,
             "dep_time": status.dep_time,
+            "seat_labels": list(status.seat_labels),
+            "seat_class": status.seat_class,
         }
 
     def _deserialize_payment_status(self, data: dict) -> PaymentStatus:
@@ -1380,6 +1382,8 @@ class RedisStorage(StorageInterface):
             train_no=data.get("train_no", "") or "",
             dep_date=data.get("dep_date", "") or "",
             dep_time=data.get("dep_time", "") or "",
+            seat_labels=list(data.get("seat_labels") or []),
+            seat_class=data.get("seat_class", "") or "",
         )
 
     def _serialize_multi_reservation_status(self, status: MultiReservationStatus) -> dict:

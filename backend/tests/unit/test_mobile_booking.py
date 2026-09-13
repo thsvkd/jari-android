@@ -1,10 +1,12 @@
 """Use the real gateway and services with only railway/process boundaries faked."""
 
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import fakeredis
 import pytest
+from korail_mobile_api import PhysicalSeat, SeatCar, SeatCarListResponse, SeatInventoryResponse
 
 from korail_bot.mobile.config import MobileConfig
 from korail_bot.mobile.runtime import MobileRuntime
@@ -277,6 +279,144 @@ def test_waitlist_condition_is_validated_and_preserved():
 
     assert submission.waitlist is True
     assert submission.as_train_info()["waitlist"] is True
+
+
+def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, monkeypatch):
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = MobileRuntime(
+        MobileConfig(str(tmp_path / "identity.sqlite3"), "a" * 40, "redis://localhost:1/1"),
+        redis_client=client,
+    )
+    rail = MagicMock()
+    rail.login.return_value = True
+    train = SimpleNamespace(
+        train_no="015",
+        departure_date=(utc_now() + timedelta(days=3)).strftime("%Y%m%d"),
+        departure_time="090000",
+        arrival_time="113000",
+        departure_station_name="서울",
+        arrival_station_name="부산",
+        train_class_name="KTX",
+        general_reservation_code="11",
+        special_reservation_code="13",
+        wait_reservation_flag=" 9",
+    )
+    rail.search_selectable_trains.return_value = [train]
+    rail.describe_waitlist_train.return_value = {
+        "no": "015",
+        "label": "09:00~11:30 KTX",
+        "dep_time": "090000",
+        "arr_time": "113000",
+        "name": "KTX",
+        "soldout": False,
+        "waitlistEligible": True,
+    }
+    rail.seat_cars.return_value = SeatCarListResponse(
+        cars=(SeatCar(3, "일반실", 1, ()),)
+    )
+    seat = PhysicalSeat(
+        seat_no="000041",
+        sale_possible="Y",
+        direction_code="1",
+        other_attribute_code="000",
+        requested_attribute_code="000",
+        floor=None,
+        specification="5A",
+        sequence_no="1",
+        message_code="",
+        message="",
+        visual_message_division_code="",
+    )
+    rail.seat_inventory.return_value = SeatInventoryResponse(
+        layout_type=2,
+        arrangement_code="4",
+        remaining_count=1,
+        total_count=70,
+        seats=(seat,),
+        car_no=3,
+    )
+    hold = SimpleNamespace(pnr_no="PRIVATE")
+    rail.reserve_designated.return_value = hold
+    rail.reservation_id.return_value = "R1"
+    rail.payment_due.return_value = (
+        (utc_now() + timedelta(days=3)).strftime("%Y%m%d"),
+        "101500",
+    )
+    monkeypatch.setattr(runtime.gateway.conversation, "_rail_service", lambda owner: rail)
+    runtime.storage.save_onboarded_account(
+        OnboardedAccount(chat_id=-100, korail_id="01012345678", korail_pw="rail-password")
+    )
+    alice = runtime.identity.register(
+        "alice", "a long secure passphrase", runtime.identity.create_invite()
+    )
+    owner = runtime.identity.authenticate(alice["token"])["storage_id"]
+    runtime.storage.save_onboarded_account(
+        OnboardedAccount(chat_id=owner, korail_id="01012345678", korail_pw="rail-password")
+    )
+    http = runtime.app.test_client()
+    headers = {"Authorization": "Bearer " + alice["token"]}
+    conditions = {
+        "v": 1,
+        "action": "prepare_search",
+        "dep_date": train.departure_date,
+        "src_station": "서울",
+        "dst_station": "부산",
+        "dep_time": "0900",
+        "max_dep_time": "1800",
+        "train_type": "1",
+        "seat_option": "2",
+        "passenger_count": 1,
+        "seat_strategy": "1",
+    }
+
+    listed = http.post("/api/mobile/trains", headers=headers, json=conditions)
+    assert listed.status_code == 200, listed.json
+    train_key = listed.json["trains"][0]["trainKey"]
+    assert listed.json["trains"][0]["generalAvailable"] is True
+    assert listed.json["trains"][0]["specialAvailable"] is False
+
+    cars = http.get(
+        f"/api/mobile/trains/{train_key}/cars?seatClass=general&passengerCount=1",
+        headers=headers,
+    )
+    assert cars.status_code == 200
+    assert cars.json["cars"][0]["carNo"] == 3
+    seats = http.get(
+        f"/api/mobile/trains/{train_key}/cars/3/seats?seatClass=general&passengerCount=1",
+        headers=headers,
+    )
+    assert seats.status_code == 200
+    target = seats.json["seats"][0]
+
+    bob = runtime.identity.register(
+        "bobby", "a long secure passphrase", runtime.identity.create_invite()
+    )
+    assert http.get(
+        f"/api/mobile/trains/{train_key}/cars?seatClass=general&passengerCount=1",
+        headers={"Authorization": "Bearer " + bob["token"]},
+    ).status_code == 404
+
+    reserved = http.post(
+        "/api/mobile/reservations/designated",
+        headers=headers,
+        json={
+            "trainKey": train_key,
+            "seatClass": "general",
+            "passengerCount": 1,
+            "carNo": 3,
+            "seats": [target],
+        },
+    )
+    assert reserved.status_code == 200, reserved.json
+    assert reserved.json["reserved"] is True
+    assert reserved.json["pending"][0]["reservationId"] == "R1"
+    assert reserved.json["pending"][0]["seatLabels"] == ["5A"]
+    status = runtime.storage.get_payment_status(owner)
+    assert status.reservation_id == "R1"
+    assert status.seat_labels == ["5A"]
+    assert runtime.notifications.items(owner)[0]["kind"] == "payment"
+    assert rail.seat_inventory.call_count == 2
+    runtime.storage.close()
 
 
 def test_scheduler_executes_persisted_conditions_without_chat(tmp_path, monkeypatch):

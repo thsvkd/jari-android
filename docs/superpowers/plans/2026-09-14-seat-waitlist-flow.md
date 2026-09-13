@@ -181,6 +181,8 @@ git commit -m "실제 코레일 좌석표와 지정 예약을 연결한다"
 
 ### Task 4: 모바일 좌석 API와 즉시 예약
 
+**상태: 완료**
+
 **Files:**
 - Modify: `backend/src/korail_bot/mobile/runtime.py`
 - Modify: `backend/src/korail_bot/mobile/gateway.py`

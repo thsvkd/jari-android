@@ -67,6 +67,7 @@ def test_server_identity_is_only_identity_and_logout_revokes(api, monkeypatch):
         "register",
         "logout",
         "trains",
+        "reservations/designated",
         "search",
         "schedule",
         "search/cancel",
@@ -164,3 +165,31 @@ def test_overly_nested_payload_is_a_client_error(api):
         payload = {"nested": payload}
     assert client.post("/api/mobile/search", headers=headers, json=payload).status_code == 400
     gateway.start_search.assert_not_called()
+
+
+def test_seat_routes_use_authenticated_owner_and_gateway(api):
+    client, identity, gateway = api
+    alice = signup(api, "alice")
+    owner = identity.authenticate(alice["token"])["storage_id"]
+    headers = {"Authorization": "Bearer " + alice["token"]}
+    gateway.seat_cars.return_value = {"cars": []}
+    gateway.seat_inventory.return_value = {"seats": []}
+    gateway.reserve_designated.return_value = {"reserved": True}
+
+    assert client.get(
+        "/api/mobile/trains/key-1/cars?seatClass=general&passengerCount=2",
+        headers=headers,
+    ).json == {"cars": []}
+    gateway.seat_cars.assert_called_once_with(owner, "key-1", "general", "2")
+
+    assert client.get(
+        "/api/mobile/trains/key-1/cars/3/seats?seatClass=special&passengerCount=1",
+        headers=headers,
+    ).json == {"seats": []}
+    gateway.seat_inventory.assert_called_once_with(owner, "key-1", 3, "special", "1")
+
+    payload = {"trainKey": "key-1", "seatClass": "general", "passengerCount": 1}
+    assert client.post(
+        "/api/mobile/reservations/designated", headers=headers, json=payload
+    ).json == {"reserved": True}
+    gateway.reserve_designated.assert_called_once_with(owner, payload)

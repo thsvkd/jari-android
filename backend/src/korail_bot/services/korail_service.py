@@ -387,6 +387,16 @@ class KorailService(RailService):
             seats=assignments,
         )
 
+    def release_unpaid_hold(self, hold):
+        """Release a modern unpaid hold when the app cannot safely persist it."""
+        client = self._modern_client
+        if not self._logged_in or client is None:
+            raise ValueError("예약을 취소하려면 먼저 로그인해 주세요.")
+        return client.cancel_unpaid_hold(
+            hold,
+            consent=MutationConsent(allow_cancel=True, dry_run=False),
+        )
+
     @staticmethod
     def describe_waitlist_train(train) -> dict:
         """Reduce a current-API train to the mobile train-list contract."""
@@ -985,15 +995,17 @@ class KorailService(RailService):
     @staticmethod
     def reservation_id(reservation) -> str | None:
         """The reservation number, as korail2 names it."""
-        rsv_id = getattr(reservation, "rsv_id", None)
+        rsv_id = getattr(reservation, "rsv_id", None) or getattr(reservation, "pnr_no", None)
         return str(rsv_id) if rsv_id else None
 
     @staticmethod
     def payment_due(reservation) -> tuple[str | None, str | None]:
         """When Korail stops holding this seat, as korail2 names it."""
         return (
-            getattr(reservation, "buy_limit_date", None),
-            getattr(reservation, "buy_limit_time", None),
+            getattr(reservation, "buy_limit_date", None)
+            or getattr(reservation, "payment_deadline_date", None),
+            getattr(reservation, "buy_limit_time", None)
+            or getattr(reservation, "payment_deadline_time", None),
         )
 
     @staticmethod

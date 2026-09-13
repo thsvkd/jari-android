@@ -17,6 +17,7 @@ from korail_bot.mobile.scheduler import MobileScheduledSearchService
 from korail_bot.mobile.storage import MobileStorage
 from korail_bot.services.payment_watchdog_service import PaymentWatchdogService
 from korail_bot.services.search_watchdog_service import SearchWatchdogService
+from korail_bot.services.seat_map_service import SeatMapService
 from korail_bot.utils.logger import get_logger
 from korail_bot.utils.timezone import as_utc, utc_now
 
@@ -44,6 +45,7 @@ class MobileRuntime:
         self.owner = secrets.token_hex(24)
         self.started = False
         self.reservation = None
+        self.seat_maps = SeatMapService()
         if self.storage is not None:
             self.reservation = MobileReservationService(self.storage, self.notifications, config)
             conversation = MobileConversation(
@@ -61,6 +63,7 @@ class MobileRuntime:
                 self.reservation,
                 conversation_handler=conversation,
                 scheduled_search_service=scheduler,
+                seat_map_service=self.seat_maps,
             )
             self.services = [
                 scheduler,

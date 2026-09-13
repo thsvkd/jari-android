@@ -691,6 +691,8 @@ class MiniAppGateway:
                 "trainInfo": item.train_info,
                 "expiresAt": as_utc(item.expires_at).isoformat() if item.expires_at else None,
                 "seatNumber": item.seat_number,
+                "seatLabels": list(item.seat_labels or []),
+                "seatClass": item.seat_class,
             }
             for item in self.pending_payments.pending(chat_id)
         ]

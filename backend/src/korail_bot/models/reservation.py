@@ -368,6 +368,8 @@ class PaymentStatus:
     train_no: str = ""
     dep_date: str = ""
     dep_time: str = ""
+    seat_labels: list[str] = field(default_factory=list)
+    seat_class: str = ""
 
     def is_awaiting_payment(self) -> bool:
         """Whether there is still a seat here for the user to pay for."""

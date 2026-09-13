@@ -104,6 +104,7 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
                 "/search",
                 "/schedule",
                 "/reservations/cancel",
+                "/reservations/designated",
             }:
                 limited("rail:" + g.user["id"], 10, 60)
             with locks[abs(g.user["storage_id"]) % len(locks)]:
@@ -222,6 +223,36 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
     @authenticated
     def delete_favourite(fav_id):
         return jsonify(gateway.delete_favourite(g.user["storage_id"], fav_id))
+
+    @app.get(PREFIX + "/trains/<train_key>/cars")
+    @authenticated
+    def seat_cars(train_key):
+        return jsonify(
+            gateway.seat_cars(
+                g.user["storage_id"],
+                train_key,
+                request.args.get("seatClass", ""),
+                request.args.get("passengerCount", ""),
+            )
+        )
+
+    @app.get(PREFIX + "/trains/<train_key>/cars/<int:car_no>/seats")
+    @authenticated
+    def seat_inventory(train_key, car_no):
+        return jsonify(
+            gateway.seat_inventory(
+                g.user["storage_id"],
+                train_key,
+                car_no,
+                request.args.get("seatClass", ""),
+                request.args.get("passengerCount", ""),
+            )
+        )
+
+    @app.post(PREFIX + "/reservations/designated")
+    @authenticated
+    def reserve_designated():
+        return jsonify(gateway.reserve_designated(g.user["storage_id"], g.payload))
 
     @app.post(PREFIX + "/notify")
     @authenticated

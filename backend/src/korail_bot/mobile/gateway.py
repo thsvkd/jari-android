@@ -1,15 +1,25 @@
 """Booking adapter: invited identities use their own encrypted railway login."""
 
 import json
+from datetime import datetime, timedelta
 from functools import wraps
 
+from korail2 import TrainType
+
+from korail_bot.config.settings import settings
 from korail_bot.handlers.conversation_handler import ConversationHandler
-from korail_bot.models import OnboardedAccount, SeatPreference
+from korail_bot.models import OnboardedAccount, PaymentStatus, SeatPreference, SeatTarget
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.access_service import AccessDecision, AccessLevel, AccessService
 from korail_bot.services.mini_app_gateway import MiniAppError, MiniAppGateway
 from korail_bot.services.mini_app_service import MiniAppDataError, MiniAppSubmission
+from korail_bot.services.seat_map_service import (
+    SeatMapExpiredError,
+    SeatMapNotFoundError,
+    SeatMapService,
+)
 from korail_bot.utils.logger import get_logger
+from korail_bot.utils.timezone import RAIL_TIMEZONE, as_utc, utc_now
 
 logger = get_logger(__name__)
 
@@ -53,13 +63,218 @@ class MobileConversation(ConversationHandler):
 
 
 class MobileGateway(MiniAppGateway):
+    def __init__(self, *args, seat_map_service=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.seat_maps = seat_map_service or SeatMapService()
+
     @serialized_operation
     def register(self, chat_id, username, password):
         return super().register(chat_id, username, password)
 
     @serialized_operation
     def list_trains(self, chat_id, payload):
-        return super().list_trains(chat_id, payload)
+        session, submission = self._prepared_session(chat_id, payload)
+        rail = self._logged_in_rail(chat_id)
+        try:
+            trains = rail.search_selectable_trains(
+                dep_date=submission.dep_date,
+                src_locate=submission.src_station,
+                dst_locate=submission.dst_station,
+                dep_time=f"{submission.dep_time}00",
+                max_dep_time=submission.max_dep_time,
+                train_type=TrainType.KTX if submission.train_type == "1" else TrainType.ALL,
+                passenger_count=submission.passenger_count,
+            )
+        except Exception as exc:
+            logger.error("Could not list current Korail trains for chat_id=%s (%s)", chat_id, type(exc).__name__)
+            raise MiniAppError("열차 목록을 불러오지 못했어요. 잠시 후 다시 조회해 주세요.", 502) from exc
+
+        truncated = len(trains) > self.conversation.MAX_TRAIN_OPTIONS
+        trains = trains[: self.conversation.MAX_TRAIN_OPTIONS]
+        options = []
+        for train in trains:
+            option = rail.describe_waitlist_train(train)
+            option.update(
+                {
+                    "trainKey": self.seat_maps.remember_train(chat_id, train),
+                    "generalAvailable": getattr(train, "general_reservation_code", None) == "11",
+                    "specialAvailable": getattr(train, "special_reservation_code", None) == "11",
+                }
+            )
+            options.append(option)
+        session.train_info["trainOptions"] = options
+        self.storage.save_user_session(session)
+        return {
+            "trains": options,
+            "truncated": truncated,
+            "passengerCount": submission.passenger_count,
+        }
+
+    @serialized_operation
+    def seat_cars(self, chat_id, train_key, seat_class, passenger_count):
+        train = self._seat_train(chat_id, train_key)
+        count = self._passenger_count(passenger_count)
+        rail = self._logged_in_rail(chat_id)
+        try:
+            return {"cars": self.seat_maps.describe_cars(rail.seat_cars(train, seat_class, count))}
+        except ValueError as exc:
+            raise MiniAppError(str(exc), 422) from exc
+        except Exception as exc:
+            logger.error("Could not read Korail cars for chat_id=%s (%s)", chat_id, type(exc).__name__)
+            raise MiniAppError("호차 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502) from exc
+
+    @serialized_operation
+    def seat_inventory(self, chat_id, train_key, car_no, seat_class, passenger_count):
+        train = self._seat_train(chat_id, train_key)
+        count = self._passenger_count(passenger_count)
+        rail = self._logged_in_rail(chat_id)
+        try:
+            response = rail.seat_inventory(train, car_no, seat_class, count)
+            return self.seat_maps.describe_inventory(response)
+        except ValueError as exc:
+            raise MiniAppError(str(exc), 422) from exc
+        except Exception as exc:
+            logger.error("Could not read Korail seats for chat_id=%s (%s)", chat_id, type(exc).__name__)
+            raise MiniAppError("좌석표를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502) from exc
+
+    @serialized_operation
+    def reserve_designated(self, chat_id, payload):
+        if self.pending_payments.pending(chat_id):
+            raise MiniAppError("결제를 기다리는 예약이 있어요. 먼저 결제하거나 예약을 취소해 주세요.", 409)
+        train_key = payload.get("trainKey")
+        seat_class = payload.get("seatClass")
+        car_no = payload.get("carNo")
+        if not isinstance(train_key, str) or not isinstance(seat_class, str):
+            raise MiniAppError("열차와 좌석 등급을 다시 선택해 주세요.", 422)
+        if isinstance(car_no, bool) or not isinstance(car_no, int) or not 1 <= car_no <= 99:
+            raise MiniAppError("호차를 다시 선택해 주세요.", 422)
+        count = self._passenger_count(payload.get("passengerCount"))
+        raw_targets = payload.get("seats")
+        if not isinstance(raw_targets, list) or len(raw_targets) != count:
+            raise MiniAppError("승객 수만큼 좌석을 선택해 주세요.", 422)
+        try:
+            targets = [SeatTarget.from_payload(target) for target in raw_targets]
+        except ValueError as exc:
+            raise MiniAppError(str(exc), 422) from exc
+        train = self._seat_train(chat_id, train_key)
+        rail = self._logged_in_rail(chat_id)
+        try:
+            current = rail.seat_inventory(train, car_no, seat_class, count)
+            hold = rail.reserve_designated(
+                train,
+                current,
+                targets,
+                passenger_count=count,
+                seat_class=seat_class,
+            )
+        except ValueError as exc:
+            raise MiniAppError(str(exc), 409) from exc
+        except Exception as exc:
+            logger.error("Could not reserve designated seats for chat_id=%s (%s)", chat_id, type(exc).__name__)
+            raise MiniAppError("선택한 좌석을 예약하지 못했어요. 좌석표를 새로 불러와 주세요.", 502) from exc
+
+        reservation_id = rail.reservation_id(hold)
+        if not reservation_id:
+            self._release_failed_hold(rail, hold, chat_id)
+            raise MiniAppError("예약 번호를 확인하지 못했어요. 코레일 예약 목록을 확인해 주세요.", 502)
+        expires_at = self._payment_deadline(rail, hold)
+        train_info = self._train_info(train)
+        labels = [target.label for target in targets]
+        status = PaymentStatus(
+            chat_id=chat_id,
+            completed=False,
+            reminder_active=True,
+            reservation_id=reservation_id,
+            train_info=train_info,
+            expires_at=expires_at,
+            train_no=str(getattr(train, "train_no", "") or ""),
+            dep_date=str(getattr(train, "departure_date", "") or ""),
+            dep_time=str(getattr(train, "departure_time", "") or ""),
+            seat_labels=labels,
+            seat_class=seat_class,
+        )
+        try:
+            self.storage.save_payment_status(status)
+        except Exception as exc:
+            self._release_failed_hold(rail, hold, chat_id)
+            raise MiniAppError("예약 정보를 안전하게 저장하지 못해 좌석을 다시 돌려보냈어요.", 503) from exc
+        try:
+            self.telegram.publish(
+                chat_id,
+                f"{train_info} {', '.join(labels)} 좌석을 예약했어요. 결제 기한 안에 코레일에서 결제해 주세요.",
+                kind="payment",
+                dedupe=f"designated:{chat_id}:{reservation_id}",
+            )
+        except Exception as exc:
+            logger.error("Could not publish designated-seat notification for chat_id=%s (%s)", chat_id, type(exc).__name__)
+        session = self.storage.get_user_session(chat_id)
+        if session:
+            session.reset()
+            self.storage.save_user_session(session)
+        return {
+            "reserved": True,
+            "pending": self._pending(chat_id),
+            "paymentUrl": settings.KORAIL_PAYMENT_URL,
+        }
+
+    @staticmethod
+    def _release_failed_hold(rail, hold, chat_id):
+        try:
+            rail.release_unpaid_hold(hold)
+        except Exception as exc:
+            logger.critical(
+                "Could not release untracked Korail hold for chat_id=%s (%s)",
+                chat_id,
+                type(exc).__name__,
+            )
+
+    def _seat_train(self, chat_id, train_key):
+        try:
+            return self.seat_maps.get_train(chat_id, train_key)
+        except SeatMapExpiredError as exc:
+            raise MiniAppError(str(exc), 410) from exc
+        except SeatMapNotFoundError as exc:
+            raise MiniAppError(str(exc), 404) from exc
+
+    @staticmethod
+    def _passenger_count(value):
+        try:
+            count = int(value)
+        except (TypeError, ValueError) as exc:
+            raise MiniAppError("승객 수를 확인해 주세요.", 422) from exc
+        if isinstance(value, bool) or not 1 <= count <= 9:
+            raise MiniAppError("승객 수는 1명에서 9명 사이여야 해요.", 422)
+        return count
+
+    def _logged_in_rail(self, chat_id):
+        account = self.storage.get_onboarded_account(chat_id)
+        if not account:
+            raise MiniAppError("코레일 계정을 연결해 주세요.", 428)
+        rail = self.conversation._rail_service(chat_id)
+        if not rail.login(account.korail_id, account.korail_pw):
+            raise MiniAppError("코레일에 로그인하지 못했어요. 계정을 다시 연결해 주세요.", 428)
+        return rail
+
+    @staticmethod
+    def _payment_deadline(rail, hold):
+        raw_date, raw_time = rail.payment_due(hold)
+        if isinstance(raw_date, str) and isinstance(raw_time, str):
+            try:
+                local = datetime.strptime(f"{raw_date}{raw_time[:6]}", "%Y%m%d%H%M%S")
+                return as_utc(local, naive_zone=RAIL_TIMEZONE)
+            except ValueError:
+                pass
+        return utc_now() + timedelta(minutes=settings.PAYMENT_TIMEOUT_MINUTES)
+
+    @staticmethod
+    def _train_info(train):
+        name = getattr(train, "train_class_name", None) or "KTX"
+        no = str(getattr(train, "train_no", "") or "")
+        src = getattr(train, "departure_station_name", None) or "출발역"
+        dst = getattr(train, "arrival_station_name", None) or "도착역"
+        dep = str(getattr(train, "departure_time", "") or "")
+        clock = f"{dep[:2]}:{dep[2:4]}" if len(dep) >= 4 else ""
+        return f"{name} {no} {src} → {dst} {clock}".strip()
 
     @serialized_operation
     def start_search(self, chat_id, payload):
