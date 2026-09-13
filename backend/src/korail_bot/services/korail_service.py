@@ -17,7 +17,15 @@ from korail2 import Korail as K2MKorail
 # cancel_reservation below). TicketReservation is wrapped the same way, to
 # slip a seat-location code into a payload korail2 otherwise hard-codes.
 from korail2.korail2 import KORAIL_CANCEL, KORAIL_MOBILE, KORAIL_TICKETRESERVATION
-from korail_mobile_api import KorailClient, KorailConfig
+from korail_mobile_api import (
+    KorailClient,
+    KorailConfig,
+    KorailPassengerCounts,
+    KorailReservationJobType,
+    KorailSeatClass,
+    MutationConsent,
+    TrainSearchQuery,
+)
 
 from korail_bot.config.settings import settings
 from korail_bot.models import ReservationOutcome, SeatPreference
@@ -488,6 +496,68 @@ class KorailService(RailService):
             logger.error("  Full traceback:", exc_info=True)
             return None
 
+    def request_waitlist(
+        self,
+        *,
+        dep_date: str,
+        src_locate: str,
+        dst_locate: str,
+        dep_time: str,
+        train_no: str,
+        passenger_count: int = 1,
+    ) -> dict[str, str]:
+        """Apply for Korail's official standby list for one eligible train."""
+        client = self._modern_client
+        if not self._logged_in or client is None:
+            raise ValueError("코레일에 로그인한 뒤 예약 대기를 신청해 주세요.")
+
+        result = client.search_trains(
+            TrainSearchQuery(
+                departure_station_code=src_locate,
+                arrival_station_code=dst_locate,
+                departure_date=dep_date,
+                departure_time=dep_time,
+                passengers=passenger_count,
+            )
+        )
+        train = next((item for item in result.trains if str(item.train_no) == str(train_no)), None)
+        if train is None:
+            raise ValueError("선택한 열차를 다시 찾지 못했어요. 목록을 새로 조회해 주세요.")
+        if str(getattr(train, "wait_reservation_flag", "") or "") != " 9":
+            raise ValueError("선택한 열차는 현재 코레일 예약 대기 대상이 아니에요.")
+
+        reserve_consent = MutationConsent(allow_reserve=True, dry_run=False)
+        hold = client.reserve(
+            train,
+            consent=reserve_consent,
+            passengers=KorailPassengerCounts(adult=passenger_count),
+            seat_class=KorailSeatClass.GENERAL,
+            job_type=KorailReservationJobType.STANDBY,
+        )
+        try:
+            client.confirm_standby_hold(
+                hold,
+                consent=reserve_consent,
+                allow_seat_class_change=False,
+                sms_notify=False,
+                phone_no=None,
+            )
+        except Exception:
+            try:
+                client.cancel_unpaid_hold(
+                    hold,
+                    consent=MutationConsent(allow_cancel=True, dry_run=False),
+                )
+            except Exception as cancel_error:
+                logger.error(
+                    "Could not cancel incomplete Korail standby hold (%s)",
+                    type(cancel_error).__name__,
+                )
+            raise
+
+        logger.info("Korail standby registration completed for train %s", train_no)
+        return {"train_no": str(train_no)}
+
     # ==================== Payment, observed rather than performed ====================
     #
     # The bot reserves; the user pays. Nothing here pays for anything, and
@@ -798,6 +868,9 @@ class KorailService(RailService):
             "arr_time": str(arr_time or ""),
             "name": name,
             "soldout": not (hasattr(train, "has_seat") and train.has_seat()),
+            "waitlistEligible": bool(
+                hasattr(train, "has_general_waiting_list") and train.has_general_waiting_list()
+            ),
         }
 
     @staticmethod

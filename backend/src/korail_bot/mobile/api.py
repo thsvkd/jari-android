@@ -165,7 +165,7 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
         result["capabilities"] = {
             "korail": booking_available,
             "srt": False,
-            "waitlist": False,
+            "waitlist": booking_available,
             "scheduledSearch": booking_available,
             "durableNotifications": notifications is not None,
             "favourites": booking_available,

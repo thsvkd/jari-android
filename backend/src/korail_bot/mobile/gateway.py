@@ -9,6 +9,9 @@ from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.access_service import AccessDecision, AccessLevel, AccessService
 from korail_bot.services.mini_app_gateway import MiniAppError, MiniAppGateway
 from korail_bot.services.mini_app_service import MiniAppDataError, MiniAppSubmission
+from korail_bot.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def serialized_operation(method):
@@ -60,10 +63,59 @@ class MobileGateway(MiniAppGateway):
 
     @serialized_operation
     def start_search(self, chat_id, payload):
-        return super().start_search(chat_id, payload)
+        submission = self._submission(payload)
+        if not submission.waitlist:
+            return super().start_search(chat_id, payload)
+
+        session, submission = self._prepared_session(chat_id, payload)
+        selected_trains = self._selected_trains(payload)
+        session.train_info["selectedTrains"] = selected_trains
+        self.storage.save_user_session(session)
+
+        if len(selected_trains) != 1:
+            raise MiniAppError("예약 대기를 신청할 열차 한 편을 골라 주세요.", 422)
+        credentials = session.credentials
+        if credentials is None:
+            raise MiniAppError("코레일 계정을 다시 연결한 뒤 신청해 주세요.", 428)
+
+        rail = self.conversation._rail_service(chat_id)
+        if not rail.login(credentials.korail_id, credentials.korail_pw):
+            raise MiniAppError("코레일에 로그인하지 못했어요. 계정을 다시 연결해 주세요.", 428)
+        try:
+            registered = rail.request_waitlist(
+                dep_date=submission.dep_date,
+                src_locate=submission.src_station,
+                dst_locate=submission.dst_station,
+                dep_time=f"{submission.dep_time}00",
+                train_no=selected_trains[0],
+                passenger_count=submission.passenger_count,
+            )
+        except ValueError as exc:
+            raise MiniAppError(str(exc), 409) from exc
+        except Exception as exc:
+            logger.error(
+                "Could not register Korail standby for chat_id=%s (%s)",
+                chat_id,
+                type(exc).__name__,
+            )
+            raise MiniAppError(
+                "코레일 예약 대기를 신청하지 못했어요. 잠시 후 목록을 새로 조회해 주세요.",
+                502,
+            ) from exc
+
+        self.telegram.send_message(
+            chat_id,
+            f"{selected_trains[0]}편 코레일 예약 대기를 신청했어요. "
+            "배정 결과는 코레일 앱이나 홈페이지에서도 확인해 주세요.",
+        )
+        session.reset()
+        self.storage.save_user_session(session)
+        return {"started": False, "waitlisted": True, "trainNo": registered["train_no"]}
 
     @serialized_operation
     def schedule_search(self, chat_id, payload):
+        if self._submission(payload).waitlist:
+            raise MiniAppError("예약 대기는 선택한 열차에 바로 신청해 주세요.", 422)
         return super().schedule_search(chat_id, payload)
 
     @staticmethod
@@ -86,8 +138,6 @@ class MobileGateway(MiniAppGateway):
             operator = conditions.get("operator", payload.get("operator", "korail"))
             if not isinstance(operator, str) or operator not in {"korail", "KORAIL", "KTX"}:
                 raise MiniAppError("현재는 코레일만 이용할 수 있어요.", 422)
-            if conditions.get("waitlist") or payload.get("waitlist"):
-                raise MiniAppError("예약 대기는 아직 지원하지 않아요.", 422)
             preference = conditions.get("seat_preference", "")
             if not isinstance(preference, str):
                 raise MiniAppError("좌석 조건을 확인해 주세요.")
@@ -98,6 +148,11 @@ class MobileGateway(MiniAppGateway):
                 row is not None and not 1 <= row <= 99 for row in (decoded.row_min, decoded.row_max)
             ) or (decoded.row_min and decoded.row_max and decoded.row_min > decoded.row_max):
                 raise MiniAppError("좌석 번호는 1~99 사이에서 작은 번호부터 입력해 주세요.")
+            if conditions.get("waitlist"):
+                if conditions.get("seat_option") not in {"1", "2"}:
+                    raise MiniAppError("코레일 예약 대기는 일반실만 신청할 수 있어요.", 422)
+                if preference:
+                    raise MiniAppError("코레일 예약 대기에서는 좌석 위치를 지정할 수 없어요.", 422)
         try:
             return MobileSubmission.parse(json.dumps(conditions, ensure_ascii=False))
         except (MiniAppDataError, TypeError, ValueError) as exc:

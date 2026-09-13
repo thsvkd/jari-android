@@ -47,8 +47,8 @@ const stations = [
 ];
 
 const trainFixtures: TrainOption[] = [
-  { no: "015", label: "07:27→10:12 KTX", dep_time: "072700", arr_time: "101200", name: "KTX", soldout: true },
-  { no: "019", label: "08:03→10:48 KTX", dep_time: "080300", arr_time: "104800", name: "KTX", soldout: true },
+  { no: "015", label: "07:27→10:12 KTX", dep_time: "072700", arr_time: "101200", name: "KTX", soldout: true, waitlistEligible: true },
+  { no: "019", label: "08:03→10:48 KTX", dep_time: "080300", arr_time: "104800", name: "KTX", soldout: true, waitlistEligible: false },
   { no: "025", label: "09:00→11:42 KTX", dep_time: "090000", arr_time: "114200", name: "KTX", soldout: false },
 ];
 
@@ -121,6 +121,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     paymentUrl: "https://www.letskorail.com/",
     capabilities: normalizeCapabilities({
       korail: true,
+      waitlist: true,
       scheduledSearch: true,
       durableNotifications: true,
       favourites: true,
@@ -152,6 +153,9 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     },
     trains: async () => ({ trains: trainFixtures.map((train) => ({ ...train })), truncated: false, passengerCount: 1 }),
     search: async (payload) => {
+      if (payload.conditions.waitlist) {
+        return { started: false, waitlisted: true, trainNo: payload.trains[0] };
+      }
       running = asSearch(payload.conditions, payload.trains);
       scheduled = null;
       notifications.unshift({

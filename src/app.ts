@@ -445,7 +445,7 @@ export class TeumApp {
             <div class="row-range"><label class="field"><span>첫 좌석 번호</span><input name="seat_row_min" type="number" min="1" max="99" inputmode="numeric" value="${escapeHtml(this.draft.seatRowMin)}" placeholder="예: 1"></label><span>–</span><label class="field"><span>마지막 좌석 번호</span><input name="seat_row_max" type="number" min="1" max="99" inputmode="numeric" value="${escapeHtml(this.draft.seatRowMax)}" placeholder="예: 15"></label></div>
             <p class="field-note">비워두면 좌석 위치와 관계없이 검색해요. 조건이 좁을수록 빈자리를 찾는 데 시간이 더 걸릴 수 있어요.</p>
           </details>
-          <label class="check-row unavailable-control"><input name="waitlist" type="checkbox" disabled><span><b>예약 대기도 함께 신청</b><small>${capabilities.waitlist ? "아직 앱에서 이용할 수 없어요" : "현재는 지원하지 않아요"}</small></span></label>
+          <label class="check-row ${capabilities.waitlist ? "" : "unavailable-control"}"><input name="waitlist" type="checkbox" ${this.draft.waitlist ? "checked" : ""} ${capabilities.waitlist ? "" : "disabled"}><span><b>코레일 예약 대기 신청</b><small>${capabilities.waitlist ? "예약 대기 가능한 열차 한 편을 골라 바로 신청해요" : "현재 서버에서는 지원하지 않아요"}</small></span></label>
         </section>
         ${this.renderError()}
         ${capabilities.korail ? "" : '<p class="availability center">예약 서버가 연결되지 않아 현재 앱 계정 기능만 사용할 수 있어요.</p>'}
@@ -465,29 +465,35 @@ export class TeumApp {
 
   private renderTrains(): string {
     const conditions = this.conditions ?? buildConditions(this.draft);
+    const waitlist = conditions.waitlist;
     const list = this.trainOptions.length
       ? this.trainOptions
           .map((train) => {
             const selected = this.selectedTrains.includes(train.no);
             const departure = train.dep_time ? clockFromCompact(train.dep_time) : "";
             const arrival = train.arr_time ? clockFromCompact(train.arr_time) : "";
-            return `<button class="train-card ${selected ? "selected" : ""}" data-train="${escapeHtml(train.no)}" type="button" aria-pressed="${selected}"><span class="train-check">${selected ? "✓" : ""}</span><span class="train-main"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b><em>${escapeHtml(train.label)}</em></span><span class="seat-badge ${train.soldout ? "soldout" : "available"}">${train.soldout ? "매진" : "좌석 있음"}</span></button>`;
+            const selectable = !waitlist || train.waitlistEligible === true;
+            const badge = waitlist
+              ? train.waitlistEligible ? "예약 대기 가능" : "대기 대상 아님"
+              : train.soldout ? "매진" : "좌석 있음";
+            return `<button class="train-card ${selected ? "selected" : ""}" data-train="${escapeHtml(train.no)}" type="button" aria-pressed="${selected}" ${selectable ? "" : "disabled"}><span class="train-check">${selected ? "✓" : ""}</span><span class="train-main"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b><em>${escapeHtml(train.label)}</em></span><span class="seat-badge ${train.waitlistEligible || !train.soldout ? "available" : "soldout"}">${badge}</span></button>`;
           })
           .join("")
       : '<div class="empty"><span>⌁</span><h2>조회된 열차가 없어요</h2><p>열차를 고르지 않고 시간대 전체를 검색할 수도 있어요.</p></div>';
     return `${this.renderSubhead("열차 선택", "어떤 열차를 기다릴까요?")}
       <div class="context-line"><b>${escapeHtml(conditions.src_station)} → ${escapeHtml(conditions.dst_station)}</b><span>${escapeHtml(formatWindow(conditions))}</span></div>
-      <p class="intro">여러 편을 고르면 빈자리가 먼저 난 열차를 예약해요. 아무것도 고르지 않으면 시간대 전체를 검색해요.</p>
+      <p class="intro">${waitlist ? "코레일 예약 대기는 대상 열차 한 편만 신청할 수 있어요." : "여러 편을 고르면 빈자리가 먼저 난 열차를 예약해요. 아무것도 고르지 않으면 시간대 전체를 검색해요."}</p>
       ${this.trainListTruncated ? '<div class="notice warning">목록이 길어 일부 열차만 보여드려요. 시간대 전체 검색은 그대로 이용할 수 있어요.</div>' : ""}
       <div class="train-list">${list}</div>
       ${this.renderError()}
-      <button class="button primary sticky-action" data-action="trains-next">${this.selectedTrains.length ? `${this.selectedTrains.length}편 선택 · 조건 확인` : "시간대 전체 검색"} <span>→</span></button>`;
+      <button class="button primary sticky-action" data-action="trains-next" ${waitlist && this.selectedTrains.length !== 1 ? "disabled" : ""}>${waitlist ? (this.selectedTrains.length === 1 ? "예약 대기 조건 확인" : "대기할 열차를 골라 주세요") : (this.selectedTrains.length ? `${this.selectedTrains.length}편 선택 · 조건 확인` : "시간대 전체 검색")} <span>→</span></button>`;
   }
 
   private renderConfirm(): string {
     const conditions = this.conditions ?? buildConditions(this.draft);
     const capabilities = this.state!.capabilities;
-    return `${this.renderSubhead("마지막 확인", "이 조건으로 찾아드릴게요")}
+    const waitlist = conditions.waitlist;
+    return `${this.renderSubhead("마지막 확인", waitlist ? "이 열차의 예약 대기를 신청할게요" : "이 조건으로 찾아드릴게요")}
       <section class="summary-card">
         <div class="route-hero"><span>${escapeHtml(conditions.src_station)}</span><i>→</i><span>${escapeHtml(conditions.dst_station)}</span></div>
         <dl>
@@ -496,16 +502,17 @@ export class TeumApp {
           <dt>좌석</dt><dd>${escapeHtml(SEAT_OPTIONS[conditions.seat_option])} · ${conditions.passenger_count}명</dd>
           ${conditions.passenger_count > 1 ? `<dt>배치</dt><dd>${conditions.seat_strategy === "1" ? "연속 좌석" : "랜덤 배치"}</dd>` : ""}
           <dt>좌석 지정</dt><dd>${escapeHtml(this.describeSeatPreference(conditions.seat_preference))}</dd>
+          ${waitlist ? "<dt>신청 방식</dt><dd>코레일 예약 대기</dd>" : ""}
         </dl>
       </section>
-      <section class="notice calm"><b>예약까지만 자동으로 진행해요.</b><p>좌석이 예약되면 알려드려요. 결제는 안내된 기한 안에 코레일에서 직접 해 주세요.</p></section>
+      <section class="notice calm"><b>${waitlist ? "코레일 예약 대기만 신청해요." : "예약까지만 자동으로 진행해요."}</b><p>${waitlist ? "빈자리 자동 감시는 함께 돌리지 않아요. 배정 결과는 코레일 앱이나 홈페이지에서도 확인해 주세요." : "좌석이 예약되면 알려드려요. 결제는 안내된 기한 안에 코레일에서 직접 해 주세요."}</p></section>
       <label class="field favourite-name"><span>즐겨찾기 이름 <small>선택</small></span><input id="favourite-name" maxlength="40" placeholder="예: 주말에 집으로"></label>
       ${this.renderError()}
       ${this.accessRequired ? `<button class="button secondary" data-action="request-access" ${this.accessRequestPending ? "disabled" : ""}>${this.accessRequestPending ? "사용 승인 요청을 기다리는 중" : "운영자에게 사용 승인 요청"}</button>` : ""}
-      <button class="button primary" data-action="start-now">지금 빈자리 찾기 <span>⌁</span></button>
-      <button class="button ghost" data-action="schedule-toggle" ${capabilities.scheduledSearch ? "" : "disabled"}>검색 시작 시간 예약</button>
-      ${capabilities.scheduledSearch ? "" : '<p class="availability center">검색 예약은 현재 서버에서 지원하지 않아요.</p>'}
-      ${this.scheduleOpen && capabilities.scheduledSearch ? `<section class="schedule-panel"><label class="field"><span>검색을 시작할 시각</span><input id="schedule-at" type="datetime-local" required></label><button class="button secondary" data-action="schedule-start">이 시각으로 검색 예약</button></section>` : ""}
+      <button class="button primary" data-action="start-now">${waitlist ? "코레일 예약 대기 신청" : "지금 빈자리 찾기"} <span>${waitlist ? "→" : "⌁"}</span></button>
+      <button class="button ghost" data-action="schedule-toggle" ${capabilities.scheduledSearch && !waitlist ? "" : "disabled"}>검색 시작 시간 예약</button>
+      ${waitlist ? '<p class="availability center">예약 대기는 선택한 열차에 바로 신청해요.</p>' : capabilities.scheduledSearch ? "" : '<p class="availability center">검색 예약은 현재 서버에서 지원하지 않아요.</p>'}
+      ${this.scheduleOpen && capabilities.scheduledSearch && !waitlist ? `<section class="schedule-panel"><label class="field"><span>검색을 시작할 시각</span><input id="schedule-at" type="datetime-local" required></label><button class="button secondary" data-action="schedule-start">이 시각으로 검색 예약</button></section>` : ""}
       <div class="split-actions"><button class="text-button" data-action="save-favourite" ${capabilities.favourites ? "" : "disabled"}>☆ ${capabilities.favourites ? "이 조건 즐겨찾기" : "즐겨찾기 이용 불가"}</button><button class="text-button" data-view="journey">조건 수정</button></div>`;
   }
 
@@ -677,6 +684,7 @@ export class TeumApp {
       seatColumns: data.getAll("seat_column").map(String),
       seatRowMin: value("seat_row_min"),
       seatRowMax: value("seat_row_max"),
+      waitlist: data.has("waitlist"),
     };
   }
 
@@ -695,6 +703,12 @@ export class TeumApp {
     }
     if (low !== null && high !== null && low > high) {
       return "첫 좌석 번호는 마지막 번호보다 클 수 없어요.";
+    }
+    if (draft.waitlist && ["3", "4"].includes(draft.seatOption)) {
+      return "코레일 예약 대기는 일반실만 신청할 수 있어요.";
+    }
+    if (draft.waitlist && (draft.seatColumns.length || low !== null || high !== null)) {
+      return "코레일 예약 대기에서는 좌석 위치를 지정할 수 없어요.";
     }
     return null;
   }
@@ -735,6 +749,13 @@ export class TeumApp {
         return;
       }
       if (!result.started) {
+        if (result.waitlisted) {
+          this.showToast(`${result.trainNo || "선택한 열차"}편 예약 대기를 신청했어요.`);
+          this.history = [];
+          this.view = "home";
+          await this.reload();
+          return;
+        }
         this.error = "서버에서 검색 시작을 확인하지 못했어요.";
         return;
       }
@@ -873,7 +894,7 @@ export class TeumApp {
     if (train) {
       this.selectedTrains = this.selectedTrains.includes(train)
         ? this.selectedTrains.filter((number) => number !== train)
-        : [...this.selectedTrains, train];
+        : this.conditions?.waitlist ? [train] : [...this.selectedTrains, train];
       this.render();
       return;
     }

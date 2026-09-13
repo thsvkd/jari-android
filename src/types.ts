@@ -46,6 +46,7 @@ export interface Conditions {
   passenger_count: number;
   seat_strategy: "1" | "2";
   seat_preference: string;
+  waitlist?: boolean;
   trains?: string[];
 }
 
@@ -124,6 +125,7 @@ export interface TrainOption {
   arr_time?: string;
   name?: string;
   soldout: boolean;
+  waitlistEligible?: boolean;
 }
 
 export interface BookingPayload {
@@ -139,6 +141,8 @@ export interface TrainsResult {
 
 export interface SearchResult {
   started: boolean;
+  waitlisted?: boolean;
+  trainNo?: string;
   needsAccessRequest?: boolean;
   accessRequestPending?: boolean;
   trialUsed?: number | null;

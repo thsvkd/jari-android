@@ -145,6 +145,37 @@ describe("concept C application shell", () => {
     );
   });
 
+  it("submits an eligible single train as a Korail waitlist request", async () => {
+    const demoApi = createDemoApi();
+    const state = await demoApi.bootstrap();
+    state.demo = false;
+    state.running = null;
+    state.capabilities.waitlist = true;
+    const search = vi.fn().mockResolvedValue({ started: false, waitlisted: true, trainNo: "015" });
+    const { app, root } = await mountLive({ bootstrap: async () => state, search });
+
+    app.navigate("journey");
+    const waitlist = root.querySelector<HTMLInputElement>("[name='waitlist']")!;
+    expect(waitlist.disabled).toBe(false);
+    waitlist.click();
+    root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+    await vi.waitFor(() => expect(root.querySelector("[data-train='015']")).not.toBeNull());
+
+    expect(root.querySelector<HTMLButtonElement>("[data-train='019']")?.disabled).toBe(true);
+    root.querySelector<HTMLButtonElement>("[data-train='015']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-action='trains-next']")!.click();
+    expect(root.textContent).toContain("코레일 예약 대기 신청");
+    expect(root.querySelector<HTMLButtonElement>("[data-action='schedule-toggle']")?.disabled).toBe(true);
+
+    root.querySelector<HTMLButtonElement>("[data-action='start-now']")!.click();
+    await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
+    expect(search.mock.calls[0]![0]).toMatchObject({
+      conditions: { waitlist: true },
+      trains: ["015"],
+    });
+    await vi.waitFor(() => expect(root.querySelector(".screen-home")).not.toBeNull());
+  });
+
   it("marks membership controls as admin-only and hides them from members", async () => {
     const demoApi = createDemoApi();
     const adminState = await demoApi.bootstrap();

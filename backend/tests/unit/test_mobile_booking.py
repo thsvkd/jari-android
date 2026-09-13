@@ -235,7 +235,6 @@ def test_payment_watchdog_uses_mobile_account_and_durable_sink(tmp_path, monkeyp
     "extra",
     [
         {"operator": "srt"},
-        {"waitlist": True},
         {"seat_preference": "AD:3-5"},
         {"seat_preference": "A:9-3"},
     ],
@@ -246,6 +245,31 @@ def test_unsupported_conditions_are_rejected_not_ignored(extra):
 
     with pytest.raises(MiniAppError):
         MobileGateway._submission(extra)
+
+
+def test_waitlist_condition_is_validated_and_preserved():
+    from korail_bot.mobile.gateway import MobileGateway
+
+    submission = MobileGateway._submission(
+        {
+            "v": 1,
+            "action": "prepare_search",
+            "dep_date": "20260920",
+            "src_station": "서울",
+            "dst_station": "부산",
+            "dep_time": "0900",
+            "max_dep_time": "1200",
+            "train_type": "1",
+            "seat_option": "2",
+            "passenger_count": 1,
+            "seat_strategy": "1",
+            "seat_preference": "",
+            "waitlist": True,
+        }
+    )
+
+    assert submission.waitlist is True
+    assert submission.as_train_info()["waitlist"] is True
 
 
 def test_scheduler_executes_persisted_conditions_without_chat(tmp_path, monkeypatch):

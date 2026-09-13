@@ -19,6 +19,7 @@ export interface BookingDraft {
   seatColumns: string[];
   seatRowMin: string;
   seatRowMax: string;
+  waitlist?: boolean;
 }
 
 const compact = (value: string): string => value.replaceAll("-", "").replaceAll(":", "");
@@ -52,6 +53,7 @@ export function buildConditions(draft: BookingDraft): Conditions {
       draft.seatRowMin,
       draft.seatRowMax,
     ),
+    waitlist: draft.waitlist === true,
   };
 }
 
@@ -206,6 +208,7 @@ export function conditionsToDraft(conditions?: Conditions | null): BookingDraft 
     seatColumns: columnPart.split(",").filter(Boolean),
     seatRowMin: low,
     seatRowMax: high,
+    waitlist: conditions?.waitlist === true,
   };
 }
 

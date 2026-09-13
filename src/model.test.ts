@@ -38,6 +38,7 @@ describe("booking payload", () => {
       passenger_count: 3,
       seat_strategy: "2",
       seat_preference: "A,D:1-15",
+      waitlist: false,
     });
     expect(buildBookingPayload(conditions, ["015", "019"])).toEqual({
       conditions,

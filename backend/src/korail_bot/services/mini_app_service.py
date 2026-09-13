@@ -93,6 +93,7 @@ class MiniAppSubmission:
     # or the fixed-width /start parameter - parses as asking for nothing in
     # particular rather than failing.
     seat_preference: str = ""
+    waitlist: bool = False
 
     @classmethod
     def parse(cls, raw: object) -> "MiniAppSubmission":
@@ -152,6 +153,9 @@ class MiniAppSubmission:
                 raise MiniAppDataError(error)
 
         seat_preference = SeatPreference.decode(cls._text(payload, "seat_preference")).encode()
+        waitlist = payload.get("waitlist", False)
+        if type(waitlist) is not bool:
+            raise MiniAppDataError("예약 대기 신청 여부를 확인해 주세요.")
 
         return cls(
             dep_date=dep_date,
@@ -164,6 +168,7 @@ class MiniAppSubmission:
             passenger_count=int(passenger),
             seat_strategy=seat_strategy,
             seat_preference=seat_preference,
+            waitlist=waitlist,
         )
 
     @classmethod
@@ -280,5 +285,6 @@ class MiniAppSubmission:
             "seatStrategy": strategy,
             "seatStrategyShow": strategy_display,
             "seatPreference": self.seat_preference,
+            "waitlist": self.waitlist,
             "selectedTrains": [],
         }
