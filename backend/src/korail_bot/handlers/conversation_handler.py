@@ -1357,18 +1357,25 @@ class ConversationHandler:
             logger.warning(f"Could not log in to list trains for chat_id={chat_id}")
             return None
 
+        waitlist = bool(info.get("waitlist"))
         try:
-            trains = rail.search_trains(
-                dep_date=info["depDate"],
-                src_locate=info["srcLocate"],
-                dst_locate=info["dstLocate"],
-                dep_time=info["depTime"],
-                max_dep_time=info["maxDepTime"],
-                train_type=self._parse_train_type(info.get("trainType", "")),
-                passenger_count=info.get("passengerCount", 1),
-                verbose=False,
-                include_no_seats=True,
-            )
+            arguments = {
+                "dep_date": info["depDate"],
+                "src_locate": info["srcLocate"],
+                "dst_locate": info["dstLocate"],
+                "dep_time": info["depTime"],
+                "max_dep_time": info["maxDepTime"],
+                "train_type": self._parse_train_type(info.get("trainType", "")),
+                "passenger_count": info.get("passengerCount", 1),
+            }
+            if waitlist:
+                trains = rail.search_waitlist_trains(**arguments)
+            else:
+                trains = rail.search_trains(
+                    **arguments,
+                    verbose=False,
+                    include_no_seats=True,
+                )
         except Exception as e:
             # Includes SearchUnavailableError. Whatever went wrong, the user
             # is mid-conversation and needs an answer rather than a traceback.
@@ -1380,7 +1387,9 @@ class ConversationHandler:
         timezone_name = self.storage.get_user_timezone(chat_id)
         options = []
         for train in trains:
-            option = rail.describe_train(train)
+            option = (
+                rail.describe_waitlist_train(train) if waitlist else rail.describe_train(train)
+            )
             journey = format_railway_journey(
                 info["depDate"],
                 option.get("dep_time", ""),

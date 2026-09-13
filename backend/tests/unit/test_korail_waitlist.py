@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from korail2 import TrainType
 
 from korail_bot.services.korail_service import KorailService
 
@@ -11,6 +12,44 @@ def service_with_modern_client():
     service._logged_in = True
     service._modern_client = MagicMock()
     return service
+
+
+def test_waitlist_listing_uses_the_same_modern_api_as_submission():
+    service = service_with_modern_client()
+    service._korail_instance = MagicMock()
+    train = SimpleNamespace(
+        train_no="005",
+        train_group_name="KTX",
+        train_class_name="KTX",
+        departure_time="055800",
+        arrival_time="084300",
+        general_reservation_code="13",
+        special_reservation_code="13",
+        wait_reservation_flag=" 9",
+    )
+    service._modern_client.search_trains.return_value = SimpleNamespace(trains=(train,))
+
+    trains = service.search_waitlist_trains(
+        dep_date="20260919",
+        src_locate="서울",
+        dst_locate="부산",
+        dep_time="055800",
+        max_dep_time="0559",
+        train_type=TrainType.KTX,
+        passenger_count=1,
+    )
+
+    assert trains == [train]
+    service._korail_instance.search_train.assert_not_called()
+    assert service.describe_waitlist_train(train) == {
+        "no": "005",
+        "label": "05:58→08:43 KTX",
+        "dep_time": "055800",
+        "arr_time": "084300",
+        "name": "KTX",
+        "soldout": True,
+        "waitlistEligible": True,
+    }
 
 
 def test_waitlist_reserves_and_confirms_one_eligible_train():

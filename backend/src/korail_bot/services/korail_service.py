@@ -26,6 +26,7 @@ from korail_mobile_api import (
     MutationConsent,
     TrainSearchQuery,
 )
+from korail_mobile_api.constants import KORAIL_STANDBY_WAIT_FLAG
 
 from korail_bot.config.settings import settings
 from korail_bot.models import ReservationOutcome, SeatPreference
@@ -269,6 +270,67 @@ class KorailService(RailService):
             # loop, which is a login attempt every couple of seconds; the
             # session is renewed on demand anyway when Korail rejects it.
             self._schedule_next_relogin()
+
+    def search_waitlist_trains(
+        self,
+        *,
+        dep_date: str,
+        src_locate: str,
+        dst_locate: str,
+        dep_time: str,
+        max_dep_time: str,
+        train_type: TrainType,
+        passenger_count: int,
+    ) -> list:
+        """List trains with the same current API used to submit standby."""
+        client = self._modern_client
+        if not self._logged_in or client is None:
+            raise ValueError("Must login before searching trains")
+
+        result = client.search_trains(
+            TrainSearchQuery(
+                departure_station_code=src_locate,
+                arrival_station_code=dst_locate,
+                departure_date=dep_date,
+                departure_time=dep_time,
+                passengers=passenger_count,
+            )
+        )
+        trains = list(result.trains)
+        if train_type == TrainType.KTX:
+            trains = [train for train in trains if train.train_group_name == "KTX"]
+        if max_dep_time != "2400":
+            trains = [
+                train
+                for train in trains
+                if str(train.departure_time or "")[:4].isdigit()
+                and int(str(train.departure_time)[:4]) < int(max_dep_time)
+            ]
+        return trains
+
+    @staticmethod
+    def describe_waitlist_train(train) -> dict:
+        """Reduce a current-API train to the mobile train-list contract."""
+        dep_time = str(getattr(train, "departure_time", "") or "")
+        arr_time = str(getattr(train, "arrival_time", "") or "")
+        name = (
+            getattr(train, "train_class_name", None)
+            or getattr(train, "train_group_name", None)
+            or "열차"
+        )
+        return {
+            "no": str(getattr(train, "train_no", "") or ""),
+            "label": f"{RailService._clock(dep_time)}→{RailService._clock(arr_time)} {name}",
+            "dep_time": dep_time,
+            "arr_time": arr_time,
+            "name": name,
+            "soldout": not any(
+                getattr(train, field, None) == "11"
+                for field in ("general_reservation_code", "special_reservation_code")
+            ),
+            "waitlistEligible": getattr(train, "wait_reservation_flag", None)
+            == KORAIL_STANDBY_WAIT_FLAG,
+        }
 
     def search_trains(
         self,
