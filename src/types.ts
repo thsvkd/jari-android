@@ -48,6 +48,8 @@ export interface Conditions {
   seat_preference: string;
   waitlist?: boolean;
   trains?: string[];
+  seat_classes?: SeatClass[];
+  seat_plan?: CancellationWaitPlan;
 }
 
 export interface SearchDescription {
@@ -83,6 +85,8 @@ export interface PendingReservation {
   trainInfo: string;
   expiresAt: string | null;
   seatNumber: string | number | null;
+  seatLabels?: string[];
+  seatClass?: SeatClass | "";
 }
 
 export interface Favourite {
@@ -126,6 +130,63 @@ export interface TrainOption {
   name?: string;
   soldout: boolean;
   waitlistEligible?: boolean;
+  trainKey?: string;
+  generalAvailable?: boolean;
+  specialAvailable?: boolean;
+}
+
+export type SeatClass = "general" | "special";
+export type SeatGradeMode = "any" | "specific";
+export type SeatSelectionMode = "immediate" | "wait";
+
+export interface SeatCarOption {
+  carNo: number;
+  roomClassName: string;
+  remainingSeatCount: number;
+  attributes: Array<{ name: string; code: string | null }>;
+}
+
+export interface SeatMapSeat {
+  carNo: number;
+  seatNo: string;
+  label: string;
+  salePossible: boolean;
+  direction: string;
+  floor: string;
+  row: number | null;
+  column: string;
+  adjacencyGroup: string;
+  position: number;
+  familyLabel: string;
+}
+
+export interface SeatInventory {
+  carNo: number;
+  layoutType: number;
+  arrangementCode: string;
+  remainingCount: number;
+  totalCount: number;
+  seats: SeatMapSeat[];
+  windows?: Array<{ startLocationRatio: number; closeLocationRatio: number }>;
+}
+
+export interface TrainSeatTargets {
+  trainNo: string;
+  trainKey?: string;
+  seatClass: SeatClass;
+  targets: SeatMapSeat[];
+}
+
+export interface CancellationWaitPlan {
+  strategy: "independent" | "consecutive";
+  passengerCount: number;
+  trains: TrainSeatTargets[];
+}
+
+export interface DesignatedReservationResult {
+  reserved: boolean;
+  pending: PendingReservation[];
+  paymentUrl: string;
 }
 
 export interface BookingPayload {
@@ -171,6 +232,15 @@ export interface MobileApi {
   railwayRegister(input: { username: string; password: string }): Promise<{ registered: boolean }>;
   railwayLogout(): Promise<{ registered: boolean }>;
   trains(payload: { conditions: Conditions }): Promise<TrainsResult>;
+  seatCars(trainKey: string, seatClass: SeatClass, passengerCount: number): Promise<{ cars: SeatCarOption[] }>;
+  seatInventory(trainKey: string, carNo: number, seatClass: SeatClass, passengerCount: number): Promise<SeatInventory>;
+  reserveDesignated(payload: {
+    trainKey: string;
+    seatClass: SeatClass;
+    passengerCount: number;
+    carNo: number;
+    seats: SeatMapSeat[];
+  }): Promise<DesignatedReservationResult>;
   search(payload: BookingPayload): Promise<SearchResult>;
   schedule(payload: BookingPayload & { start_at: string }): Promise<{ scheduled: boolean; startAt: string }>;
   cancelSearch(): Promise<{ stopped: boolean; unscheduled: boolean }>;

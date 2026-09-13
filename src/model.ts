@@ -3,6 +3,8 @@ import type {
   Capabilities,
   Conditions,
   RunningSearch,
+  SeatClass,
+  SeatGradeMode,
 } from "./types";
 
 export interface BookingDraft {
@@ -20,6 +22,8 @@ export interface BookingDraft {
   seatRowMin: string;
   seatRowMax: string;
   waitlist?: boolean;
+  seatGradeMode?: SeatGradeMode;
+  seatClasses?: SeatClass[];
 }
 
 const compact = (value: string): string => value.replaceAll("-", "").replaceAll(":", "");
@@ -36,6 +40,17 @@ export function encodeSeatPreference(columns: string[], low: string, high: strin
 }
 
 export function buildConditions(draft: BookingDraft): Conditions {
+  const specific = draft.seatGradeMode === "specific";
+  const classes = [...new Set(draft.seatClasses ?? [])];
+  const seatOption = specific
+    ? classes.length === 1 && classes[0] === "general"
+      ? "2"
+      : classes.length === 1 && classes[0] === "special"
+        ? "4"
+        : "1"
+    : draft.seatGradeMode === "any"
+      ? "1"
+      : draft.seatOption;
   return {
     v: 1,
     action: "prepare_search",
@@ -45,7 +60,7 @@ export function buildConditions(draft: BookingDraft): Conditions {
     dep_time: compact(draft.depTime),
     max_dep_time: draft.unlimitedTime ? "2400" : compact(draft.maxDepTime),
     train_type: draft.trainType,
-    seat_option: draft.seatOption,
+    seat_option: seatOption,
     passenger_count: Math.min(9, Math.max(1, Math.trunc(draft.passengerCount))),
     seat_strategy: draft.passengerCount === 1 ? "1" : draft.seatStrategy,
     seat_preference: encodeSeatPreference(
@@ -54,6 +69,7 @@ export function buildConditions(draft: BookingDraft): Conditions {
       draft.seatRowMax,
     ),
     waitlist: draft.waitlist === true,
+    ...(specific ? { seat_classes: classes } : {}),
   };
 }
 
@@ -191,6 +207,16 @@ export function conditionsToDraft(conditions?: Conditions | null): BookingDraft 
   const compactDate = conditions?.dep_date ?? "";
   const [columnPart = "", rowPart = ""] = (conditions?.seat_preference ?? "").split(":");
   const [low = "", high = ""] = rowPart.split("-");
+  const explicitClasses = conditions?.seat_classes?.filter(
+    (seatClass): seatClass is SeatClass => seatClass === "general" || seatClass === "special",
+  );
+  const seatClasses: SeatClass[] = explicitClasses?.length
+    ? explicitClasses
+    : conditions?.seat_option === "2"
+      ? ["general"]
+      : conditions?.seat_option === "4"
+        ? ["special"]
+        : [];
   return {
     depDate:
       compactDate.length === 8
@@ -209,6 +235,8 @@ export function conditionsToDraft(conditions?: Conditions | null): BookingDraft 
     seatRowMin: low,
     seatRowMax: high,
     waitlist: conditions?.waitlist === true,
+    seatGradeMode: seatClasses.length ? "specific" : "any",
+    seatClasses,
   };
 }
 

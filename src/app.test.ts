@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TeumApp } from "./app";
+import { ApiError } from "./api";
 import { createDemoApi } from "./demo";
 import type { StatusResult } from "./types";
 
@@ -135,7 +136,7 @@ describe("concept C application shell", () => {
     app.navigate("journey");
 
     expect(root.querySelector("[data-operator='srt']")).toBeNull();
-    expect(root.querySelector<HTMLInputElement>("[name='waitlist']")?.disabled).toBe(true);
+    expect(root.querySelector<HTMLInputElement>("[name='waitlist']")).toBeNull();
     expect(root.textContent).toContain("기존 SRT 노선은 KTX로 통합됐어요");
     expect(root.textContent).toContain("코레일 계정 하나로 검색하고 예약할 수 있어요");
 
@@ -155,19 +156,10 @@ describe("concept C application shell", () => {
     const { app, root } = await mountLive({ bootstrap: async () => state, search });
 
     app.navigate("journey");
-    const waitlist = root.querySelector<HTMLInputElement>("[name='waitlist']")!;
-    expect(waitlist.disabled).toBe(false);
-    waitlist.click();
     root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
-    await vi.waitFor(() => expect(root.querySelector("[data-train='015']")).not.toBeNull());
-
-    expect(root.querySelector<HTMLButtonElement>("[data-train='019']")?.disabled).toBe(true);
-    root.querySelector<HTMLButtonElement>("[data-train='015']")!.click();
-    root.querySelector<HTMLButtonElement>("[data-action='trains-next']")!.click();
-    expect(root.textContent).toContain("코레일 예약 대기 신청");
-    expect(root.querySelector<HTMLButtonElement>("[data-action='schedule-toggle']")?.disabled).toBe(true);
-
-    root.querySelector<HTMLButtonElement>("[data-action='start-now']")!.click();
+    await vi.waitFor(() => expect(root.querySelector("[data-official-waitlist='015']")).not.toBeNull());
+    expect(root.querySelector("[data-official-waitlist='019']")).toBeNull();
+    root.querySelector<HTMLButtonElement>("[data-official-waitlist='015']")!.click();
     await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
     expect(search.mock.calls[0]![0]).toMatchObject({
       conditions: { waitlist: true },
@@ -521,7 +513,7 @@ it("preserves every journey field through background polling, swap and toast tim
   await app.start(true);
   app.navigate("journey");
   root.querySelector<HTMLButtonElement>("[data-action='passenger-plus']")!.click();
-  const values = { src_station: "광명", dst_station: "대전", dep_date: "2026-09-22", dep_time: "13:45", max_dep_time: "18:30", seat_row_min: "4", seat_row_max: "8", train_type: "2", seat_option: "4", seat_strategy: "2" };
+  const values = { src_station: "광명", dst_station: "대전", dep_date: "2026-09-22", dep_time: "13:45", max_dep_time: "18:30", train_type: "2", seat_grade_mode: "specific", seat_strategy: "2" };
   for (const [name, value] of Object.entries(values)) edit(root, name, value);
   app.notify("background");
   await vi.advanceTimersByTimeAsync(30_000);
@@ -575,4 +567,94 @@ it("keeps the seat arrangement when passenger controls temporarily hide it", asy
   app.notify("background");
   root.querySelector<HTMLButtonElement>("[data-action='passenger-plus']")!.click();
   expect(root.querySelector<HTMLInputElement>("[name='seat_strategy']:checked")!.value).toBe("2");
+});
+
+it("loads the live seat map and submits an exact designated seat", async () => {
+  const demo = createDemoApi();
+  const reserveDesignated = vi.fn(demo.reserveDesignated);
+  const { app, root } = await mountLive({
+    seatCars: demo.seatCars,
+    seatInventory: demo.seatInventory,
+    reserveDesignated,
+    status: demo.status,
+  });
+  app.navigate("journey");
+  edit(root, "seat_grade_mode", "specific");
+  root.querySelector<HTMLInputElement>("[name='seat_class'][value='general']")!.click();
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='025'][data-seat-mode='immediate']")).not.toBeNull());
+
+  root.querySelector<HTMLButtonElement>("[data-train-no='025'][data-seat-mode='immediate']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-no='demo-1-A']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-seat-no='demo-1-A']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='confirm-seat-dialog']")!.click();
+
+  await vi.waitFor(() => expect(reserveDesignated).toHaveBeenCalledOnce());
+  expect(reserveDesignated.mock.calls[0]![0]).toMatchObject({
+    trainKey: "demo-025",
+    seatClass: "general",
+    passengerCount: 1,
+    carNo: 3,
+    seats: [{ label: "1A" }],
+  });
+});
+
+it("starts cancellation waiting with the selected physical-seat range", async () => {
+  const demo = createDemoApi();
+  const search = vi.fn().mockResolvedValue({ started: true, running: null });
+  const { app, root } = await mountLive({
+    seatCars: demo.seatCars,
+    seatInventory: demo.seatInventory,
+    search,
+  });
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
+
+  root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-quick='family']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-seat-quick='family']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='confirm-seat-dialog']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='start-cancellation-wait']")!.click();
+
+  await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
+  expect(search.mock.calls[0]![0]).toMatchObject({
+    trains: ["015"],
+    conditions: {
+      waitlist: false,
+      seat_plan: {
+        strategy: "independent",
+        passengerCount: 1,
+        trains: [{ trainNo: "015", seatClass: "general" }],
+      },
+    },
+  });
+  expect(search.mock.calls[0]![0].conditions.seat_plan.trains[0].targets).toHaveLength(4);
+});
+
+it("refreshes the seat map when a chosen seat loses a reservation race", async () => {
+  const demo = createDemoApi();
+  const seatInventory = vi.fn(demo.seatInventory);
+  const reserveDesignated = vi.fn().mockRejectedValue(
+    new ApiError("seat changed", 409, "server"),
+  );
+  const { app, root } = await mountLive({
+    seatCars: demo.seatCars,
+    seatInventory,
+    reserveDesignated,
+  });
+  app.navigate("journey");
+  edit(root, "seat_grade_mode", "specific");
+  root.querySelector<HTMLInputElement>("[name='seat_class'][value='general']")!.click();
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='025'][data-seat-mode='immediate']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-train-no='025'][data-seat-mode='immediate']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-no='demo-1-A']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-seat-no='demo-1-A']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='confirm-seat-dialog']")!.click();
+
+  await vi.waitFor(() => expect(seatInventory).toHaveBeenCalledTimes(2));
+  expect(root.querySelector("[role='dialog']")).not.toBeNull();
+  expect(root.textContent).toContain("고른 좌석이 방금 판매됐어요");
+  expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(0);
 });

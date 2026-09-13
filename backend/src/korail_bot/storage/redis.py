@@ -1403,6 +1403,9 @@ class RedisStorage(StorageInterface):
                     "train_no": r.train_no,
                     "dep_date": r.dep_date,
                     "dep_time": r.dep_time,
+                    "seat_labels": list(r.seat_labels),
+                    "seat_class": r.seat_class,
+                    "seat_keys": [[car_no, seat_no] for car_no, seat_no in r.seat_keys],
                 }
                 for r in status.reservations
             ],
@@ -1434,6 +1437,9 @@ class RedisStorage(StorageInterface):
                 train_no=r.get("train_no", "") or "",
                 dep_date=r.get("dep_date", "") or "",
                 dep_time=r.get("dep_time", "") or "",
+                seat_labels=list(r.get("seat_labels") or []),
+                seat_class=r.get("seat_class", "") or "",
+                seat_keys=[(int(item[0]), str(item[1])) for item in r.get("seat_keys", [])],
             )
             for r in data["reservations"]
         ]

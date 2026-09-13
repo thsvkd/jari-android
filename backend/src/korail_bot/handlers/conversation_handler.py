@@ -2063,6 +2063,7 @@ class ConversationHandler:
             seat_strategy=info.get("seatStrategy", "consecutive"),
             train_numbers=list(info.get("selectedTrains") or []),
             seat_preference=info.get("seatPreference", ""),
+            seat_plan_json=info.get("seatPlan", ""),
         )
 
     def _handle_final_confirmation(self, chat_id: int, text: str, session: UserSession) -> None:

@@ -1,6 +1,10 @@
 """Services for business logic."""
 
 from korail_bot.services.access_service import AccessDecision, AccessLevel, AccessService
+from korail_bot.services.cancellation_wait_service import (
+    CancellationWaitService,
+    DesignatedCapture,
+)
 from korail_bot.services.korail_service import KorailService
 from korail_bot.services.mini_app_service import MiniAppDataError, MiniAppSubmission
 from korail_bot.services.multi_reservation_reminder_service import MultiReservationReminderService
@@ -22,6 +26,8 @@ __all__ = [
     "AccessDecision",
     "AccessLevel",
     "AccessService",
+    "CancellationWaitService",
+    "DesignatedCapture",
     "KorailService",
     "MessageTemplates",
     "MiniAppDataError",

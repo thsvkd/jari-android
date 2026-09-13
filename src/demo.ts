@@ -9,6 +9,8 @@ import type {
   PendingReservation,
   RunningSearch,
   ScheduledSearch,
+  SeatInventory,
+  SeatMapSeat,
   TrainOption,
 } from "./types";
 
@@ -47,10 +49,37 @@ const stations = [
 ];
 
 const trainFixtures: TrainOption[] = [
-  { no: "015", label: "07:27→10:12 KTX", dep_time: "072700", arr_time: "101200", name: "KTX", soldout: true, waitlistEligible: true },
-  { no: "019", label: "08:03→10:48 KTX", dep_time: "080300", arr_time: "104800", name: "KTX", soldout: true, waitlistEligible: false },
-  { no: "025", label: "09:00→11:42 KTX", dep_time: "090000", arr_time: "114200", name: "KTX", soldout: false },
+  { no: "015", trainKey: "demo-015", label: "07:27→10:12 KTX", dep_time: "072700", arr_time: "101200", name: "KTX", soldout: true, waitlistEligible: true, generalAvailable: false, specialAvailable: false },
+  { no: "019", trainKey: "demo-019", label: "08:03→10:48 KTX", dep_time: "080300", arr_time: "104800", name: "KTX", soldout: true, waitlistEligible: false, generalAvailable: false, specialAvailable: false },
+  { no: "025", trainKey: "demo-025", label: "09:00→11:42 KTX", dep_time: "090000", arr_time: "114200", name: "KTX", soldout: false, generalAvailable: true, specialAvailable: true },
 ];
+
+const demoSeats: SeatMapSeat[] = Array.from({ length: 16 }, (_, index) => {
+  const row = Math.floor(index / 4) + 1;
+  const column = ["A", "B", "C", "D"][index % 4]!;
+  return {
+    carNo: 3,
+    seatNo: `demo-${row}-${column}`,
+    label: `${row}${column}`,
+    salePossible: row === 1,
+    direction: row < 3 ? "1" : "2",
+    floor: "",
+    row,
+    column,
+    adjacencyGroup: `${row}:${column < "C" ? "left" : "right"}`,
+    position: column === "A" || column === "C" ? 1 : 2,
+    familyLabel: row === 2 ? "4인 동반석" : "",
+  };
+});
+
+const demoInventory = (): SeatInventory => ({
+  carNo: 3,
+  layoutType: 2,
+  arrangementCode: "4",
+  remainingCount: demoSeats.filter((seat) => seat.salePossible).length,
+  totalCount: demoSeats.length,
+  seats: demoSeats.map((seat) => ({ ...seat })),
+});
 
 export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
   let registered = true;
@@ -152,6 +181,21 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
       return { registered };
     },
     trains: async () => ({ trains: trainFixtures.map((train) => ({ ...train })), truncated: false, passengerCount: 1 }),
+    seatCars: async () => ({
+      cars: [{ carNo: 3, roomClassName: "일반실", remainingSeatCount: 4, attributes: [] }],
+    }),
+    seatInventory: async () => demoInventory(),
+    reserveDesignated: async (payload) => {
+      pending = [{
+        reservationId: "DEMO",
+        trainInfo: "체험 데이터 · KTX 025 서울 → 부산",
+        expiresAt: new Date(clock().getTime() + 600_000).toISOString(),
+        seatNumber: null,
+        seatLabels: payload.seats.map((seat) => seat.label),
+        seatClass: payload.seatClass,
+      }];
+      return { reserved: true, pending, paymentUrl: "https://www.letskorail.com/" };
+    },
     search: async (payload) => {
       if (payload.conditions.waitlist) {
         return { started: false, waitlisted: true, trainNo: payload.trains[0] };

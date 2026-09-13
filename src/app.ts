@@ -10,13 +10,27 @@ import {
   type BookingDraft,
   type ConnectionState,
 } from "./model";
+import {
+  backRowTargets,
+  consecutiveGroups,
+  familyTargets,
+  frontRowTargets,
+  groupSeatsByLayout,
+} from "./seat-map";
 import type {
   BootstrapState,
+  CancellationWaitPlan,
   Conditions,
+  DesignatedReservationResult,
   Favourite,
   MobileApi,
   NotificationItem,
   SearchDescription,
+  SeatCarOption,
+  SeatClass,
+  SeatInventory,
+  SeatMapSeat,
+  SeatSelectionMode,
   TrainOption,
 } from "./types";
 
@@ -38,6 +52,16 @@ interface AppOptions {
   onLogout?: () => Promise<void>;
   onBootstrap?: (state: BootstrapState) => Promise<void> | void;
   onRequestPush?: () => Promise<void>;
+}
+
+interface SeatDialogState {
+  train: TrainOption;
+  seatClass: SeatClass;
+  mode: SeatSelectionMode;
+  cars: SeatCarOption[];
+  inventory: SeatInventory | null;
+  carNo: number | null;
+  selected: SeatMapSeat[];
 }
 
 const SEAT_OPTIONS: Record<string, string> = {
@@ -101,6 +125,8 @@ export class TeumApp {
   private selectedTrains: string[] = [];
   private trainOptions: TrainOption[] = [];
   private trainListTruncated = false;
+  private seatDialog: SeatDialogState | null = null;
+  private cancellationTargets: CancellationWaitPlan["trains"] = [];
   private notifications: NotificationItem[] = [];
   private authGate: "choose" | "admin" | "guest" = "choose";
   private authMode: "login" | "register" = "login";
@@ -150,6 +176,8 @@ export class TeumApp {
     this.selectedTrains = [];
     this.trainOptions = [];
     this.trainListTruncated = false;
+    this.seatDialog = null;
+    this.cancellationTargets = [];
     this.notifications = [];
     this.authGate = "choose";
     this.authMode = "login";
@@ -309,6 +337,7 @@ export class TeumApp {
         </header>
         <main class="screen screen-${this.view}">${content}</main>
         ${this.renderNavigation()}
+        ${this.renderSeatDialog()}
         ${this.busy ? '<div class="blocker" role="status"><span class="spinner"></span><b>잠시만 기다려 주세요</b></div>' : ""}
         <div class="toast" role="status" aria-live="polite">${escapeHtml(this.toast)}</div>
       </div>`;
@@ -384,9 +413,11 @@ export class TeumApp {
   private renderPendingCard(compact: boolean): string {
     const pending = this.state!.pending;
     if (!pending.length) return "";
+    const total = this.state!.running?.passengerCount ?? pending.length;
+    const progress = total > pending.length ? ` · ${pending.length}/${total}석 확보` : "";
     return `<section class="card payment-card ${compact ? "compact-card" : ""}">
-      <div class="card-label warning"><i></i>결제가 필요한 예약 ${pending.length}건</div>
-      ${pending.map((item) => `<div class="payment-row"><div><strong>${escapeHtml(item.trainInfo)}</strong><small>${item.seatNumber !== null ? `좌석 ${escapeHtml(item.seatNumber)} · ` : ""}${item.reservationId ? `예약번호 ${escapeHtml(item.reservationId)}` : "예약번호 정보 없음"}</small></div><b>${item.expiresAt ? `${escapeHtml(formatStamp(item.expiresAt))}까지` : "결제 기한 정보 없음"}</b></div>`).join("")}
+      <div class="card-label warning"><i></i>결제가 필요한 예약 ${pending.length}건${progress}</div>
+      ${pending.map((item) => `<div class="payment-row"><div><strong>${escapeHtml(item.trainInfo)}</strong><small>${item.seatClass ? `${item.seatClass === "general" ? "일반실" : "특실"} · ` : ""}${item.seatLabels?.length ? `${escapeHtml(item.seatLabels.join(", "))} · ` : item.seatNumber !== null ? `좌석 ${escapeHtml(item.seatNumber)} · ` : ""}${item.reservationId ? `예약번호 ${escapeHtml(item.reservationId)}` : "예약번호 정보 없음"}</small></div><b>${item.expiresAt ? `${escapeHtml(formatStamp(item.expiresAt))}까지` : "결제 기한 정보 없음"}</b></div>`).join("")}
       <a class="button primary" href="${escapeHtml(this.state!.paymentUrl)}" target="_blank" rel="noreferrer">코레일에서 결제하기 <span>↗</span></a>
       ${compact ? '<button class="text-button danger" data-view="activity">예약 관리</button>' : '<button class="button ghost danger" data-action="cancel-pending">예약 전체 취소</button>'}
     </section>`;
@@ -403,8 +434,6 @@ export class TeumApp {
     const stationOptions = state.rail.stations
       .map((station) => `<option value="${escapeHtml(station)}"></option>`)
       .join("");
-    const column = (letter: string, position: string) => `
-      <label class="seat-column"><input type="checkbox" name="seat_column" value="${letter}" ${this.draft.seatColumns.includes(letter) ? "checked" : ""}><span><b>${letter}</b><small>${position}</small></span></label>`;
     return `${this.renderSubhead("새 여정", "여행 조건을 알려 주세요")}
       <form id="conditions-form" class="form-stack">
         <section class="card form-card">
@@ -432,20 +461,16 @@ export class TeumApp {
         </section>
         <section class="card form-card">
           <div class="form-section-head"><div><span>03</span><h2>어떤 좌석이 좋으세요?</h2></div></div>
-          <fieldset class="choice-grid"><legend>좌석 등급</legend>
-            ${this.radioCard("seat_option", "1", "일반실 우선", "없으면 특실", this.draft.seatOption === "1")}
-            ${this.radioCard("seat_option", "2", "일반실만", "일반실 한정", this.draft.seatOption === "2")}
-            ${this.radioCard("seat_option", "3", "특실 우선", "없으면 일반실", this.draft.seatOption === "3")}
-            ${this.radioCard("seat_option", "4", "특실만", "특실 한정", this.draft.seatOption === "4")}
+          <fieldset class="grade-picker"><legend>좌석 등급</legend>
+            <label class="check-row grade-any"><input type="radio" name="seat_grade_mode" value="any" ${this.draft.seatGradeMode !== "specific" ? "checked" : ""}><span><b>좌석 등급 상관없음</b><small>가능한 좌석을 가장 빠르게 예약해요</small></span></label>
+            <label class="check-row"><input type="radio" name="seat_grade_mode" value="specific" ${this.draft.seatGradeMode === "specific" ? "checked" : ""}><span><b>좌석 등급 지정</b><small>열차 조회 후 실제 좌석표에서 자리를 골라요</small></span></label>
           </fieldset>
+          ${this.draft.seatGradeMode === "specific" ? `<fieldset class="choice-grid seat-class-picker"><legend>찾을 좌석 등급</legend>
+            <label class="choice-card"><input type="checkbox" name="seat_class" value="general" ${(this.draft.seatClasses ?? []).includes("general") ? "checked" : ""}><span><b>일반실</b><small>일반 좌석</small></span></label>
+            <label class="choice-card"><input type="checkbox" name="seat_class" value="special" ${(this.draft.seatClasses ?? []).includes("special") ? "checked" : ""}><span><b>특실</b><small>넓은 좌석</small></span></label>
+          </fieldset><div class="notice calm seat-detail-note"><b>세부 좌석은 다음 단계에서 골라요.</b><p>열차별 실제 좌석표에서 맨 앞·맨 뒤·4인 동반석·원하는 자리를 선택할 수 있어요.</p></div>` : ""}
           <div class="passenger-row"><span><b>인원</b><small>최대 9명</small></span><div class="stepper"><button type="button" data-action="passenger-minus">−</button><output>${this.draft.passengerCount}명</output><button type="button" data-action="passenger-plus">＋</button></div></div>
-          ${this.draft.passengerCount > 1 ? `<fieldset class="choice-grid"><legend>좌석 배치</legend>${this.radioCard("seat_strategy", "1", "연속 좌석", "붙어 있는 자리만", this.draft.seatStrategy === "1")}${this.radioCard("seat_strategy", "2", "랜덤 배치", "떨어져도 예약", this.draft.seatStrategy === "2")}</fieldset>` : ""}
-          <details class="advanced"><summary>세부 좌석 조건 <span>열·행 지정</span></summary>
-            <fieldset><legend>좌석 열</legend><div class="seat-map">${column("A", "창측")}${column("B", "내측")}<span class="aisle">통로</span>${column("C", "내측")}${column("D", "창측")}</div></fieldset>
-            <div class="row-range"><label class="field"><span>첫 좌석 번호</span><input name="seat_row_min" type="number" min="1" max="99" inputmode="numeric" value="${escapeHtml(this.draft.seatRowMin)}" placeholder="예: 1"></label><span>–</span><label class="field"><span>마지막 좌석 번호</span><input name="seat_row_max" type="number" min="1" max="99" inputmode="numeric" value="${escapeHtml(this.draft.seatRowMax)}" placeholder="예: 15"></label></div>
-            <p class="field-note">비워두면 좌석 위치와 관계없이 검색해요. 조건이 좁을수록 빈자리를 찾는 데 시간이 더 걸릴 수 있어요.</p>
-          </details>
-          <label class="check-row ${capabilities.waitlist ? "" : "unavailable-control"}"><input name="waitlist" type="checkbox" ${this.draft.waitlist ? "checked" : ""} ${capabilities.waitlist ? "" : "disabled"}><span><b>코레일 예약 대기 신청</b><small>${capabilities.waitlist ? "예약 대기 가능한 열차 한 편을 골라 바로 신청해요" : "현재 서버에서는 지원하지 않아요"}</small></span></label>
+          ${this.draft.passengerCount > 1 ? `<fieldset class="choice-grid"><legend>좌석 배치</legend>${this.radioCard("seat_strategy", "1", "연속 좌석", "같은 열차·호차에서 붙은 자리만", this.draft.seatStrategy === "1")}${this.radioCard("seat_strategy", "2", "따로 앉아도 괜찮아요", "한 자리만 잡혀도 바로 알려드려요", this.draft.seatStrategy === "2")}</fieldset>` : ""}
         </section>
         ${this.renderError()}
         ${capabilities.korail ? "" : '<p class="availability center">예약 서버가 연결되지 않아 현재 앱 계정 기능만 사용할 수 있어요.</p>'}
@@ -465,28 +490,213 @@ export class TeumApp {
 
   private renderTrains(): string {
     const conditions = this.conditions ?? buildConditions(this.draft);
-    const waitlist = conditions.waitlist;
     const list = this.trainOptions.length
       ? this.trainOptions
           .map((train) => {
-            const selected = this.selectedTrains.includes(train.no);
             const departure = train.dep_time ? clockFromCompact(train.dep_time) : "";
             const arrival = train.arr_time ? clockFromCompact(train.arr_time) : "";
-            const selectable = !waitlist || train.waitlistEligible === true;
-            const badge = waitlist
-              ? train.waitlistEligible ? "예약 대기 가능" : "대기 대상 아님"
-              : train.soldout ? "매진" : "좌석 있음";
-            return `<button class="train-card ${selected ? "selected" : ""}" data-train="${escapeHtml(train.no)}" type="button" aria-pressed="${selected}" ${selectable ? "" : "disabled"}><span class="train-check">${selected ? "✓" : ""}</span><span class="train-main"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b><em>${escapeHtml(train.label)}</em></span><span class="seat-badge ${train.waitlistEligible || !train.soldout ? "available" : "soldout"}">${badge}</span></button>`;
+            const configuredClasses = conditions.seat_classes?.length
+              ? conditions.seat_classes
+              : (["general", "special"] as SeatClass[]);
+            const classButtons = configuredClasses.map((seatClass) => {
+              const available = seatClass === "general" ? train.generalAvailable : train.specialAvailable;
+              const label = seatClass === "general" ? "일반실" : "특실";
+              return `<button class="button ${available ? "secondary" : "ghost"}" type="button" data-seat-map="${escapeHtml(train.trainKey || "")}" data-train-no="${escapeHtml(train.no)}" data-seat-class="${seatClass}" data-seat-mode="${available ? "immediate" : "wait"}" ${train.trainKey ? "" : "disabled"}>${available ? `${label} 좌석 선택` : `${label} 취소표 대기`}</button>`;
+            }).join("");
+            const anyAvailable = train.generalAvailable || train.specialAvailable;
+            const anyAction = this.draft.seatGradeMode === "specific"
+              ? classButtons
+              : anyAvailable
+                ? `<button class="button secondary" type="button" data-immediate-any="${escapeHtml(train.no)}">바로 예약</button>`
+                : `<button class="button ghost" type="button" data-seat-map="${escapeHtml(train.trainKey || "")}" data-train-no="${escapeHtml(train.no)}" data-seat-class="general" data-seat-mode="wait" ${train.trainKey ? "" : "disabled"}>일반실 취소표 대기</button><button class="button ghost" type="button" data-seat-map="${escapeHtml(train.trainKey || "")}" data-train-no="${escapeHtml(train.no)}" data-seat-class="special" data-seat-mode="wait" ${train.trainKey ? "" : "disabled"}>특실 취소표 대기</button>`;
+            const official = train.waitlistEligible
+              ? `<button class="text-button" type="button" data-official-waitlist="${escapeHtml(train.no)}">코레일 예약 대기</button>`
+              : "";
+            const selectedCount = this.cancellationTargets
+              .filter((target) => target.trainNo === train.no)
+              .reduce((sum, target) => sum + target.targets.length, 0);
+            return `<article class="train-card ${selectedCount ? "selected" : ""}"><span class="train-main"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b><em>${escapeHtml(train.label)}</em></span><span class="seat-badge ${anyAvailable || train.waitlistEligible ? "available" : "soldout"}">${anyAvailable ? "좌석 있음" : "매진"}</span><div class="train-actions">${anyAction}${official}</div>${selectedCount ? `<p class="selected-seat-summary">취소표 후보 ${selectedCount}석 선택됨</p>` : ""}</article>`;
           })
           .join("")
-      : '<div class="empty"><span>⌁</span><h2>조회된 열차가 없어요</h2><p>열차를 고르지 않고 시간대 전체를 검색할 수도 있어요.</p></div>';
-    return `${this.renderSubhead("열차 선택", "어떤 열차를 기다릴까요?")}
+      : '<div class="empty"><span>⌁</span><h2>조회된 열차가 없어요</h2><p>시간이나 구간을 바꿔 다시 조회해 주세요.</p></div>';
+    return `${this.renderSubhead("열차 선택", "좌석을 예약하거나 기다려 보세요")}
       <div class="context-line"><b>${escapeHtml(conditions.src_station)} → ${escapeHtml(conditions.dst_station)}</b><span>${escapeHtml(formatWindow(conditions))}</span></div>
-      <p class="intro">${waitlist ? "코레일 예약 대기는 대상 열차 한 편만 신청할 수 있어요." : "여러 편을 고르면 빈자리가 먼저 난 열차를 예약해요. 아무것도 고르지 않으면 시간대 전체를 검색해요."}</p>
+      <p class="intro">좌석이 있으면 바로 예약할 수 있어요. 매진이면 원하는 좌석 범위를 골라 취소표 대기를 시작하세요.</p>
       ${this.trainListTruncated ? '<div class="notice warning">목록이 길어 일부 열차만 보여드려요. 시간대 전체 검색은 그대로 이용할 수 있어요.</div>' : ""}
       <div class="train-list">${list}</div>
       ${this.renderError()}
-      <button class="button primary sticky-action" data-action="trains-next" ${waitlist && this.selectedTrains.length !== 1 ? "disabled" : ""}>${waitlist ? (this.selectedTrains.length === 1 ? "예약 대기 조건 확인" : "대기할 열차를 골라 주세요") : (this.selectedTrains.length ? `${this.selectedTrains.length}편 선택 · 조건 확인` : "시간대 전체 검색")} <span>→</span></button>`;
+      ${this.cancellationTargets.length ? `<button class="button primary sticky-action" data-action="start-cancellation-wait">취소표 대기 시작 <span>→</span></button>` : ""}`;
+  }
+
+  private renderSeatDialog(): string {
+    const dialog = this.seatDialog;
+    if (!dialog) return "";
+    const classLabel = dialog.seatClass === "general" ? "일반실" : "특실";
+    const title = dialog.mode === "immediate"
+      ? "예약할 좌석을 골라 주세요"
+      : "기다릴 좌석 범위를 골라 주세요";
+    const cars = dialog.cars.map((car) => `<button type="button" class="car-tab ${dialog.carNo === car.carNo ? "selected" : ""}" data-seat-car="${car.carNo}"><b>${car.carNo}호차</b><small>${car.remainingSeatCount}석 가능</small></button>`).join("");
+    const selectable = (seat: SeatMapSeat) => dialog.mode === "wait" || seat.salePossible;
+    const rows = dialog.inventory
+      ? groupSeatsByLayout(dialog.inventory.seats).map((row) => `<div class="seat-row columns-${Math.min(4, Math.max(2, Number(dialog.inventory!.arrangementCode) || row.length))}"><span>${row[0]?.row ?? ""}</span><div>${row.map((seat) => {
+          const selected = dialog.selected.some((item) => item.carNo === seat.carNo && item.seatNo === seat.seatNo);
+          const description = [seat.label, seat.direction, seat.floor, seat.familyLabel].filter(Boolean).join(" · ");
+          return `<button type="button" class="seat-cell ${seat.salePossible ? "available" : "occupied"} ${selected ? "selected" : ""}" data-seat-no="${escapeHtml(seat.seatNo)}" aria-pressed="${selected}" ${selectable(seat) ? "" : "disabled"} title="${escapeHtml(description)}"><b>${escapeHtml(seat.column || seat.label)}</b><small>${seat.familyLabel ? "가족" : seat.salePossible ? "가능" : "대기"}</small></button>`;
+        }).join("")}</div></div>`).join("")
+      : '<div class="seat-loading"><span class="spinner"></span><p>실제 좌석표를 불러오고 있어요.</p></div>';
+    const selectedLabels = dialog.selected.map((seat) => `${seat.carNo}호차 ${seat.label}`).join(", ");
+    const passengerCount = this.draft.passengerCount;
+    const confirmText = dialog.mode === "immediate"
+      ? `${dialog.selected.length}/${passengerCount}석 선택 · 예약하기`
+      : `${dialog.selected.length}석 범위로 취소표 대기`;
+    return `<div class="modal-backdrop" role="presentation"><section class="seat-dialog" role="dialog" aria-modal="true" aria-labelledby="seat-dialog-title">
+      <header><div><p class="eyebrow">${escapeHtml(`${dialog.train.name || "열차"} ${dialog.train.no}`)} · ${classLabel}</p><h2 id="seat-dialog-title">${title}</h2></div><button type="button" class="icon-button" data-action="close-seat-dialog" aria-label="좌석 선택 닫기">×</button></header>
+      <p class="seat-dialog-copy">${dialog.mode === "immediate" ? `${passengerCount}명이 앉을 좌석을 정확히 골라 주세요.` : "선택한 범위에서 빈자리가 생기면 바로 예약하고 알려드려요."}</p>
+      <div class="car-tabs" aria-label="호차 선택">${cars}</div>
+      ${dialog.inventory ? `<div class="seat-quick-actions"><button type="button" data-seat-quick="front">맨 앞자리</button><button type="button" data-seat-quick="back">맨 뒷자리</button>${familyTargets(dialog.inventory.seats).length ? '<button type="button" data-seat-quick="family">4인 동반석</button>' : ""}<button type="button" data-seat-quick="clear">선택 해제</button></div>` : ""}
+      <div class="seat-legend"><span><i class="available"></i>현재 예약 가능</span><span><i class="occupied"></i>${dialog.mode === "wait" ? "취소표 대기 가능" : "선택 불가"}</span><span><i class="selected"></i>선택</span></div>
+      <div class="seat-map-live">${rows}</div>
+      ${this.renderError()}
+      <footer><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p><button type="button" class="button primary" data-action="confirm-seat-dialog">${confirmText}</button></footer>
+    </section></div>`;
+  }
+
+  private async openSeatMap(trainKey: string, trainNo: string, seatClass: SeatClass, mode: SeatSelectionMode): Promise<void> {
+    const train = this.trainOptions.find((item) => item.no === trainNo);
+    if (!train || !trainKey) return;
+    await this.run(async (isCurrent) => {
+      const result = await this.api.seatCars(trainKey, seatClass, this.draft.passengerCount);
+      if (!isCurrent()) return;
+      if (!result.cars.length) {
+        this.error = `${seatClass === "general" ? "일반실" : "특실"} 좌석표를 불러올 수 있는 호차가 없어요.`;
+        return;
+      }
+      const carNo = result.cars[0]!.carNo;
+      this.seatDialog = { train, seatClass, mode, cars: result.cars, inventory: null, carNo, selected: [] };
+      this.render();
+      const inventory = await this.api.seatInventory(trainKey, carNo, seatClass, this.draft.passengerCount);
+      if (!isCurrent() || !this.seatDialog) return;
+      this.seatDialog.inventory = inventory;
+    });
+  }
+
+  private async loadSeatCar(carNo: number): Promise<void> {
+    const dialog = this.seatDialog;
+    if (!dialog || dialog.carNo === carNo) return;
+    dialog.carNo = carNo;
+    dialog.inventory = null;
+    await this.run(async (isCurrent) => {
+      const inventory = await this.api.seatInventory(dialog.train.trainKey!, carNo, dialog.seatClass, this.draft.passengerCount);
+      if (!isCurrent() || this.seatDialog !== dialog) return;
+      dialog.inventory = inventory;
+    });
+  }
+
+  private toggleSeat(seatNo: string): void {
+    const dialog = this.seatDialog;
+    const seat = dialog?.inventory?.seats.find((item) => item.seatNo === seatNo);
+    if (!dialog || !seat || (dialog.mode === "immediate" && !seat.salePossible)) return;
+    const index = dialog.selected.findIndex((item) => item.carNo === seat.carNo && item.seatNo === seat.seatNo);
+    if (index >= 0) dialog.selected.splice(index, 1);
+    else {
+      if (dialog.mode === "immediate") dialog.selected = dialog.selected.filter((item) => item.carNo === seat.carNo);
+      if (dialog.mode === "immediate" && dialog.selected.length >= this.draft.passengerCount) dialog.selected.shift();
+      dialog.selected.push(seat);
+    }
+    this.render();
+  }
+
+  private selectQuickSeats(kind: string): void {
+    const dialog = this.seatDialog;
+    if (!dialog?.inventory) return;
+    const candidates = dialog.mode === "immediate"
+      ? dialog.inventory.seats.filter((seat) => seat.salePossible)
+      : dialog.inventory.seats;
+    let selected: SeatMapSeat[] = [];
+    if (kind === "front") selected = frontRowTargets(candidates);
+    if (kind === "back") selected = backRowTargets(candidates);
+    if (kind === "family") selected = familyTargets(candidates);
+    if (dialog.mode === "immediate") selected = selected.slice(0, this.draft.passengerCount);
+    dialog.selected = kind === "clear" ? [] : selected;
+    this.render();
+  }
+
+  private async confirmSeatDialog(): Promise<void> {
+    const dialog = this.seatDialog;
+    if (!dialog) return;
+    const passengerCount = this.draft.passengerCount;
+    if (dialog.mode === "immediate") {
+      if (dialog.selected.length !== passengerCount) {
+        this.error = `${passengerCount}명의 좌석을 모두 골라 주세요.`;
+        this.render();
+        return;
+      }
+      if (passengerCount > 1 && this.draft.seatStrategy === "1" && !consecutiveGroups(dialog.selected, passengerCount).length) {
+        this.error = "연속 좌석으로 붙어 있는 자리를 골라 주세요.";
+        this.render();
+        return;
+      }
+      await this.run(async (isCurrent) => {
+        let result: DesignatedReservationResult;
+        try {
+          result = await this.api.reserveDesignated({
+            trainKey: dialog.train.trainKey!, seatClass: dialog.seatClass,
+            passengerCount, carNo: dialog.selected[0]!.carNo, seats: dialog.selected,
+          });
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 409 && this.seatDialog === dialog) {
+            dialog.inventory = await this.api.seatInventory(
+              dialog.train.trainKey!, dialog.carNo!, dialog.seatClass, passengerCount,
+            );
+            dialog.selected = [];
+            this.error = "고른 좌석이 방금 판매됐어요. 새 좌석표에서 다시 골라 주세요.";
+            return;
+          }
+          throw error;
+        }
+        if (!isCurrent()) return;
+        if (!result.reserved) {
+          this.error = "선택한 좌석을 예약하지 못했어요. 좌석표를 다시 확인해 주세요.";
+          return;
+        }
+        this.seatDialog = null;
+        this.showToast("좌석을 예약했어요. 결제 기한을 확인해 주세요.");
+        this.history = [];
+        this.view = "activity";
+        await this.reload();
+      });
+      return;
+    }
+    if (!dialog.selected.length) {
+      this.error = "기다릴 좌석을 한 자리 이상 골라 주세요.";
+      this.render();
+      return;
+    }
+    if (passengerCount > 1 && this.draft.seatStrategy === "1" && !consecutiveGroups(dialog.selected, passengerCount).length) {
+      this.error = `${passengerCount}명이 붙어 앉을 수 있는 연속 좌석 범위를 골라 주세요.`;
+      this.render();
+      return;
+    }
+    const next = this.cancellationTargets.filter((target) => !(target.trainNo === dialog.train.no && target.seatClass === dialog.seatClass));
+    next.push({ trainNo: dialog.train.no, trainKey: dialog.train.trainKey, seatClass: dialog.seatClass, targets: dialog.selected });
+    this.cancellationTargets = next;
+    this.seatDialog = null;
+    this.error = "";
+    this.showToast("취소표를 기다릴 좌석 범위를 저장했어요.");
+    this.render();
+  }
+
+  private async startCancellationWait(): Promise<void> {
+    const conditions = this.conditions ?? buildConditions(this.draft);
+    const selectedTrains = [...new Set(this.cancellationTargets.map((target) => target.trainNo))];
+    const seatPlan: CancellationWaitPlan = {
+      strategy: this.draft.passengerCount > 1 && this.draft.seatStrategy === "1" ? "consecutive" : "independent",
+      passengerCount: this.draft.passengerCount,
+      trains: this.cancellationTargets,
+    };
+    this.conditions = { ...conditions, waitlist: false, trains: selectedTrains, seat_plan: seatPlan };
+    this.selectedTrains = selectedTrains;
+    await this.startNow();
   }
 
   private renderConfirm(): string {
@@ -674,9 +884,7 @@ export class TeumApp {
       maxDepTime: form.querySelector<HTMLInputElement>('[name="max_dep_time"]')?.value ?? this.draft.maxDepTime,
       unlimitedTime: data.has("unlimited_time"),
       trainType: value("train_type") === "2" ? "2" : "1",
-      seatOption: (["1", "2", "3", "4"].includes(value("seat_option"))
-        ? value("seat_option")
-        : "1") as BookingDraft["seatOption"],
+      seatOption: this.draft.seatOption,
       passengerCount: this.draft.passengerCount,
       seatStrategy: data.has("seat_strategy")
         ? value("seat_strategy") === "2" ? "2" : "1"
@@ -685,6 +893,10 @@ export class TeumApp {
       seatRowMin: value("seat_row_min"),
       seatRowMax: value("seat_row_max"),
       waitlist: data.has("waitlist"),
+      seatGradeMode: value("seat_grade_mode") === "specific" ? "specific" : "any",
+      seatClasses: data.getAll("seat_class").map(String).filter(
+        (seatClass): seatClass is SeatClass => seatClass === "general" || seatClass === "special",
+      ),
     };
   }
 
@@ -696,6 +908,9 @@ export class TeumApp {
     if (!draft.unlimitedTime && (!draft.maxDepTime || draft.maxDepTime <= draft.depTime)) {
       return "검색 종료 시각은 시작 시각보다 늦어야 해요.";
     }
+    if (draft.seatGradeMode === "specific" && !(draft.seatClasses ?? []).length) {
+      return "일반실이나 특실을 한 가지 이상 선택해 주세요.";
+    }
     const low = draft.seatRowMin ? Number(draft.seatRowMin) : null;
     const high = draft.seatRowMax ? Number(draft.seatRowMax) : null;
     if ((low !== null && (low < 1 || low > 99)) || (high !== null && (high < 1 || high > 99))) {
@@ -703,12 +918,6 @@ export class TeumApp {
     }
     if (low !== null && high !== null && low > high) {
       return "첫 좌석 번호는 마지막 번호보다 클 수 없어요.";
-    }
-    if (draft.waitlist && ["3", "4"].includes(draft.seatOption)) {
-      return "코레일 예약 대기는 일반실만 신청할 수 있어요.";
-    }
-    if (draft.waitlist && (draft.seatColumns.length || low !== null || high !== null)) {
-      return "코레일 예약 대기에서는 좌석 위치를 지정할 수 없어요.";
     }
     return null;
   }
@@ -870,6 +1079,39 @@ export class TeumApp {
   private onClick(event: Event): void {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button");
     if (!button) return;
+    if (button.dataset.seatMap !== undefined) {
+      const seatClass = button.dataset.seatClass === "special" ? "special" : "general";
+      const mode = button.dataset.seatMode === "wait" ? "wait" : "immediate";
+      void this.openSeatMap(button.dataset.seatMap, button.dataset.trainNo || "", seatClass, mode);
+      return;
+    }
+    if (button.dataset.immediateAny) {
+      this.selectedTrains = [button.dataset.immediateAny];
+      this.conditions = { ...(this.conditions ?? buildConditions(this.draft)), waitlist: false, seat_plan: undefined };
+      void this.startNow();
+      return;
+    }
+    if (button.dataset.officialWaitlist) {
+      this.selectedTrains = [button.dataset.officialWaitlist];
+      this.conditions = {
+        ...(this.conditions ?? buildConditions(this.draft)), waitlist: true,
+        seat_option: "2", seat_preference: "", seat_plan: undefined,
+      };
+      void this.startNow();
+      return;
+    }
+    if (button.dataset.seatCar) {
+      void this.loadSeatCar(Number(button.dataset.seatCar));
+      return;
+    }
+    if (button.dataset.seatNo) {
+      this.toggleSeat(button.dataset.seatNo);
+      return;
+    }
+    if (button.dataset.seatQuick) {
+      this.selectQuickSeats(button.dataset.seatQuick);
+      return;
+    }
     const view = button.dataset.view as AppView | undefined;
     if (view) {
       this.navigate(view);
@@ -951,6 +1193,17 @@ export class TeumApp {
         break;
       case "trains-next":
         this.navigate("confirm");
+        break;
+      case "close-seat-dialog":
+        this.seatDialog = null;
+        this.error = "";
+        this.render();
+        break;
+      case "confirm-seat-dialog":
+        void this.confirmSeatDialog();
+        break;
+      case "start-cancellation-wait":
+        void this.startCancellationWait();
         break;
       case "start-now":
         void this.startNow();
@@ -1070,7 +1323,7 @@ export class TeumApp {
     const target = event.target as HTMLInputElement;
     if (target.closest("#conditions-form")) {
       this.syncJourneyDraft();
-      if (target.name === "unlimited_time") this.render();
+      if (target.name === "unlimited_time" || target.name === "seat_grade_mode") this.render();
     }
   }
 

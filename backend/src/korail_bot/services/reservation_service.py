@@ -122,6 +122,7 @@ class ReservationService:
                 # which is what lets a search started by an older build resume
                 # against the new one.
                 search_params.seat_preference,
+                search_params.seat_plan_json,
             ]
 
             # Start background process.

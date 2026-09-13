@@ -5,10 +5,10 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from korail_bot.models import SeatPreference
+from korail_bot.models import CancellationWaitPlan, SeatPlanError, SeatPreference
 from korail_bot.utils.validators import InputValidator
 
-MAX_WEB_APP_DATA_BYTES = 4096
+MAX_WEB_APP_DATA_BYTES = 65536
 SCHEMA_VERSION = 1
 ACTION = "prepare_search"
 START_PARAMETER_PREFIX = "ma1_"
@@ -94,6 +94,8 @@ class MiniAppSubmission:
     # particular rather than failing.
     seat_preference: str = ""
     waitlist: bool = False
+    seat_classes: tuple[str, ...] = ()
+    seat_plan_json: str = ""
 
     @classmethod
     def parse(cls, raw: object) -> "MiniAppSubmission":
@@ -157,6 +159,26 @@ class MiniAppSubmission:
         if type(waitlist) is not bool:
             raise MiniAppDataError("예약 대기 신청 여부를 확인해 주세요.")
 
+        raw_classes = payload.get("seat_classes", [])
+        if not isinstance(raw_classes, list) or any(
+            item not in {"general", "special"} for item in raw_classes
+        ):
+            raise MiniAppDataError("좌석 등급을 확인해 주세요.")
+        seat_classes = tuple(dict.fromkeys(raw_classes))
+
+        seat_plan_json = ""
+        raw_plan = payload.get("seat_plan")
+        if raw_plan is not None:
+            try:
+                plan = CancellationWaitPlan.from_payload(raw_plan)
+            except SeatPlanError as exc:
+                raise MiniAppDataError(str(exc)) from exc
+            if plan.passenger_count != int(passenger):
+                raise MiniAppDataError("좌석 계획의 승객 수가 검색 인원과 달라요.")
+            if waitlist:
+                raise MiniAppDataError("취소표 대기와 코레일 예약 대기를 함께 신청할 수 없어요.")
+            seat_plan_json = plan.to_json()
+
         return cls(
             dep_date=dep_date,
             src_station=src_station,
@@ -169,6 +191,8 @@ class MiniAppSubmission:
             seat_strategy=seat_strategy,
             seat_preference=seat_preference,
             waitlist=waitlist,
+            seat_classes=seat_classes,
+            seat_plan_json=seat_plan_json,
         )
 
     @classmethod
@@ -285,6 +309,8 @@ class MiniAppSubmission:
             "seatStrategy": strategy,
             "seatStrategyShow": strategy_display,
             "seatPreference": self.seat_preference,
+            "seatClasses": list(self.seat_classes),
+            "seatPlan": self.seat_plan_json,
             "waitlist": self.waitlist,
             "selectedTrains": [],
         }

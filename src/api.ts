@@ -8,6 +8,10 @@ import type {
   MobileApi,
   NotificationItem,
   PendingReservation,
+  SeatCarOption,
+  SeatClass,
+  SeatInventory,
+  SeatMapSeat,
   SearchResult,
   StatusResult,
   TrainsResult,
@@ -158,6 +162,18 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
     railwayRegister: (input) => request<{ registered: boolean }>("/register", { body: input }),
     railwayLogout: () => request<{ registered: boolean }>("/logout", { body: {} }),
     trains: (payload: { conditions: Conditions }) => request<TrainsResult>("/trains", { body: payload }),
+    seatCars: (trainKey: string, seatClass: SeatClass, passengerCount: number) =>
+      request<{ cars: SeatCarOption[] }>(
+        `/trains/${encodeURIComponent(trainKey)}/cars?seatClass=${encodeURIComponent(seatClass)}&passengerCount=${passengerCount}`,
+        { method: "GET" },
+      ),
+    seatInventory: (trainKey: string, carNo: number, seatClass: SeatClass, passengerCount: number) =>
+      request<SeatInventory>(
+        `/trains/${encodeURIComponent(trainKey)}/cars/${carNo}/seats?seatClass=${encodeURIComponent(seatClass)}&passengerCount=${passengerCount}`,
+        { method: "GET" },
+      ),
+    reserveDesignated: (payload: { trainKey: string; seatClass: SeatClass; passengerCount: number; carNo: number; seats: SeatMapSeat[] }) =>
+      request("/reservations/designated", { body: payload }),
     search: (payload: BookingPayload) => request<SearchResult>("/search", { body: payload }),
     schedule: (payload) =>
       request<{ scheduled: boolean; startAt: string }>("/schedule", { body: payload }),

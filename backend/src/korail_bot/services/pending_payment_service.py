@@ -95,6 +95,8 @@ class PendingPaymentService:
                     train_info=r.train_info,
                     expires_at=r.expires_at,
                     seat_number=r.seat_number,
+                    seat_labels=list(r.seat_labels),
+                    seat_class=r.seat_class,
                 )
                 for r in sorted(multi.reservations, key=lambda r: r.seat_number)
                 if r.status == ReservationPaymentStatus.PENDING and not r.is_expired()
@@ -337,7 +339,10 @@ class PendingPaymentService:
         was cancelled while new reservations appeared in their name. Stopping
         the search is what /cancel is for, and it has to come first.
         """
-        return self.storage.get_current_seat_index(chat_id) is not None
+        return (
+            self.storage.get_current_seat_index(chat_id) is not None
+            or self.storage.get_running_reservation(chat_id) is not None
+        )
 
     def _multi_status(self, chat_id: int) -> MultiReservationStatus | None:
         """The random-seating record, if any of its seats are still unpaid."""

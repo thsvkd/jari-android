@@ -20,14 +20,17 @@ from korail2 import ReserveOption, TrainType
 
 from korail_bot.config.settings import settings
 from korail_bot.models import (
+    CancellationWaitPlan,
     MultiReservationStatus,
     PaymentStatus,
     ReservationOutcome,
     ReservationPaymentStatus,
     SeatPreference,
     SingleReservationInfo,
+    parse_seat_plan,
 )
 from korail_bot.services import (
+    CancellationWaitService,
     KorailService,
     MultiReservationReminderService,
     PaymentReminderService,
@@ -130,6 +133,9 @@ class BackgroundReservationProcess:
         # absent, which is how a search started before seats could be asked
         # for arrives - means any seat, the behaviour that predates this.
         self.seat_preference = SeatPreference.decode(sys.argv[12] if len(sys.argv) > 12 else None)
+        self.seat_plan: CancellationWaitPlan | None = parse_seat_plan(
+            sys.argv[13] if len(sys.argv) > 13 else None
+        )
 
         # Parse train type
         self.train_type = self._parse_train_type(self.train_type_str)
@@ -380,6 +386,10 @@ class BackgroundReservationProcess:
 
             logger.info("Login successful, starting reservation loop...")
 
+            if self.seat_plan is not None:
+                self._run_cancellation_wait()
+                return
+
             # Check seat strategy
             if self.seat_strategy == "random":
                 # Random seating: reserve one seat at a time with payment confirmation
@@ -620,6 +630,170 @@ class BackgroundReservationProcess:
             self._send_callback(message, status=1)
 
         logger.info(f"Reservation process ended for {mask_phone(self.username)}")
+
+    def _run_cancellation_wait(self) -> None:
+        """Hold only the physical seats chosen in the mobile seat map."""
+        plan = self.seat_plan
+        if plan is None:
+            return
+        service = CancellationWaitService(
+            self.rail,
+            plan,
+            {
+                "dep_date": self.dep_date,
+                "src_locate": self.src_locate,
+                "dst_locate": self.dst_locate,
+                "dep_time": self.dep_time,
+                "max_dep_time": self.max_dep_time,
+                "train_type": self.train_type,
+            },
+        )
+        existing = self.storage.get_multi_reservation_status(self.chat_id)
+        captured: list[SingleReservationInfo] = (
+            list(existing.reservations) if existing and plan.strategy == "independent" else []
+        )
+        attempts = 0
+        next_outcome_check = 0.0
+
+        while True:
+            attempts += 1
+            changed = False
+            if time.monotonic() >= next_outcome_check:
+                next_outcome_check = (
+                    time.monotonic() + settings.PAYMENT_VERIFY_INTERVAL_SECONDS
+                )
+                for item in captured:
+                    if item.status != ReservationPaymentStatus.PENDING:
+                        continue
+                    try:
+                        outcome = self.rail.reservation_outcome(
+                            item.reservation_id,
+                            train_no=item.train_no,
+                            dep_date=item.dep_date,
+                            dep_time=item.dep_time,
+                        )
+                    except Exception as exc:
+                        logger.warning("부분 예약 상태를 확인하지 못했습니다: %s", exc)
+                        continue
+                    if outcome is ReservationOutcome.PAID:
+                        item.status = ReservationPaymentStatus.PAID
+                        changed = True
+                    elif outcome is ReservationOutcome.RELEASED:
+                        item.status = ReservationPaymentStatus.EXPIRED
+                        changed = True
+            if changed:
+                self._save_designated_multi(captured, plan)
+
+            active = [
+                item
+                for item in captured
+                if item.status
+                in (ReservationPaymentStatus.PENDING, ReservationPaymentStatus.PAID)
+            ]
+            if len(active) >= plan.passenger_count:
+                return
+
+            excluded = {
+                (item.train_no, item.seat_class, car_no, seat_no)
+                for item in active
+                for car_no, seat_no in item.seat_keys
+            }
+            try:
+                capture = service.poll_once(excluded)
+                self.rail.note_search_success()
+            except SearchStopped:
+                raise
+            except Exception as exc:
+                logger.warning("취소표 좌석 조회 실패: %s", exc)
+                self.rail.wait_between_requests(self.rail.note_search_failure(exc))
+                continue
+
+            if capture is None:
+                self.rail.report_progress(attempts)
+                self.rail.wait_between_requests()
+                continue
+
+            reservation_id = self.rail.reservation_id(capture.hold)
+            if not reservation_id:
+                logger.error("지정 좌석 예약에 예약번호가 없어 즉시 반환합니다.")
+                self.rail.release_unpaid_hold(capture.hold)
+                continue
+
+            deadline = self._payment_deadline(capture.hold)
+            hints = self._train_hints(capture.hold)
+            train_info = self._train_info_for_user(capture.hold)
+            labels = [f"{target.car_no}호차 {target.label}" for target in capture.targets]
+            info = SingleReservationInfo(
+                reservation_id=reservation_id,
+                reservation_obj=None,
+                reserved_at=utc_now(),
+                expires_at=deadline,
+                status=ReservationPaymentStatus.PENDING,
+                seat_number=len(captured) + 1,
+                train_info=train_info,
+                train_no=hints["train_no"],
+                dep_date=hints["dep_date"],
+                dep_time=hints["dep_time"],
+                seat_labels=labels,
+                seat_class=capture.seat_class,
+                seat_keys=[(target.car_no, target.seat_no) for target in capture.targets],
+            )
+
+            try:
+                if plan.strategy == "consecutive" or plan.passenger_count == 1:
+                    self.storage.save_payment_status(
+                        PaymentStatus(
+                            chat_id=self.chat_id,
+                            completed=False,
+                            reminder_active=True,
+                            reservation_id=reservation_id,
+                            train_info=train_info,
+                            expires_at=deadline,
+                            train_no=hints["train_no"],
+                            dep_date=hints["dep_date"],
+                            dep_time=hints["dep_time"],
+                            seat_labels=labels,
+                            seat_class=capture.seat_class,
+                        )
+                    )
+                else:
+                    captured.append(info)
+                    self._save_designated_multi(captured, plan)
+            except Exception:
+                self.rail.release_unpaid_hold(capture.hold)
+                raise
+
+            secured = plan.passenger_count if plan.strategy == "consecutive" else len(active) + 1
+            complete = secured >= plan.passenger_count
+            message = (
+                f"취소표 {secured}/{plan.passenger_count}석을 잡았어요.\n\n"
+                f"{train_info}\n"
+                f"좌석: {', '.join(labels)}\n\n"
+                f"결제만 하면 예약이 확정돼요: {self.payment_url}"
+            )
+            self._send_callback(
+                message,
+                status=0 if complete else 2,
+                is_multi=plan.strategy == "independent" and plan.passenger_count > 1,
+                total_seats=plan.passenger_count,
+                seat_strategy="random" if plan.strategy == "independent" else "consecutive",
+            )
+            if complete:
+                return
+
+    def _save_designated_multi(
+        self, reservations: list[SingleReservationInfo], plan: CancellationWaitPlan
+    ) -> None:
+        self.storage.save_multi_reservation_status(
+            MultiReservationStatus(
+                chat_id=self.chat_id,
+                reservations=reservations,
+                total_seats=plan.passenger_count,
+                seat_strategy="random",
+                created_at=reservations[0].reserved_at if reservations else utc_now(),
+                manually_stopped=False,
+            )
+        )
 
     def _payment_deadline(self, reservation) -> datetime:
         """

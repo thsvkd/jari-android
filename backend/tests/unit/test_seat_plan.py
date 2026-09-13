@@ -2,7 +2,13 @@ import json
 
 import pytest
 
-from korail_bot.models import CancellationWaitPlan, SeatPlanError, TrainSearchParams, parse_seat_plan
+from korail_bot.models import (
+    CancellationWaitPlan,
+    SeatPlanError,
+    TrainSearchParams,
+    parse_seat_plan,
+)
+from korail_bot.services.mini_app_service import MiniAppSubmission
 from korail_bot.storage.redis import RedisStorage
 
 
@@ -160,3 +166,37 @@ def test_search_params_keep_seat_plan_and_read_legacy_records():
     assert storage._deserialize_search_params(stored).seat_plan_json == params.seat_plan_json
     stored.pop("seat_plan_json")
     assert storage._deserialize_search_params(stored).seat_plan_json == ""
+
+
+def test_mobile_submission_preserves_validated_cancellation_wait_plan():
+    conditions = {
+        "v": 1,
+        "action": "prepare_search",
+        "dep_date": "20260920",
+        "src_station": "서울",
+        "dst_station": "부산",
+        "dep_time": "0900",
+        "max_dep_time": "1800",
+        "train_type": "1",
+        "seat_option": "2",
+        "passenger_count": 2,
+        "seat_strategy": "2",
+        "seat_classes": ["general"],
+        "seat_plan": {
+            "strategy": "independent",
+            "passengerCount": 2,
+            "trains": [
+                {
+                    "trainNo": "015",
+                    "seatClass": "general",
+                    "targets": [target("wire-1A", "1A", group="1:left")],
+                }
+            ],
+        },
+    }
+
+    submission = MiniAppSubmission.parse(json.dumps(conditions, ensure_ascii=False))
+
+    assert submission.seat_classes == ("general",)
+    assert json.loads(submission.seat_plan_json)["trains"][0]["targets"][0]["label"] == "1A"
+    assert submission.as_train_info()["seatPlan"] == submission.seat_plan_json

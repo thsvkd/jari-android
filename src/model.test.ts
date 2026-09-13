@@ -3,11 +3,26 @@ import { describe, expect, it } from "vitest";
 import {
   buildBookingPayload,
   buildConditions,
+  conditionsToDraft,
   deriveRadarView,
   normalizeCapabilities,
 } from "./model";
 
 describe("booking payload", () => {
+  it("uses any grade by default and preserves explicit general and special choices", () => {
+    const base = conditionsToDraft(null);
+    expect(base.seatGradeMode).toBe("any");
+    expect(
+      buildConditions({ ...base, seatGradeMode: "any", seatClasses: ["special"] }),
+    ).not.toHaveProperty("seat_classes");
+    expect(
+      buildConditions({
+        ...base,
+        seatGradeMode: "specific",
+        seatClasses: ["general", "special"],
+      }),
+    ).toMatchObject({ seat_option: "1", seat_classes: ["general", "special"] });
+  });
   it("serializes every supported gateway condition exactly once", () => {
     const conditions = buildConditions({
       depDate: "2026-09-19",

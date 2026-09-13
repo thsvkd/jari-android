@@ -426,6 +426,9 @@ class SingleReservationInfo:
     train_no: str = ""
     dep_date: str = ""
     dep_time: str = ""
+    seat_labels: list[str] = field(default_factory=list)
+    seat_class: str = ""
+    seat_keys: list[tuple[int, str]] = field(default_factory=list)
 
     def get_remaining_seconds(self) -> int:
         """Get remaining seconds until expiration."""
