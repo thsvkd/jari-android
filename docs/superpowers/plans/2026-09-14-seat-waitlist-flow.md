@@ -85,7 +85,7 @@ git commit -m "즐겨찾기 재사용 흐름을 검증한다"
 - Consumes: 코레일 좌석의 `car_no`, 전송용 `seat_no`, 표시용 `specification`, `direction_code`.
 - Produces: `SeatTarget`, `TrainSeatTargets`, `CancellationWaitPlan`, `TrainSearchParams.seat_plan_json`, `parse_seat_plan(text)`.
 
-- [ ] **Step 1: 좌석 계획 검증 테스트를 작성한다**
+- [x] **Step 1: 좌석 계획 검증 테스트를 작성한다**
 
 ```python
 def test_independent_plan_accepts_more_candidates_than_passengers():
@@ -103,25 +103,25 @@ def test_independent_plan_accepts_more_candidates_than_passengers():
 
 연속 좌석 테스트는 같은 행에서 통로를 사이에 두지 않은 좌석만 묶고, 서로 다른 호차·등급·열차는 거부하도록 작성한다.
 
-- [ ] **Step 2: 테스트가 모델 부재로 실패하는지 확인한다**
+- [x] **Step 2: 테스트가 모델 부재로 실패하는지 확인한다**
 
 Run: `uv run --frozen pytest tests/unit/test_seat_plan.py -q`
 
 Expected: `CancellationWaitPlan` import 오류로 실패한다.
 
-- [ ] **Step 3: 불변 도메인 모델과 제한을 구현한다**
+- [x] **Step 3: 불변 도메인 모델과 제한을 구현한다**
 
 `SeatTarget`은 `car_no: int`, `seat_no: str`, `label: str`, `row: int | None`, `column: str`, `direction: str`, `adjacency_group: str`를 가진다. `CancellationWaitPlan`은 `strategy`, `passenger_count`, 열차별 후보를 검증하고 JSON 직렬화·역직렬화를 제공한다. 열차 30개, 열차당 후보 200개, 문자열 64자 제한을 둔다.
 
 `TrainSearchParams`에 기본값이 빈 문자열인 `seat_plan_json`을 마지막 필드로 추가한다. Redis 직렬화는 필드를 저장하고 예전 레코드는 빈 문자열로 읽는다.
 
-- [ ] **Step 4: 모델과 Redis 호환 테스트를 통과시킨다**
+- [x] **Step 4: 모델과 Redis 호환 테스트를 통과시킨다**
 
 Run: `uv run --frozen pytest tests/unit/test_seat_plan.py tests/unit/test_mobile_runtime.py -q`
 
 Expected: 새 계획 왕복과 기존 검색 레코드 복원이 모두 통과한다.
 
-- [ ] **Step 5: 커밋한다**
+- [x] **Step 5: 커밋한다**
 
 ```powershell
 git add backend/src/korail_bot/models backend/src/korail_bot/storage/redis.py backend/tests/unit/test_seat_plan.py backend/tests/unit/test_mobile_runtime.py

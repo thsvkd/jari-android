@@ -179,6 +179,9 @@ class TrainSearchParams:
     # a plain dataclass of strings and numbers - the same thing argv carries
     # and the same thing Redis stores.
     seat_preference: str = ""
+    # Structured physical-seat candidates for the mobile cancellation wait.
+    # Empty keeps every search written before the seat-map flow compatible.
+    seat_plan_json: str = ""
 
     def watches_specific_trains(self) -> bool:
         """Whether the search is narrowed to a chosen set of trains."""

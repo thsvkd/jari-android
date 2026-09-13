@@ -1266,6 +1266,7 @@ class RedisStorage(StorageInterface):
             "seat_strategy": params.seat_strategy,
             "train_numbers": params.train_numbers,
             "seat_preference": params.seat_preference,
+            "seat_plan_json": params.seat_plan_json,
         }
 
     def _deserialize_search_params(self, data: dict) -> TrainSearchParams:
@@ -1293,6 +1294,7 @@ class RedisStorage(StorageInterface):
             seat_strategy=data.get("seat_strategy", defaults.seat_strategy),
             train_numbers=data.get("train_numbers") or [],
             seat_preference=data.get("seat_preference", defaults.seat_preference),
+            seat_plan_json=data.get("seat_plan_json", defaults.seat_plan_json),
         )
 
     def _serialize_running_reservation(self, reservation: RunningReservation) -> dict:

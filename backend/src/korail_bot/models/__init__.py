@@ -16,6 +16,13 @@ from korail_bot.models.reservation import (
     TrainSearchParams,
     parse_seat_label,
 )
+from korail_bot.models.seat_plan import (
+    CancellationWaitPlan,
+    SeatPlanError,
+    SeatTarget,
+    TrainSeatTargets,
+    parse_seat_plan,
+)
 from korail_bot.models.stations import MAJOR_STATIONS
 from korail_bot.models.user import (
     AccessRequest,
@@ -31,6 +38,7 @@ __all__ = [
     "SEAT_COLUMNS",
     "AccessRequest",
     "ApprovedUser",
+    "CancellationWaitPlan",
     "DeadSearch",
     "DeathCause",
     "FavouriteSearch",
@@ -42,10 +50,14 @@ __all__ = [
     "RunningReservation",
     "ScheduledSearch",
     "SeatPreference",
+    "SeatPlanError",
+    "SeatTarget",
     "SingleReservationInfo",
     "TrainSearchParams",
+    "TrainSeatTargets",
     "UserCredentials",
     "UserProgress",
     "UserSession",
     "parse_seat_label",
+    "parse_seat_plan",
 ]
