@@ -11,6 +11,7 @@ from korail_mobile_api import (
     SeatCarListResponse,
     SeatInventoryResponse,
 )
+from korail_mobile_api.errors import KorailAppError
 
 from korail_bot.models import SeatTarget
 from korail_bot.services.korail_service import KorailService
@@ -67,8 +68,120 @@ def test_korail_adapter_reads_cars_and_inventory_with_room_class_code():
     )
 
     service.seat_inventory(train, 3, "general", 1)
+    assert service._modern_client.get_seat_cars.call_count == 2
+    service._modern_client.get_seat_cars.assert_called_with(
+        train, passenger_count=1, room_class_code="1"
+    )
     service._modern_client.get_seat_inventory.assert_called_once_with(
         train, 3, passenger_count=1, room_class_code="1"
+    )
+
+
+def test_korail_adapter_reuses_matching_seat_context():
+    service = service_with_modern_client()
+    train = SimpleNamespace(train_no="015")
+
+    service.seat_cars(train, "general", 1)
+    service.seat_inventory(train, 3, "general", 1)
+
+    service._modern_client.get_seat_cars.assert_called_once_with(
+        train, passenger_count=1, room_class_code="1"
+    )
+    service._modern_client.get_seat_inventory.assert_called_once()
+
+
+def test_sold_out_train_uses_nearby_matching_formation_for_seat_selection():
+    service = service_with_modern_client()
+    train = SimpleNamespace(
+        train_no="009",
+        train_class_code="00",
+        departure_date="20260914",
+        departure_time="063300",
+        departure_station_name="서울",
+        arrival_station_name="부산",
+    )
+    reference = SimpleNamespace(
+        train_no="009",
+        train_class_code="00",
+        departure_date="20260915",
+        departure_time="063300",
+    )
+    cars = SeatCarListResponse(
+        cars=(SeatCar(3, "일반실", 1, ()),),
+    )
+    service._modern_client.get_seat_cars.side_effect = [
+        KorailAppError("ERI411321", "잔여석이 없습니다."),
+        cars,
+    ]
+    service._modern_client.search_trains.return_value = SimpleNamespace(
+        trains=[reference]
+    )
+    service._modern_client.get_seat_inventory.return_value = inventory(
+        physical_seat(sale_possible="N")
+    )
+
+    assert service.seat_cars(train, "general", 1) is cars
+    assert service.seat_layout_is_reference(train, "general", 1)
+    assert (
+        service._modern_client.search_trains.call_args.args[0].departure_date
+        == "20260921"
+    )
+    assert service.seat_inventory(train, 3, "general", 1).car_no == 3
+    service._modern_client.get_seat_inventory.assert_called_once_with(
+        reference, 3, passenger_count=1, room_class_code="1"
+    )
+
+
+def test_sold_out_inventory_is_empty_until_actual_train_has_a_seat():
+    service = service_with_modern_client()
+    train = SimpleNamespace(train_no="009")
+    service._modern_client.get_seat_cars.side_effect = KorailAppError(
+        "ERI411321", "잔여석이 없습니다."
+    )
+
+    response = service.seat_inventory(train, 3, "general", 1)
+
+    assert response.car_no == 3
+    assert response.seats == ()
+    service._modern_client.get_seat_inventory.assert_not_called()
+
+
+def test_selection_inventory_can_use_nearby_matching_formation():
+    service = service_with_modern_client()
+    train = SimpleNamespace(
+        train_no="009",
+        train_class_code="00",
+        departure_date="20260914",
+        departure_time="063300",
+        departure_station_name="서울",
+        arrival_station_name="부산",
+    )
+    reference = SimpleNamespace(
+        train_no="009",
+        train_class_code="00",
+        departure_date="20260915",
+        departure_time="063300",
+    )
+    cars = SeatCarListResponse(cars=(SeatCar(3, "일반실", 1, ()),))
+    service._modern_client.get_seat_cars.side_effect = [
+        KorailAppError("ERI411321", "잔여석이 없습니다."),
+        cars,
+    ]
+    service._modern_client.search_trains.return_value = SimpleNamespace(
+        trains=[reference]
+    )
+    service._modern_client.get_seat_inventory.return_value = inventory(
+        physical_seat(sale_possible="N")
+    )
+
+    response = service.seat_inventory(
+        train, 3, "general", 1, allow_layout_reference=True
+    )
+
+    assert response.car_no == 3
+    assert service.seat_layout_is_reference(train, "general", 1)
+    service._modern_client.get_seat_inventory.assert_called_once_with(
+        reference, 3, passenger_count=1, room_class_code="1"
     )
 
 
@@ -184,11 +297,25 @@ def test_seat_map_serializes_real_layout_without_inventing_family_seats():
     assert all(not seat["familyLabel"] for seat in described["seats"])
 
 
-def test_explicit_family_attribute_is_the_only_family_label_source():
+def test_attribute_code_alone_does_not_invent_family_seat():
     seat = physical_seat()
     seat = PhysicalSeat(
-        **{**seat.__dict__, "other_attribute_code": "FAMILY", "message": "가족석"}
+        **{**seat.__dict__, "requested_attribute_code": "015", "message": ""}
     )
-    service = SeatMapService(family_attribute_codes={"FAMILY"})
+    service = SeatMapService()
 
-    assert service.describe_inventory(inventory(seat))["seats"][0]["familyLabel"] == "가족석"
+    assert service.describe_inventory(inventory(seat))["seats"][0]["familyLabel"] == ""
+
+
+def test_korail_companion_message_marks_family_seat():
+    seat = physical_seat()
+    seat = PhysicalSeat(
+        **{
+            **seat.__dict__,
+            "requested_attribute_code": "052",
+            "message": "4인 동반석 역방향 좌석으로 5% 할인 적용",
+        }
+    )
+    service = SeatMapService()
+
+    assert service.describe_inventory(inventory(seat))["seats"][0]["familyLabel"] == "4인 동반석"

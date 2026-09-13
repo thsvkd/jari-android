@@ -632,6 +632,30 @@ it("starts cancellation waiting with the selected physical-seat range", async ()
   expect(search.mock.calls[0]![0].conditions.seat_plan.trains[0].targets).toHaveLength(4);
 });
 
+it("labels a nearby-date formation used for a sold-out train", async () => {
+  const demo = createDemoApi();
+  const { app, root } = await mountLive({
+    seatCars: async (...args) => ({
+      ...(await demo.seatCars(...args)),
+      layoutReference: true,
+    }),
+    seatInventory: async (...args) => ({
+      ...(await demo.seatInventory(...args)),
+      layoutReference: true,
+    }),
+  });
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
+
+  root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector("[role='dialog']")?.textContent).toContain("가까운 운행일의 같은 열차 편성"));
+  expect(root.querySelector("[role='dialog']")?.textContent).toContain("실제 열차에서 이 좌석을 다시 확인");
+  expect(root.querySelector("[role='dialog']")?.textContent).not.toContain("현재 예약 가능");
+  expect(root.querySelector("[data-seat-car]")?.textContent).toContain("좌석표");
+});
+
 it("refreshes the seat map when a chosen seat loses a reservation race", async () => {
   const demo = createDemoApi();
   const seatInventory = vi.fn(demo.seatInventory);

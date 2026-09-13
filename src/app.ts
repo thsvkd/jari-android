@@ -62,6 +62,7 @@ interface SeatDialogState {
   inventory: SeatInventory | null;
   carNo: number | null;
   selected: SeatMapSeat[];
+  layoutReference: boolean;
 }
 
 const SEAT_OPTIONS: Record<string, string> = {
@@ -535,13 +536,14 @@ export class TeumApp {
     const title = dialog.mode === "immediate"
       ? "예약할 좌석을 골라 주세요"
       : "기다릴 좌석 범위를 골라 주세요";
-    const cars = dialog.cars.map((car) => `<button type="button" class="car-tab ${dialog.carNo === car.carNo ? "selected" : ""}" data-seat-car="${car.carNo}"><b>${car.carNo}호차</b><small>${car.remainingSeatCount}석 가능</small></button>`).join("");
+    const cars = dialog.cars.map((car) => `<button type="button" class="car-tab ${dialog.carNo === car.carNo ? "selected" : ""}" data-seat-car="${car.carNo}"><b>${car.carNo}호차</b><small>${dialog.layoutReference ? "좌석표" : `${car.remainingSeatCount}석 가능`}</small></button>`).join("");
     const selectable = (seat: SeatMapSeat) => dialog.mode === "wait" || seat.salePossible;
     const rows = dialog.inventory
       ? groupSeatsByLayout(dialog.inventory.seats).map((row) => `<div class="seat-row columns-${Math.min(4, Math.max(2, Number(dialog.inventory!.arrangementCode) || row.length))}"><span>${row[0]?.row ?? ""}</span><div>${row.map((seat) => {
           const selected = dialog.selected.some((item) => item.carNo === seat.carNo && item.seatNo === seat.seatNo);
           const description = [seat.label, seat.direction, seat.floor, seat.familyLabel].filter(Boolean).join(" · ");
-          return `<button type="button" class="seat-cell ${seat.salePossible ? "available" : "occupied"} ${selected ? "selected" : ""}" data-seat-no="${escapeHtml(seat.seatNo)}" aria-pressed="${selected}" ${selectable(seat) ? "" : "disabled"} title="${escapeHtml(description)}"><b>${escapeHtml(seat.column || seat.label)}</b><small>${seat.familyLabel ? "가족" : seat.salePossible ? "가능" : "대기"}</small></button>`;
+          const available = seat.salePossible && !dialog.layoutReference;
+          return `<button type="button" class="seat-cell ${available ? "available" : "occupied"} ${selected ? "selected" : ""}" data-seat-no="${escapeHtml(seat.seatNo)}" aria-pressed="${selected}" ${selectable(seat) ? "" : "disabled"} title="${escapeHtml(description)}"><b>${escapeHtml(seat.column || seat.label)}</b><small>${seat.familyLabel ? "가족" : available ? "가능" : "대기"}</small></button>`;
         }).join("")}</div></div>`).join("")
       : '<div class="seat-loading"><span class="spinner"></span><p>실제 좌석표를 불러오고 있어요.</p></div>';
     const selectedLabels = dialog.selected.map((seat) => `${seat.carNo}호차 ${seat.label}`).join(", ");
@@ -552,9 +554,10 @@ export class TeumApp {
     return `<div class="modal-backdrop" role="presentation"><section class="seat-dialog" role="dialog" aria-modal="true" aria-labelledby="seat-dialog-title">
       <header><div><p class="eyebrow">${escapeHtml(`${dialog.train.name || "열차"} ${dialog.train.no}`)} · ${classLabel}</p><h2 id="seat-dialog-title">${title}</h2></div><button type="button" class="icon-button" data-action="close-seat-dialog" aria-label="좌석 선택 닫기">×</button></header>
       <p class="seat-dialog-copy">${dialog.mode === "immediate" ? `${passengerCount}명이 앉을 좌석을 정확히 골라 주세요.` : "선택한 범위에서 빈자리가 생기면 바로 예약하고 알려드려요."}</p>
+      ${dialog.layoutReference ? '<p class="notice">매진이라 가까운 운행일의 같은 열차 편성을 보여드려요. 빈자리가 생기면 실제 열차에서 이 좌석을 다시 확인한 뒤 예약해요.</p>' : ""}
       <div class="car-tabs" aria-label="호차 선택">${cars}</div>
       ${dialog.inventory ? `<div class="seat-quick-actions"><button type="button" data-seat-quick="front">맨 앞자리</button><button type="button" data-seat-quick="back">맨 뒷자리</button>${familyTargets(dialog.inventory.seats).length ? '<button type="button" data-seat-quick="family">4인 동반석</button>' : ""}<button type="button" data-seat-quick="clear">선택 해제</button></div>` : ""}
-      <div class="seat-legend"><span><i class="available"></i>현재 예약 가능</span><span><i class="occupied"></i>${dialog.mode === "wait" ? "취소표 대기 가능" : "선택 불가"}</span><span><i class="selected"></i>선택</span></div>
+      <div class="seat-legend">${dialog.layoutReference ? "" : '<span><i class="available"></i>현재 예약 가능</span>'}<span><i class="occupied"></i>${dialog.mode === "wait" ? "취소표 대기 가능" : "선택 불가"}</span><span><i class="selected"></i>선택</span></div>
       <div class="seat-map-live">${rows}</div>
       ${this.renderError()}
       <footer><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p><button type="button" class="button primary" data-action="confirm-seat-dialog">${confirmText}</button></footer>
@@ -572,11 +575,12 @@ export class TeumApp {
         return;
       }
       const carNo = result.cars[0]!.carNo;
-      this.seatDialog = { train, seatClass, mode, cars: result.cars, inventory: null, carNo, selected: [] };
+      this.seatDialog = { train, seatClass, mode, cars: result.cars, inventory: null, carNo, selected: [], layoutReference: Boolean(result.layoutReference) };
       this.render();
       const inventory = await this.api.seatInventory(trainKey, carNo, seatClass, this.draft.passengerCount);
       if (!isCurrent() || !this.seatDialog) return;
       this.seatDialog.inventory = inventory;
+      this.seatDialog.layoutReference ||= Boolean(inventory.layoutReference);
     });
   }
 
@@ -589,6 +593,7 @@ export class TeumApp {
       const inventory = await this.api.seatInventory(dialog.train.trainKey!, carNo, dialog.seatClass, this.draft.passengerCount);
       if (!isCurrent() || this.seatDialog !== dialog) return;
       dialog.inventory = inventory;
+      dialog.layoutReference ||= Boolean(inventory.layoutReference);
     });
   }
 

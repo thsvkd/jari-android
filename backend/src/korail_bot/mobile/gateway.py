@@ -116,7 +116,13 @@ class MobileGateway(MiniAppGateway):
         count = self._passenger_count(passenger_count)
         rail = self._logged_in_rail(chat_id)
         try:
-            return {"cars": self.seat_maps.describe_cars(rail.seat_cars(train, seat_class, count))}
+            response = rail.seat_cars(train, seat_class, count)
+            return {
+                "cars": self.seat_maps.describe_cars(response),
+                "layoutReference": bool(
+                    rail.seat_layout_is_reference(train, seat_class, count)
+                ),
+            }
         except ValueError as exc:
             raise MiniAppError(str(exc), 422) from exc
         except Exception as exc:
@@ -129,8 +135,18 @@ class MobileGateway(MiniAppGateway):
         count = self._passenger_count(passenger_count)
         rail = self._logged_in_rail(chat_id)
         try:
-            response = rail.seat_inventory(train, car_no, seat_class, count)
-            return self.seat_maps.describe_inventory(response)
+            response = rail.seat_inventory(
+                train,
+                car_no,
+                seat_class,
+                count,
+                allow_layout_reference=True,
+            )
+            result = self.seat_maps.describe_inventory(response)
+            result["layoutReference"] = bool(
+                rail.seat_layout_is_reference(train, seat_class, count)
+            )
+            return result
         except ValueError as exc:
             raise MiniAppError(str(exc), 422) from exc
         except Exception as exc:

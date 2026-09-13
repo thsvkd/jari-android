@@ -168,6 +168,7 @@ export interface SeatInventory {
   totalCount: number;
   seats: SeatMapSeat[];
   windows?: Array<{ startLocationRatio: number; closeLocationRatio: number }>;
+  layoutReference?: boolean;
 }
 
 export interface TrainSeatTargets {
@@ -232,7 +233,7 @@ export interface MobileApi {
   railwayRegister(input: { username: string; password: string }): Promise<{ registered: boolean }>;
   railwayLogout(): Promise<{ registered: boolean }>;
   trains(payload: { conditions: Conditions }): Promise<TrainsResult>;
-  seatCars(trainKey: string, seatClass: SeatClass, passengerCount: number): Promise<{ cars: SeatCarOption[] }>;
+  seatCars(trainKey: string, seatClass: SeatClass, passengerCount: number): Promise<{ cars: SeatCarOption[]; layoutReference?: boolean }>;
   seatInventory(trainKey: string, carNo: number, seatClass: SeatClass, passengerCount: number): Promise<SeatInventory>;
   reserveDesignated(payload: {
     trainKey: string;

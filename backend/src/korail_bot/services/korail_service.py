@@ -6,6 +6,7 @@ trains, and reserving one. The search loop that drives those calls is in
 """
 
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
 import requests
@@ -25,9 +26,11 @@ from korail_mobile_api import (
     KorailSeatAssignment,
     KorailSeatClass,
     MutationConsent,
+    SeatInventoryResponse,
     TrainSearchQuery,
 )
 from korail_mobile_api.constants import KORAIL_STANDBY_WAIT_FLAG
+from korail_mobile_api.errors import KorailAppError
 
 from korail_bot.config.settings import settings
 from korail_bot.models import ReservationOutcome, SeatPreference, SeatTarget
@@ -53,6 +56,7 @@ KORAIL_RESERVATION_DETAIL = f"{KORAIL_MOBILE}.certification.ReservationList"
 # and the post-hoc matcher is what honours it.
 _WINDOW_COLUMNS = frozenset({"A", "D"})
 _AISLE_COLUMNS = frozenset({"B", "C"})
+_NO_REMAINING_SEATS_CODE = "ERI411321"
 
 # Re-exported: these used to be defined here, and half the codebase imports
 # them from this module. Moving them to rail_service.py is not a reason to
@@ -123,6 +127,8 @@ class KorailService(RailService):
         super().__init__(*args, **kwargs)
         self._korail_instance: K2MKorail | None = None
         self._modern_client: KorailClient | None = None
+        self._modern_seat_context: tuple[int, str, int] | None = None
+        self._seat_layout_references: dict[tuple[int, str, int], object] = {}
 
         # Log class methods to verify correct version is loaded
         logger.debug(
@@ -222,6 +228,7 @@ class KorailService(RailService):
 
         previous = self._modern_client
         self._modern_client = candidate
+        self._modern_seat_context = None
         if previous is not None:
             previous.close()
         self._logged_in = True
@@ -329,26 +336,137 @@ class KorailService(RailService):
         if not self._logged_in or client is None:
             raise ValueError("좌석을 조회하려면 먼저 로그인해 주세요.")
         cabin = self._seat_class(seat_class)
-        return client.get_seat_cars(
-            train,
-            passenger_count=passenger_count,
-            room_class_code=cabin.value,
-        )
+        key = (id(train), cabin.value, passenger_count)
+        try:
+            response = client.get_seat_cars(
+                train,
+                passenger_count=passenger_count,
+                room_class_code=cabin.value,
+            )
+            layout_train = train
+            self._seat_layout_references.pop(key, None)
+        except KorailAppError as exc:
+            if not self._is_no_remaining_seats(exc):
+                raise
+            layout_train, response = self._nearby_layout_reference(
+                train, cabin.value, passenger_count
+            )
+            self._seat_layout_references[key] = layout_train
+        self._modern_seat_context = (id(layout_train), cabin.value, passenger_count)
+        return response
+
+    def seat_layout_is_reference(
+        self, train, seat_class: str, passenger_count: int = 1
+    ) -> bool:
+        """Whether selection uses the same train number on a nearby date."""
+        cabin = self._seat_class(seat_class)
+        return (id(train), cabin.value, passenger_count) in self._seat_layout_references
 
     def seat_inventory(
-        self, train, car_no: int, seat_class: str, passenger_count: int = 1
+        self,
+        train,
+        car_no: int,
+        seat_class: str,
+        passenger_count: int = 1,
+        *,
+        allow_layout_reference: bool = False,
     ):
         """Read the current sellability and layout for one car."""
         client = self._modern_client
         if not self._logged_in or client is None:
             raise ValueError("좌석을 조회하려면 먼저 로그인해 주세요.")
         cabin = self._seat_class(seat_class)
+        key = (id(train), cabin.value, passenger_count)
+        layout_train = self._seat_layout_references.get(key, train)
+        context = (id(layout_train), cabin.value, passenger_count)
+        # TResidualSeatsResearch depends on server-side context created by
+        # ScheduleView. Mobile HTTP requests log in again independently, so a
+        # seat-detail call must restore that context after every fresh login.
+        if self._modern_seat_context != context:
+            try:
+                client.get_seat_cars(
+                    layout_train,
+                    passenger_count=passenger_count,
+                    room_class_code=cabin.value,
+                )
+            except KorailAppError as exc:
+                if layout_train is train and self._is_no_remaining_seats(exc):
+                    if not allow_layout_reference:
+                        return SeatInventoryResponse(car_no=car_no)
+                    layout_train, _ = self._nearby_layout_reference(
+                        train, cabin.value, passenger_count
+                    )
+                    self._seat_layout_references[key] = layout_train
+                    context = (id(layout_train), cabin.value, passenger_count)
+                else:
+                    raise
+            self._modern_seat_context = context
         return client.get_seat_inventory(
-            train,
+            layout_train,
             car_no,
             passenger_count=passenger_count,
             room_class_code=cabin.value,
         )
+
+    @staticmethod
+    def _is_no_remaining_seats(exc: KorailAppError) -> bool:
+        return (
+            getattr(exc, "code", None) == _NO_REMAINING_SEATS_CODE
+            or "잔여석이 없습니다" in str(getattr(exc, "message", "") or "")
+        )
+
+    def _nearby_layout_reference(
+        self, train, room_class_code: str, passenger_count: int
+    ):
+        """Read the same scheduled train's formation from a nearby service date."""
+        client = self._modern_client
+        if client is None:
+            raise ValueError("좌석을 조회하려면 먼저 로그인해 주세요.")
+        try:
+            base_date = datetime.strptime(str(train.departure_date), "%Y%m%d")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("열차 운행일을 확인할 수 없습니다.") from exc
+        # The nearest day can itself be almost sold out and expose only one
+        # bookable car. Start at the far edge of this short window so the UI
+        # can offer a useful formation while still matching the train number.
+        for offset in range(7, 0, -1):
+            result = client.search_trains(
+                TrainSearchQuery(
+                    departure_station_code=str(train.departure_station_name or ""),
+                    arrival_station_code=str(train.arrival_station_name or ""),
+                    departure_date=(base_date + timedelta(days=offset)).strftime("%Y%m%d"),
+                    departure_time=str(train.departure_time or "000000"),
+                    passengers=passenger_count,
+                )
+            )
+            reference = next(
+                (
+                    item
+                    for item in result.trains
+                    if item.train_no == train.train_no
+                    and (
+                        not train.train_class_code
+                        or not item.train_class_code
+                        or item.train_class_code == train.train_class_code
+                    )
+                ),
+                None,
+            )
+            if reference is None:
+                continue
+            try:
+                response = client.get_seat_cars(
+                    reference,
+                    passenger_count=passenger_count,
+                    room_class_code=room_class_code,
+                )
+            except KorailAppError as exc:
+                if self._is_no_remaining_seats(exc):
+                    continue
+                raise
+            if response.cars:
+                return reference, response
+        raise ValueError("가까운 운행일에서도 이 열차의 좌석 편성을 확인할 수 없습니다.")
 
     def reserve_designated(
         self,
