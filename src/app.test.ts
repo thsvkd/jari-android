@@ -256,6 +256,28 @@ describe("concept C application shell", () => {
     expect(root.querySelector("[data-train='015']")).toBeNull();
   });
 
+  it("starts a new journey with today's time window instead of the previous server draft", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-14T10:37:00+09:00"));
+    const demo = createDemoApi();
+    const state = await demo.bootstrap();
+    state.draft = {
+      ...state.draft!,
+      dep_date: "20260915",
+      dep_time: "0700",
+      max_dep_time: "1200",
+      passenger_count: 2,
+    };
+    const { root } = await mountLive({ bootstrap: async () => state });
+
+    root.querySelector<HTMLButtonElement>("[data-action='new-journey']")!.click();
+
+    expect(root.querySelector<HTMLInputElement>("[name='dep_date']")!.value).toBe("2026-09-14");
+    expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value).toBe("10:40");
+    expect(root.querySelector<HTMLInputElement>("[name='max_dep_time']")!.value).toBe("12:40");
+    expect(root.querySelector(".stepper output")?.textContent).toBe("1명");
+  });
+
   it("offers the real access-request action when the server requires approval", async () => {
     const demoApi = createDemoApi();
     const requestAccess = vi.fn().mockResolvedValue({ requested: true });

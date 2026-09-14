@@ -418,7 +418,7 @@ export class TeumApp {
       </section>
       ${this.renderPendingCard(true)}
       ${state.scheduled ? this.renderScheduledCard() : ""}
-      <button class="button primary roomy" data-view="journey" ${state.capabilities.korail ? "" : "disabled"}><span>${state.capabilities.korail ? "새 여정 찾기" : "예약 서버에 연결해 주세요"}</span><b>＋</b></button>
+      <button class="button primary roomy" data-action="new-journey" ${state.capabilities.korail ? "" : "disabled"}><span>${state.capabilities.korail ? "새 여정 찾기" : "예약 서버에 연결해 주세요"}</span><b>＋</b></button>
       </div><aside class="home-secondary">
       <section class="section-head"><div><p class="eyebrow">빠른 실행</p><h2>자주 가는 구간</h2></div><button class="text-button" data-view="favourites">전체 보기</button></section>
       <div class="route-list">${state.favourites.length ? state.favourites.slice(0, 2).map((favourite) => this.renderFavouriteRow(favourite, true)).join("") : '<div class="empty compact"><p>아직 저장한 구간이 없어요.</p></div>'}</div>
@@ -836,7 +836,7 @@ export class TeumApp {
       ${this.renderPendingCard(false)}
       ${state.running ? `<section class="card activity-card"><div class="row-between"><span class="status-pill status-${radar.kind}"><i></i>${escapeHtml(radar.eyebrow)}</span><small>${radar.lastCheckedLabel ? `${escapeHtml(radar.lastCheckedLabel)} 확인` : "최근 조회 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(state.running.srcLocate)}</span><i>→</i><span>${escapeHtml(state.running.dstLocate)}</span></div><p class="center muted">${escapeHtml(formatWindow(state.running))} · ${state.running.passengerCount}명</p><div class="notice ${radar.kind === "error" || radar.kind === "stale" ? "warning" : "calm"}"><b>${escapeHtml(radar.title)}</b><p>${escapeHtml(radar.description)}</p></div><button class="button ghost danger" data-action="cancel-search">검색 중지</button></section>` : ""}
       ${state.scheduled ? this.renderScheduledCard() : ""}
-      ${!state.running && !state.scheduled && !state.pending.length ? `<div class="empty">${activityEmptyMark()}<h2>진행 중인 검색이 없어요</h2><p>새 여정을 등록하고 빈자리를 찾아보세요.</p><button class="button primary" data-view="journey">새 여정 찾기</button></div>` : ""}
+      ${!state.running && !state.scheduled && !state.pending.length ? `<div class="empty">${activityEmptyMark()}<h2>진행 중인 검색이 없어요</h2><p>새 여정을 등록하고 빈자리를 찾아보세요.</p><button class="button primary" data-action="new-journey">새 여정 찾기</button></div>` : ""}
       <section class="timeline status-guide-card"><h2>상태 안내</h2><div><i></i><p><b>${escapeHtml(radar.title)}</b><span>${escapeHtml(radar.description)}</span></p></div>${state.running?.startedAt ? `<div><i></i><p><b>검색 시작</b><span>${escapeHtml(formatStamp(state.running.startedAt))}</span></p></div>` : ""}</section>`;
   }
 
@@ -848,7 +848,7 @@ export class TeumApp {
     return `${this.renderSubhead("즐겨찾기", "자주 가는 구간")}
       <p class="intro">자주 가는 구간을 저장해 두고, 날짜만 바꿔 바로 조회하세요.</p>
       <div class="favourite-list">${favourites.length ? favourites.map((favourite) => this.renderFavouriteRow(favourite, false)).join("") : `<div class="empty">${favouriteEmptyMark()}<h2>즐겨찾기가 없어요</h2><p>자주 가는 구간을 저장해 두면 다음 검색이 더 빨라져요.</p></div>`}</div>
-      <button class="button primary" data-view="journey">새 즐겨찾기 만들기 <span>＋</span></button>`;
+      <button class="button primary" data-action="new-journey">새 즐겨찾기 만들기 <span>＋</span></button>`;
   }
 
   private renderFavouriteRow(favourite: Favourite, compact: boolean): string {
@@ -1272,6 +1272,16 @@ export class TeumApp {
       case "demo-enter":
         this.view = "home";
         void this.reload();
+        break;
+      case "new-journey":
+        this.draft = conditionsToDraft(null);
+        this.conditions = null;
+        this.selectedTrains = [];
+        this.trainOptions = [];
+        this.trainListTruncated = false;
+        this.seatDialog = null;
+        this.cancellationTargets = [];
+        this.navigate("journey");
         break;
       case "swap":
         this.syncJourneyDraft();
