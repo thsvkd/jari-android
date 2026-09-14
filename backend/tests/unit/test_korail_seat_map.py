@@ -132,6 +132,41 @@ def test_sold_out_train_uses_nearby_matching_formation_for_seat_selection():
     )
 
 
+def test_nearby_layout_uses_one_passenger_for_a_larger_party():
+    service = service_with_modern_client()
+    train = SimpleNamespace(
+        train_no="009",
+        train_class_code="00",
+        departure_date="20260914",
+        departure_time="063300",
+        departure_station_name="서울",
+        arrival_station_name="부산",
+    )
+    reference = SimpleNamespace(
+        train_no="009",
+        train_class_code="00",
+        departure_date="20260921",
+        departure_time="063300",
+    )
+    cars = SeatCarListResponse(cars=(SeatCar(3, "특실", 1, ()),))
+    service._modern_client.get_seat_cars.side_effect = [
+        KorailAppError("ERI411321", "잔여석이 없습니다."),
+        cars,
+    ]
+    service._modern_client.search_trains.return_value = SimpleNamespace(trains=[reference])
+    service._modern_client.get_seat_inventory.return_value = inventory(
+        physical_seat(sale_possible="N")
+    )
+
+    assert service.seat_cars(train, "special", 2) is cars
+    query = service._modern_client.search_trains.call_args.args[0]
+    assert query.passengers == 1
+    assert service.seat_inventory(train, 3, "special", 2).car_no == 3
+    service._modern_client.get_seat_inventory.assert_called_once_with(
+        reference, 3, passenger_count=1, room_class_code="2"
+    )
+
+
 def test_sold_out_inventory_is_empty_until_actual_train_has_a_seat():
     service = service_with_modern_client()
     train = SimpleNamespace(train_no="009")

@@ -1,7 +1,9 @@
 package com.teum.app;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.provider.Settings;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
@@ -72,6 +74,25 @@ public class SecureSessionPlugin extends Plugin {
     @PluginMethod
     public void clear(PluginCall call) {
         preferences().edit().remove(TOKEN_KEY).apply();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void pushConfigured(PluginCall call) {
+        String packageName = getContext().getPackageName();
+        int resourceId = getContext().getResources().getIdentifier("google_app_id", "string", packageName);
+        boolean configured = resourceId != 0 && !getContext().getString(resourceId).trim().isEmpty();
+        JSObject result = new JSObject();
+        result.put("configured", configured);
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void openNotificationSettings(PluginCall call) {
+        Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+        intent.putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(intent);
         call.resolve();
     }
 

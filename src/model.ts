@@ -198,12 +198,18 @@ export function deriveRadarView(input: {
 
 export function conditionsToDraft(conditions?: Conditions | null): BookingDraft {
   const now = new Date();
-  now.setDate(now.getDate() + 1);
   const defaultDate = [
     now.getFullYear(),
     String(now.getMonth() + 1).padStart(2, "0"),
     String(now.getDate()).padStart(2, "0"),
   ].join("-");
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const roundedStartMinutes = Math.min(23 * 60 + 59, Math.ceil(currentMinutes / 10) * 10);
+  const suggestedEndMinutes = roundedStartMinutes + 120;
+  const defaultUnlimitedTime = suggestedEndMinutes >= 24 * 60;
+  const defaultEndMinutes = Math.min(23 * 60 + 59, suggestedEndMinutes);
+  const formatMinutes = (minutes: number) =>
+    `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
   const compactDate = conditions?.dep_date ?? "";
   const [columnPart = "", rowPart = ""] = (conditions?.seat_preference ?? "").split(":");
   const [low = "", high = ""] = rowPart.split("-");
@@ -224,9 +230,9 @@ export function conditionsToDraft(conditions?: Conditions | null): BookingDraft 
         : defaultDate,
     srcStation: conditions?.src_station || "서울",
     dstStation: conditions?.dst_station || "부산",
-    depTime: clockFromCompact(conditions?.dep_time || "0700"),
-    maxDepTime: clockFromCompact(conditions?.max_dep_time || "1200"),
-    unlimitedTime: conditions?.max_dep_time === "2400",
+    depTime: conditions ? clockFromCompact(conditions.dep_time || "0700") : formatMinutes(roundedStartMinutes),
+    maxDepTime: conditions ? clockFromCompact(conditions.max_dep_time || "1200") : formatMinutes(defaultEndMinutes),
+    unlimitedTime: conditions ? conditions.max_dep_time === "2400" : defaultUnlimitedTime,
     trainType: conditions?.train_type === "2" ? "2" : "1",
     seatOption: conditions?.seat_option || "1",
     passengerCount: Number(conditions?.passenger_count || 1),

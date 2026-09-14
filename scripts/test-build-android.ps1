@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('teum-build-tests-' + [guid]::NewGuid())
 $savedEnvironment = @{}
 $environmentNames = @('PATH', 'JAVA_HOME', 'ANDROID_HOME', 'LOCALAPPDATA', 'ProgramFiles',
-    'TEUM_TEST_LOG', 'TEUM_TEST_FAIL', 'TEUM_TEST_JAVA_VERSION')
+    'TEUM_TEST_LOG', 'TEUM_TEST_FAIL', 'TEUM_TEST_JAVA_VERSION', 'VITE_API_BASE_URL')
 foreach ($name in $environmentNames) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
@@ -14,11 +14,13 @@ try {
     $fixture = Join-Path $testRoot 'mobile'
     $bin = Join-Path $testRoot 'bin'
     $fakeJdk = Join-Path $testRoot 'jdk'
-    foreach ($path in @("$fixture/scripts", "$fixture/android", $bin, "$fakeJdk/bin",
+    foreach ($path in @("$fixture/scripts", "$fixture/android/app", $bin, "$fakeJdk/bin",
             "$testRoot/local/Android/Sdk/platforms/android-35", "$testRoot/programs")) {
         New-Item -ItemType Directory -Path $path -Force | Out-Null
     }
     Copy-Item (Join-Path $PSScriptRoot 'build-android.ps1') "$fixture/scripts/build-android.ps1"
+    Set-Content "$fixture/.env.production.local" 'VITE_API_BASE_URL=https://teum.example.test' -Encoding Ascii
+    Set-Content "$fixture/android/app/google-services.json" '{}' -Encoding Ascii
     # Native executable boundary: no npm, Capacitor or Gradle installation is invoked.
     foreach ($command in @('npm', 'npx', 'gradlew')) {
         $destination = if ($command -eq 'gradlew') { "$fixture/android/gradlew.bat" } else { "$bin/$command.cmd" }
@@ -46,6 +48,7 @@ class FakeJava {
     $env:PATH = "$bin;$env:PATH"
     $env:LOCALAPPDATA = "$testRoot/local"
     $env:ProgramFiles = "$testRoot/programs"
+    $env:VITE_API_BASE_URL = $null
     $env:TEUM_TEST_LOG = "$testRoot/commands.log"
     $shell = (Get-Process -Id $PID).Path
 
@@ -53,7 +56,17 @@ class FakeJava {
         param([string]$Name, [string]$FailCommand, [string]$ExpectedCommands,
             [bool]$ExpectSuccess = $false, [string]$JavaVersion = '21.0.12',
             [switch]$DefaultSdk, [switch]$SkipWebBuild, [string]$JavaHome = $fakeJdk,
-            [string]$ExpectedError)
+            [string]$ExpectedError, [switch]$MissingPushConfig, [switch]$MissingApiUrl)
+        if ($MissingPushConfig) {
+            Remove-Item "$fixture/android/app/google-services.json" -Force -ErrorAction SilentlyContinue
+        } else {
+            Set-Content "$fixture/android/app/google-services.json" '{}' -Encoding Ascii
+        }
+        if ($MissingApiUrl) {
+            Remove-Item "$fixture/.env.production.local" -Force -ErrorAction SilentlyContinue
+        } else {
+            Set-Content "$fixture/.env.production.local" 'VITE_API_BASE_URL=https://teum.example.test' -Encoding Ascii
+        }
         $env:JAVA_HOME = $JavaHome
         $env:ANDROID_HOME = if ($DefaultSdk) { $null } else { "$testRoot/local/Android/Sdk" }
         $env:TEUM_TEST_FAIL = $FailCommand
@@ -80,6 +93,8 @@ class FakeJava {
         }
     }
 
+    Test-Pipeline -Name 'missing Firebase config stops before build' -MissingPushConfig -ExpectedCommands '' -ExpectedError 'Firebase'
+    Test-Pipeline -Name 'missing API URL stops before build' -MissingApiUrl -ExpectedCommands '' -ExpectedError 'VITE_API_BASE_URL'
     Test-Pipeline -Name 'npm failure stops before sync and Gradle' -FailCommand npm -ExpectedCommands 'npm run build'
     Test-Pipeline -Name 'sync failure stops before Gradle' -FailCommand npx -ExpectedCommands 'npm run build|npx cap sync android'
     Test-Pipeline -Name 'JDK 17 is rejected before build' -JavaVersion '17.0.20' -ExpectedCommands '' -ExpectedError 'JDK 21'

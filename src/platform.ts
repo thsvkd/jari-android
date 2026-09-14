@@ -4,6 +4,8 @@ interface SecureSessionPlugin {
   read(): Promise<{ token: string | null }>;
   write(options: { token: string }): Promise<void>;
   clear(): Promise<void>;
+  pushConfigured(): Promise<{ configured: boolean }>;
+  openNotificationSettings(): Promise<void>;
 }
 
 const SecureSession = registerPlugin<SecureSessionPlugin>("SecureSession");
@@ -27,6 +29,24 @@ export interface PlatformInitialization {
 let browserToken: string | null = null;
 let removeBackListener: (() => Promise<void>) | undefined;
 let removePushListeners: Array<() => Promise<void>> = [];
+
+export async function awaitPushRegistration(
+  register: () => Promise<void>,
+  registration: Promise<boolean>,
+  timeoutMs = 15_000,
+): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<boolean>((resolve) => {
+    timeout = setTimeout(() => resolve(false), timeoutMs);
+  });
+
+  try {
+    await register();
+    return await Promise.race([registration, timedOut]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 function isNative(): boolean {
   return Capacitor.isNativePlatform();
@@ -101,8 +121,15 @@ export async function initializePlatform(
     return { native: true, push: "unavailable" };
   }
 
+  const pushConfiguration = await SecureSession.pushConfigured();
+  if (!pushConfiguration.configured) {
+    options.onPushError?.("휴대폰 알림 설정이 빠진 앱이에요. 최신 설치 파일로 다시 설치해 주세요.");
+    return { native: true, push: "unavailable" };
+  }
+
   const { PushNotifications } = await import("@capacitor/push-notifications");
   const permissions = await PushNotifications.checkPermissions();
+  const alreadyGranted = permissions.receive === "granted";
   const permission =
     permissions.receive === "prompt"
       ? await PushNotifications.requestPermissions()
@@ -113,16 +140,28 @@ export async function initializePlatform(
     return { native: true, push: "unavailable" };
   }
 
+  let finishRegistration: (registered: boolean) => void = () => undefined;
+  let registrationErrorReported = false;
+  const registration = new Promise<boolean>((resolve) => {
+    finishRegistration = resolve;
+  });
   const registered = await PushNotifications.addListener("registration", async (token) => {
     try {
       await options.onPushToken?.(token.value);
+      finishRegistration(true);
     } catch {
+      registrationErrorReported = true;
       options.onPushError?.("휴대폰 알림을 서버에 등록하지 못했어요.");
+      finishRegistration(false);
     }
   });
   const registrationError = await PushNotifications.addListener(
     "registrationError",
-    (error) => options.onPushError?.(error.error),
+    (error) => {
+      registrationErrorReported = true;
+      options.onPushError?.(error.error);
+      finishRegistration(false);
+    },
   );
   removePushListeners = [
     () => registered.remove(),
@@ -130,7 +169,19 @@ export async function initializePlatform(
   ];
 
   try {
-    await PushNotifications.register();
+    const persisted = await awaitPushRegistration(
+      () => PushNotifications.register(),
+      registration,
+    );
+    if (!persisted) {
+      if (!registrationErrorReported) {
+        options.onPushError?.("휴대폰 알림 등록이 늦어지고 있어요. 잠시 후 다시 시도해 주세요.");
+      }
+      await Promise.all(removePushListeners.map((remove) => remove()));
+      removePushListeners = [];
+      return { native: true, push: "unavailable" };
+    }
+    if (alreadyGranted) await SecureSession.openNotificationSettings();
     return { native: true, push: "requested" };
   } catch {
     options.onPushError?.("휴대폰 알림 서비스가 아직 설정되지 않았어요.");

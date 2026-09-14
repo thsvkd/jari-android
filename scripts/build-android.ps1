@@ -5,6 +5,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 $mobileRoot = Split-Path -Parent $PSScriptRoot
+$firebaseConfig = Join-Path $mobileRoot 'android\app\google-services.json'
+if (-not (Test-Path $firebaseConfig -PathType Leaf)) {
+    throw "Firebase 설정 파일이 없어 배포 APK 빌드를 중단합니다: $firebaseConfig"
+}
+$productionEnvironment = Join-Path $mobileRoot '.env.production.local'
+$configuredApiBase = [Environment]::GetEnvironmentVariable('VITE_API_BASE_URL', 'Process')
+if (-not $configuredApiBase -and (Test-Path $productionEnvironment -PathType Leaf)) {
+    $configuredApiBase = Get-Content $productionEnvironment |
+        Where-Object { $_ -match '^\s*VITE_API_BASE_URL\s*=\s*https://.+' } |
+        Select-Object -First 1
+}
+if (-not $configuredApiBase) {
+    throw "VITE_API_BASE_URL이 없어 배포 APK 빌드를 중단합니다. .env.production.local에 HTTPS API 주소를 설정해 주세요."
+}
 $jdkCandidates = @()
 if ($env:JAVA_HOME) {
     $jdkCandidates += $env:JAVA_HOME

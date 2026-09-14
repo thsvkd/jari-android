@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  awaitPushRegistration,
   clearToken,
   readToken,
   writeToken,
@@ -36,5 +37,25 @@ describe("browser session storage", () => {
     await clearToken();
 
     await expect(readToken()).resolves.toBeNull();
+  });
+});
+
+describe("push registration", () => {
+  it("waits until the token has been saved before completing", async () => {
+    let finishSaving: (saved: boolean) => void = () => undefined;
+    const saved = new Promise<boolean>((resolve) => {
+      finishSaving = resolve;
+    });
+    let completed = false;
+    const registration = awaitPushRegistration(async () => undefined, saved).then((result) => {
+      completed = true;
+      return result;
+    });
+
+    await Promise.resolve();
+    expect(completed).toBe(false);
+
+    finishSaving(true);
+    await expect(registration).resolves.toBe(true);
   });
 });

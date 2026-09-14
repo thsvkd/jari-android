@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildBookingPayload,
@@ -9,6 +9,19 @@ import {
 } from "./model";
 
 describe("booking payload", () => {
+  it("defaults a new journey to today, the next ten minutes, and a two-hour window", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 14, 7, 54));
+
+    const draft = conditionsToDraft(null);
+
+    expect(draft.depDate).toBe("2026-09-14");
+    expect(draft.depTime).toBe("08:00");
+    expect(draft.maxDepTime).toBe("10:00");
+    expect(draft.unlimitedTime).toBe(false);
+    vi.useRealTimers();
+  });
+
   it("uses any grade by default and preserves explicit general and special choices", () => {
     const base = conditionsToDraft(null);
     expect(base.seatGradeMode).toBe("any");

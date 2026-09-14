@@ -250,7 +250,7 @@ describe("concept C application shell", () => {
     app.navigate("favourites");
     root.querySelector<HTMLButtonElement>("[data-use-favourite='demo-home']")!.click();
 
-    expect(root.querySelector<HTMLInputElement>("[name='dep_date']")!.value).toBe("2026-09-15");
+    expect(root.querySelector<HTMLInputElement>("[name='dep_date']")!.value).toBe("2026-09-14");
     expect(root.querySelector<HTMLInputElement>("[name='src_station']")!.value).toBe("서울");
     expect(root.querySelector<HTMLInputElement>("[name='dst_station']")!.value).toBe("부산");
     expect(root.querySelector("[data-train='015']")).toBeNull();
@@ -650,8 +650,8 @@ it("labels a nearby-date formation used for a sold-out train", async () => {
 
   root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
 
-  await vi.waitFor(() => expect(root.querySelector("[role='dialog']")?.textContent).toContain("가까운 운행일의 같은 열차 편성"));
-  expect(root.querySelector("[role='dialog']")?.textContent).toContain("실제 열차에서 이 좌석을 다시 확인");
+  await vi.waitFor(() => expect(root.querySelector("[role='dialog']")?.textContent).toContain("현재 열차는 매진이라 같은 편성의 좌석 배치"));
+  expect(root.querySelector("[role='dialog']")?.textContent).toContain("요청하신 열차에서 계속 확인");
   expect(root.querySelector("[role='dialog']")?.textContent).not.toContain("현재 예약 가능");
   expect(root.querySelector("[data-seat-car]")?.textContent).toContain("좌석표");
 });
@@ -679,6 +679,86 @@ it("refreshes the seat map when a chosen seat loses a reservation race", async (
 
   await vi.waitFor(() => expect(seatInventory).toHaveBeenCalledTimes(2));
   expect(root.querySelector("[role='dialog']")).not.toBeNull();
-  expect(root.textContent).toContain("고른 좌석이 방금 판매됐어요");
+  expect(root.textContent).toContain("선택한 좌석이 방금 판매됐어요");
   expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(0);
+});
+
+it("updates the notification interval without covering the screen", async () => {
+  const pending = deferred<{ notifyMinutes: number }>();
+  const setNotify = vi.fn(() => pending.promise);
+  const { app, root } = await mountLive({ setNotify });
+  app.navigate("settings");
+
+  root.querySelector<HTMLButtonElement>("[data-action='notify-plus']")!.click();
+
+  expect(root.querySelector(".blocker")).toBeNull();
+  expect(root.querySelector(".stepper output")?.textContent).toBe("10분");
+  pending.resolve({ notifyMinutes: 10 });
+  await vi.waitFor(() => expect(setNotify).toHaveBeenCalledWith(10));
+});
+
+it("spins only the invite button while a code is created", async () => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.user!.role = "admin";
+  const pending = deferred<{ invite: string; ttlHours: number; expiresAt: string }>();
+  const { app, root } = await mountLive({ bootstrap: async () => state, createInvite: () => pending.promise });
+  app.navigate("settings");
+
+  root.querySelector<HTMLButtonElement>("[data-action='create-invite']")!.click();
+
+  expect(root.querySelector(".blocker")).toBeNull();
+  expect(root.querySelector("[data-action='create-invite'] .inline-spinner")).not.toBeNull();
+  pending.resolve({ invite: "INVITE-CODE-123456", ttlHours: 72, expiresAt: "2026-09-17T00:00:00Z" });
+  await vi.waitFor(() => expect(root.querySelector(".invite-card")?.textContent).toContain("INVITE-CODE-123456"));
+});
+
+it("opens the seat dialog immediately and keeps load failures inside it", async () => {
+  const failure = deferred<{ cars: never[] }>();
+  const { app, root } = await mountLive({ seatCars: () => failure.promise });
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='special']")).not.toBeNull());
+
+  root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='special']")!.click();
+  expect(root.querySelector("[role='dialog'] .seat-loading")).not.toBeNull();
+  expect(root.querySelector(".blocker")).toBeNull();
+
+  failure.reject(new Error("layout unavailable"));
+  await vi.waitFor(() => expect(root.querySelector("[role='dialog'] .seat-dialog-error")?.textContent).toContain("좌석표를 불러오지 못했어요"));
+  expect(root.querySelector("[data-action='retry-seat-dialog']")).not.toBeNull();
+});
+
+it("preserves the seat-map scroll position when seats are selected", async () => {
+  const demo = createDemoApi();
+  const { app, root } = await mountLive({ seatCars: demo.seatCars, seatInventory: demo.seatInventory });
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-no='demo-1-A']")).not.toBeNull());
+
+  const before = root.querySelector<HTMLElement>(".seat-map-live")!;
+  before.scrollTop = 96;
+  root.querySelector<HTMLButtonElement>("[data-seat-no='demo-1-A']")!.click();
+
+  expect(root.querySelector<HTMLElement>(".seat-map-live")!.scrollTop).toBe(96);
+});
+
+it("shows approved empty-state copy and illustrated SVG marks", async () => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.favourites = [];
+  state.running = null;
+  const { app, root } = await mountLive({ bootstrap: async () => state });
+
+  app.navigate("favourites");
+  expect(root.textContent).toContain("즐겨찾기가 없어요");
+  expect(root.textContent).toContain("자주 가는 구간을 저장해 두면 다음 검색이 더 빨라져요.");
+  expect(root.textContent).toContain("새 즐겨찾기 만들기");
+  expect(root.querySelector(".empty-mark svg")).not.toBeNull();
+
+  app.navigate("activity");
+  expect(root.querySelector(".empty-mark svg")).not.toBeNull();
+  expect(root.querySelector(".timeline.status-guide-card")).not.toBeNull();
 });

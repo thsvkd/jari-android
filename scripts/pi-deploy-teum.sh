@@ -43,7 +43,7 @@ index_card = """    <li>
       <div class="top"><span class="name">teum mobile API</span><span class="badge b-tailnet">tailnet</span></div>
       <p class="desc">틈 Android 앱 전용 예약 API. 텔레그램 봇과 Redis·계정이 분리되어 있다.</p>
       <a class="url" href="https://teum.thsvkd.dev">https://teum.thsvkd.dev</a>
-      <p class="note">앱은 HTTPS 4443 으로 붙는다. 이 주소는 봇 Mini App(<code>korail.thsvkd.dev</code>)이 아니다.</p>
+      <p class="note">앱은 표준 HTTPS 주소로 붙는다. 이 주소는 봇 Mini App(<code>korail.thsvkd.dev</code>)이 아니다.</p>
     </li>
 """
 

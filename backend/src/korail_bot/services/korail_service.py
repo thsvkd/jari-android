@@ -352,7 +352,8 @@ class KorailService(RailService):
                 train, cabin.value, passenger_count
             )
             self._seat_layout_references[key] = layout_train
-        self._modern_seat_context = (id(layout_train), cabin.value, passenger_count)
+        layout_passenger_count = 1 if layout_train is not train else passenger_count
+        self._modern_seat_context = (id(layout_train), cabin.value, layout_passenger_count)
         return response
 
     def seat_layout_is_reference(
@@ -378,7 +379,8 @@ class KorailService(RailService):
         cabin = self._seat_class(seat_class)
         key = (id(train), cabin.value, passenger_count)
         layout_train = self._seat_layout_references.get(key, train)
-        context = (id(layout_train), cabin.value, passenger_count)
+        layout_passenger_count = 1 if layout_train is not train else passenger_count
+        context = (id(layout_train), cabin.value, layout_passenger_count)
         # TResidualSeatsResearch depends on server-side context created by
         # ScheduleView. Mobile HTTP requests log in again independently, so a
         # seat-detail call must restore that context after every fresh login.
@@ -386,7 +388,7 @@ class KorailService(RailService):
             try:
                 client.get_seat_cars(
                     layout_train,
-                    passenger_count=passenger_count,
+                    passenger_count=layout_passenger_count,
                     room_class_code=cabin.value,
                 )
             except KorailAppError as exc:
@@ -397,14 +399,15 @@ class KorailService(RailService):
                         train, cabin.value, passenger_count
                     )
                     self._seat_layout_references[key] = layout_train
-                    context = (id(layout_train), cabin.value, passenger_count)
+                    layout_passenger_count = 1
+                    context = (id(layout_train), cabin.value, layout_passenger_count)
                 else:
                     raise
             self._modern_seat_context = context
         return client.get_seat_inventory(
             layout_train,
             car_no,
-            passenger_count=passenger_count,
+            passenger_count=layout_passenger_count,
             room_class_code=cabin.value,
         )
 
@@ -426,6 +429,10 @@ class KorailService(RailService):
             base_date = datetime.strptime(str(train.departure_date), "%Y%m%d")
         except (TypeError, ValueError) as exc:
             raise ValueError("열차 운행일을 확인할 수 없습니다.") from exc
+        # A reference is used only to describe the formation. Querying it for
+        # one passenger keeps a nearly sold-out nearby train useful even when
+        # the actual request is for a larger party.
+        layout_passenger_count = 1
         # The nearest day can itself be almost sold out and expose only one
         # bookable car. Start at the far edge of this short window so the UI
         # can offer a useful formation while still matching the train number.
@@ -436,7 +443,7 @@ class KorailService(RailService):
                     arrival_station_code=str(train.arrival_station_name or ""),
                     departure_date=(base_date + timedelta(days=offset)).strftime("%Y%m%d"),
                     departure_time=str(train.departure_time or "000000"),
-                    passengers=passenger_count,
+                    passengers=layout_passenger_count,
                 )
             )
             reference = next(
@@ -457,7 +464,7 @@ class KorailService(RailService):
             try:
                 response = client.get_seat_cars(
                     reference,
-                    passenger_count=passenger_count,
+                    passenger_count=layout_passenger_count,
                     room_class_code=room_class_code,
                 )
             except KorailAppError as exc:
