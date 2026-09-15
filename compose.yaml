@@ -1,4 +1,4 @@
-name: teum
+name: jari
 services:
   api:
     build: ./backend

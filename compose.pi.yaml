@@ -2,16 +2,16 @@
 # Join the shared gateway network; do not attach to korail-bot networks.
 services:
   api:
-    container_name: teum-mobile-api
+    container_name: jari-mobile-api
     ports: !override
       - "127.0.0.1:8082:8081"
     environment:
-      MOBILE_ORIGINS: https://localhost,capacitor://localhost,https://teum.thsvkd.dev,https://teum.thsvkd.dev:4443
+      MOBILE_ORIGINS: https://localhost,capacitor://localhost,https://jari.thsvkd.dev,https://jari.thsvkd.dev:4443
     networks:
       - default
       - edge
   redis:
-    container_name: teum-mobile-redis
+    container_name: jari-mobile-redis
 
 networks:
   edge:
