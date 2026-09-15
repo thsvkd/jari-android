@@ -98,7 +98,9 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
             limited("api:" + g.user["id"], 120, 60)
             if request.method in {"POST", "DELETE"}:
                 g.payload = body()
-            if request.path.rsplit(PREFIX, 1)[-1] in {
+            path = request.path.rsplit(PREFIX, 1)[-1]
+            # Seat maps under /trains/<key>/ log in to Korail on every call.
+            if path.startswith("/trains/") or path in {
                 "/register",
                 "/trains",
                 "/search",
@@ -121,7 +123,11 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
     @app.post(PREFIX + "/auth/register")
     @app.post(PREFIX + "/auth/login")
     def auth():
-        limited("auth-ip:" + (request.remote_addr or "unknown"), 10, 300)
+        # Every public request arrives through the tunnel or Caddy, so
+        # remote_addr is the proxy and would put all clients in one bucket.
+        # Cloudflare overwrites CF-Connecting-IP; the API port is not public.
+        client = request.headers.get("CF-Connecting-IP") or request.remote_addr or "unknown"
+        limited("auth-ip:" + client, 10, 300)
         payload = body()
         username = payload.get("username")
         if isinstance(username, str):

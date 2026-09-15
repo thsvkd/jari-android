@@ -102,6 +102,30 @@ def test_malformed_oversized_rate_limited_and_no_callback(api):
     assert response.status_code == 429
 
 
+def test_tunnel_clients_and_seat_maps_have_their_own_limits(api):
+    client, _, gateway = api
+
+    def login(ip, username):
+        return client.post(
+            "/api/mobile/auth/login",
+            headers={"CF-Connecting-IP": ip},
+            json={"username": username, "password": "wrong long passphrase"},
+        ).status_code
+
+    for index in range(10):
+        login("203.0.113.1", f"user{index}")
+    assert login("203.0.113.1", "user10") == 429
+    assert login("203.0.113.2", "someone") != 429
+
+    gateway.seat_cars.return_value = {"cars": []}
+    alice = signup(api, "alice")
+    headers = {"Authorization": "Bearer " + alice["token"]}
+    statuses = [
+        client.get("/api/mobile/trains/T1/cars", headers=headers).status_code for _ in range(11)
+    ]
+    assert statuses == [200] * 10 + [429]
+
+
 def test_railway_auth_failure_does_not_revoke_app_session(api):
     from korail_bot.services.mini_app_gateway import MiniAppError
 
