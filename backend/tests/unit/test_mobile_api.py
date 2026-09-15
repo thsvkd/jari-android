@@ -142,6 +142,27 @@ def test_railway_auth_failure_does_not_revoke_app_session(api):
     assert client.get("/api/mobile/status", headers=headers).status_code == 200
 
 
+def test_upstream_failure_keeps_its_message_and_cors_headers(tmp_path):
+    from korail_bot.services.mini_app_gateway import MiniAppError
+
+    identity = IdentityStore(tmp_path / "app.sqlite3")
+    gateway = MagicMock()
+    message = "호차 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요."
+    gateway.seat_cars.side_effect = MiniAppError(message, 502)
+    app = create_app(identity, gateway, origins=("https://localhost",))
+    app.testing = True
+    client = app.test_client()
+    alice = signup((client, identity, gateway), "alice")
+    response = client.get(
+        "/api/mobile/trains/T1/cars",
+        headers={"Authorization": "Bearer " + alice["token"], "Origin": "https://localhost"},
+    )
+    # Cloudflare replaces an origin 502 with its own body and no CORS headers.
+    assert response.status_code == 503
+    assert response.json == {"error": message}
+    assert response.headers["Access-Control-Allow-Origin"] == "https://localhost"
+
+
 def test_only_admin_can_create_invites(api):
     client, identity, _ = api
     alice = signup(api, "alice")

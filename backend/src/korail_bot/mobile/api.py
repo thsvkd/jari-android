@@ -26,6 +26,10 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
         # 401 always means the app Bearer session expired. Railway credentials
         # belong to a separate account and must not log the app user out.
         status = 428 if isinstance(exc, MiniAppError) and exc.status == 401 else exc.status
+        # Cloudflare swaps an origin 502 or 504 for its own body without CORS headers, so the
+        # app sees a failed fetch instead of this message. Upstream failures leave as 503.
+        if status in (502, 504):
+            status = 503
         return jsonify(error=str(exc)), status
 
     @app.errorhandler(HTTPException)
