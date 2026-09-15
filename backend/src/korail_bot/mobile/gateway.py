@@ -11,6 +11,7 @@ from korail_bot.handlers.conversation_handler import ConversationHandler
 from korail_bot.models import OnboardedAccount, PaymentStatus, SeatPreference, SeatTarget
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.access_service import AccessDecision, AccessLevel, AccessService
+from korail_bot.services.cancellation_wait_service import train_label
 from korail_bot.services.mini_app_gateway import MiniAppError, MiniAppGateway
 from korail_bot.services.mini_app_service import MiniAppDataError, MiniAppSubmission
 from korail_bot.services.seat_map_service import (
@@ -194,7 +195,7 @@ class MobileGateway(MiniAppGateway):
             self._release_failed_hold(rail, hold, chat_id)
             raise MiniAppError("예약 번호를 확인하지 못했어요. 코레일 예약 목록을 확인해 주세요.", 502)
         expires_at = self._payment_deadline(rail, hold)
-        train_info = self._train_info(train)
+        train_info = train_label(train)
         labels = [target.label for target in targets]
         status = PaymentStatus(
             chat_id=chat_id,
@@ -281,16 +282,6 @@ class MobileGateway(MiniAppGateway):
             except ValueError:
                 pass
         return utc_now() + timedelta(minutes=settings.PAYMENT_TIMEOUT_MINUTES)
-
-    @staticmethod
-    def _train_info(train):
-        name = getattr(train, "train_class_name", None) or "KTX"
-        no = str(getattr(train, "train_no", "") or "")
-        src = getattr(train, "departure_station_name", None) or "출발역"
-        dst = getattr(train, "arrival_station_name", None) or "도착역"
-        dep = str(getattr(train, "departure_time", "") or "")
-        clock = f"{dep[:2]}:{dep[2:4]}" if len(dep) >= 4 else ""
-        return f"{name} {no} {src} → {dst} {clock}".strip()
 
     @serialized_operation
     def start_search(self, chat_id, payload):

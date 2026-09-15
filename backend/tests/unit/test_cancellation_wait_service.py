@@ -91,7 +91,14 @@ def test_background_independent_wait_persists_and_notifies_each_capture(monkeypa
     captures = [
         DesignatedCapture(
             SimpleNamespace(pnr_no=f"R{index}"),
-            SimpleNamespace(train_no="015"),
+            SimpleNamespace(
+                train_no="015",
+                train_class_name="KTX",
+                departure_station_name="서울",
+                arrival_station_name="부산",
+                departure_date="20260920",
+                departure_time="090000",
+            ),
             "general",
             (SeatTarget.from_payload(raw),),
         )
@@ -121,11 +128,14 @@ def test_background_independent_wait_persists_and_notifies_each_capture(monkeypa
     process._train_hints = Mock(
         return_value={"train_no": "015", "dep_date": "20260920", "dep_time": "090000"}
     )
-    process._train_info_for_user = Mock(return_value="KTX 015 서울 → 부산")
+    process.storage.get_user_timezone.return_value = "Asia/Seoul"
     process._send_callback = Mock()
 
     process._run_cancellation_wait()
 
     assert [call.kwargs["status"] for call in process._send_callback.call_args_list] == [2, 0]
     assert process.storage.save_multi_reservation_status.call_count == 2
+    saved = str(process.storage.save_multi_reservation_status.call_args)
+    assert "KTX 015 서울 → 부산 09:00" in saved
+    assert "namespace(" not in saved
     process.storage.wait_for_payment.assert_not_called()

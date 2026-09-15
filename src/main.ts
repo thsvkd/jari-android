@@ -7,7 +7,6 @@ import { TeumApp } from "./app";
 import { createDemoApi } from "./demo";
 import {
   clearToken,
-  disposePlatform,
   initializePlatform,
   readToken,
   writeToken,
@@ -86,10 +85,5 @@ async function launch(): Promise<void> {
     rootElement.replaceChildren(page);
   }
 }
-
-window.addEventListener("beforeunload", () => {
-  app?.dispose();
-  void disposePlatform();
-});
 
 void launch();

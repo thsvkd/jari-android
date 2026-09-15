@@ -7,6 +7,17 @@ from dataclasses import dataclass
 from korail_bot.models import CancellationWaitPlan, SeatTarget
 
 
+def train_label(train) -> str:
+    """A current-API train as people read it. Its repr is not display text."""
+    name = getattr(train, "train_class_name", None) or "KTX"
+    no = str(getattr(train, "train_no", "") or "")
+    src = getattr(train, "departure_station_name", None) or "출발역"
+    dst = getattr(train, "arrival_station_name", None) or "도착역"
+    dep = str(getattr(train, "departure_time", "") or "")
+    clock = f"{dep[:2]}:{dep[2:4]}" if len(dep) >= 4 else ""
+    return f"{name} {no} {src} → {dst} {clock}".strip()
+
+
 @dataclass(frozen=True)
 class DesignatedCapture:
     """One newly secured Korail hold and the physical seats it contains."""

@@ -36,6 +36,7 @@ from korail_bot.services import (
     PaymentReminderService,
     TelegramService,
 )
+from korail_bot.services.cancellation_wait_service import train_label
 from korail_bot.services.rail_service import (
     DuplicateReservationError,
     SearchUnavailableError,
@@ -231,9 +232,21 @@ class BackgroundReservationProcess:
     def _reservation_time_context(self, reservation) -> str:
         """Show a reserved train on both the user's clock and the railway clock."""
         journey = format_railway_journey(
-            str(getattr(reservation, "dep_date", None) or self.dep_date),
-            str(getattr(reservation, "dep_time", None) or self.dep_time),
-            str(getattr(reservation, "arr_time", None) or ""),
+            str(
+                getattr(reservation, "dep_date", None)
+                or getattr(reservation, "departure_date", None)
+                or self.dep_date
+            ),
+            str(
+                getattr(reservation, "dep_time", None)
+                or getattr(reservation, "departure_time", None)
+                or self.dep_time
+            ),
+            str(
+                getattr(reservation, "arr_time", None)
+                or getattr(reservation, "arrival_time", None)
+                or ""
+            ),
             self.storage.get_user_timezone(self.chat_id),
         )
         return f"🕒 {journey}" if journey else "🌐 열차 시각: KST (대한민국 철도 시각)"
@@ -721,7 +734,9 @@ class BackgroundReservationProcess:
 
             deadline = self._payment_deadline(capture.hold)
             hints = self._train_hints(capture.hold)
-            train_info = self._train_info_for_user(capture.hold)
+            train_info = (
+                f"{train_label(capture.train)}\n{self._reservation_time_context(capture.train)}"
+            )
             labels = [f"{target.car_no}호차 {target.label}" for target in capture.targets]
             info = SingleReservationInfo(
                 reservation_id=reservation_id,
