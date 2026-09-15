@@ -263,11 +263,6 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .seat-dialog > :not(.seat-map-live) { flex-shrink: 0; }
 .seat-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .seat-dialog h2 { margin: 0; font-size: 23px; letter-spacing: -.7px; }
-.seat-dialog-copy { text-wrap: pretty; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
-/* Says up front whether picking seats books them now or only waits for a cancellation. */
-.seat-mode { display: inline-block; margin-right: 7px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 800; vertical-align: 1px; }
-.seat-mode.immediate { background: var(--success-soft); color: var(--success); }
-.seat-mode.wait { background: var(--warning-soft); color: var(--warning); }
 .car-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 3px; scrollbar-width: none; }
 .car-tabs::-webkit-scrollbar { display: none; }
 .car-tab { min-width: 84px; min-height: 52px; display: grid; place-items: center; gap: 2px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
@@ -289,7 +284,8 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .seat-switch > span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px rgb(0 0 0 / 22%); transition: transform .15s; }
 .seat-switch[aria-checked="true"] > span { background: var(--accent-strong); }
 .seat-switch[aria-checked="true"] > span::after { transform: translateX(14px); }
-.seat-selection { display: flex; align-items: center; gap: 12px; }
+/* Tall enough for the clear button and a two-line summary, so choosing seats never resizes the sheet. */
+.seat-selection { display: flex; align-items: center; gap: 12px; min-height: 40px; }
 .seat-selection p { flex: 1; min-width: 0; }
 .seat-filter-clear { flex: none; min-height: 40px; padding: 0 4px; background: transparent; color: var(--accent-ink); font-size: 12px; font-weight: 700; }
 .seat-legend { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: 11px; }

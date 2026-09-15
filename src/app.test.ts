@@ -679,10 +679,8 @@ it("labels a nearby-date formation used for a sold-out train", async () => {
 
   root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
 
-  // The mode label shows as soon as the sheet opens; the reference layout is only known once the cars load.
+  // The reference layout is only known once the cars load.
   await vi.waitFor(() => expect(root.querySelector("[data-seat-car]")?.textContent).toContain("좌석표"));
-  expect(root.querySelector(".seat-mode.wait")?.textContent).toBe("취소표 대기");
-  expect(root.querySelector("[role='dialog']")?.textContent).toContain("자리를 잡은 후 알려드려요");
   expect(root.querySelector("[role='dialog']")?.textContent).not.toContain("같은 편성");
   expect(root.querySelector("[role='dialog']")?.textContent).not.toContain("현재 예약 가능");
 });

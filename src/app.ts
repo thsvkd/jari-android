@@ -591,9 +591,6 @@ export class TeumApp {
       : `${dialog.selected.length}석 범위로 취소표 대기`;
     return `<div class="modal-backdrop" role="presentation"><section class="seat-dialog" role="dialog" aria-modal="true" aria-labelledby="seat-dialog-title">
       <header><div><p class="eyebrow">${escapeHtml(`${dialog.train.name || "열차"} ${dialog.train.no}`)} · ${classLabel}</p><h2 id="seat-dialog-title">${title}</h2></div><button type="button" class="icon-button" data-action="close-seat-dialog" aria-label="좌석 선택 닫기">×</button></header>
-      <p class="seat-dialog-copy">${dialog.mode === "immediate"
-        ? `<span class="seat-mode immediate">바로 예약</span>고른 좌석으로 지금 바로 예약해요. ${passengerCount}명이 앉을 좌석을 골라 주세요.`
-        : '<span class="seat-mode wait">취소표 대기</span>고른 범위에 빈자리가 나면 자리를 잡은 후 알려드려요.'}</p>
       <div class="car-tabs" aria-label="호차 선택">${cars}</div>
       ${dialog.inventory ? this.renderSeatFilter(dialog, dialog.inventory.seats) : ""}
       <div class="seat-legend">${dialog.layoutReference ? "" : '<span><i class="available"></i>현재 예약 가능</span>'}<span><i class="occupied"></i>${dialog.mode === "wait" ? "취소표 대기 가능" : "선택 불가"}</span><span><i class="selected"></i>선택</span></div>
