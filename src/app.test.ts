@@ -182,7 +182,7 @@ describe("concept C application shell", () => {
     expect(adminRoot.querySelector(".admin-only-badge")?.textContent).toBe("관리자 전용");
     expect(adminRoot.textContent).toContain("회원 가입 권한은 관리자만 발급할 수 있어요");
     expect(adminRoot.querySelector("[data-action='create-invite']")).not.toBeNull();
-    expect(adminRoot.textContent).toContain("v4.8.4");
+    expect(adminRoot.textContent).toContain("v4.8.5");
     expect(adminRoot.textContent).not.toContain("베타");
 
     const memberState = await demoApi.bootstrap();
