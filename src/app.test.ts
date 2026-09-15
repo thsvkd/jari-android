@@ -635,6 +635,10 @@ it("starts cancellation waiting with the selected physical-seat range", async ()
 
   root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
   await vi.waitFor(() => expect(root.querySelector("[data-seat-filter='pair:window']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
+  expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(4);
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
+  expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(0);
   for (const action of ["pair:window", "family", "trim:+"]) {
     root.querySelector<HTMLButtonElement>(`[data-seat-filter='${action}']`)!.click();
   }

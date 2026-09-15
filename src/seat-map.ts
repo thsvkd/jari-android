@@ -29,9 +29,14 @@ const distinctRows = (seats: SeatMapSeat[]): number[] =>
 export function seatColumnSets(seats: SeatMapSeat[]): { columns: string[]; window: string[]; aisle: string[] } {
   const window = new Set<string>();
   const aisle = new Set<string>();
-  for (const row of groupSeatsByLayout(seats)) {
-    window.add(row[0]!.column);
-    window.add(row[row.length - 1]!.column);
+  const rows = groupSeatsByLayout(seats);
+  const widest = Math.max(0, ...rows.map((row) => row.length));
+  for (const row of rows) {
+    // A short row by a door or wheelchair space ends mid-carriage, so only full rows say where the windows are.
+    if (row.length === widest) {
+      window.add(row[0]!.column);
+      window.add(row[row.length - 1]!.column);
+    }
     row.forEach((seat, index) => {
       const next = row[index + 1];
       if (next && seat.adjacencyGroup && next.adjacencyGroup && seat.adjacencyGroup !== next.adjacencyGroup) {

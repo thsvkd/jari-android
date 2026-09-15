@@ -636,6 +636,7 @@ export class TeumApp {
     dialog.cars = [];
     dialog.inventory = null;
     dialog.carNo = null;
+    dialog.filter = emptySeatFilter();
     this.refreshSeatDialog();
     try {
       const trainKey = dialog.train.trainKey!;
@@ -694,6 +695,8 @@ export class TeumApp {
     const generation = this.generation;
     dialog.carNo = carNo;
     dialog.inventory = null;
+    // Conditions describe the car they were applied to; chips left on over another car would read as applied when they are not.
+    dialog.filter = emptySeatFilter();
     dialog.loading = true;
     dialog.error = "";
     this.refreshSeatDialog();
@@ -754,7 +757,9 @@ export class TeumApp {
     }
     if (kind === "family") filter.excludeFamily = !filter.excludeFamily;
     // The conditions pick seats in the car on screen; seats already chosen in other cars stay chosen.
-    const matched = filterSeats(inventory.seats, filter);
+    // Turning the last condition off clears the car rather than selecting every seat in it.
+    const empty = !filter.columns.length && !filter.trimRows && !filter.excludeFamily;
+    const matched = empty ? [] : filterSeats(inventory.seats, filter);
     dialog.selected = dialog.mode === "immediate"
       ? matched.filter((seat) => seat.salePossible).slice(0, this.draft.passengerCount)
       : [...dialog.selected.filter((seat) => seat.carNo !== inventory.carNo), ...matched];
@@ -789,6 +794,7 @@ export class TeumApp {
               dialog.train.trainKey!, dialog.carNo!, dialog.seatClass, passengerCount,
             );
             dialog.selected = [];
+            dialog.filter = emptySeatFilter();
             dialog.error = "선택한 좌석이 방금 판매됐어요. 새 좌석표에서 다시 선택해 주세요.";
             return;
           }
