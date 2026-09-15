@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  backRowTargets,
   consecutiveGroups,
-  familyTargets,
-  frontRowTargets,
+  filterSeats,
   groupSeatsByLayout,
+  maxTrimRows,
+  seatColumnSets,
 } from "./seat-map";
 import type { SeatMapSeat } from "./types";
 
@@ -39,10 +39,24 @@ describe("dynamic Korail seat layouts", () => {
     expect(groupSeatsByLayout(seats.filter((item) => item.column !== "D"))[0]).toHaveLength(3);
   });
 
-  it("finds the actual first, last, and explicitly marked companion rows", () => {
-    expect(frontRowTargets(seats).map((item) => item.label)).toEqual(["1A", "1B", "1C", "1D"]);
-    expect(backRowTargets(seats).map((item) => item.label)).toEqual(["2A", "2B", "2C", "2D"]);
-    expect(familyTargets(seats).map((item) => item.label)).toEqual(["2A", "2B"]);
+  it("filters by column, trimmed end rows, and companion seats", () => {
+    const labels = (items: SeatMapSeat[]) => items.map((item) => item.label);
+    const threeRows = [
+      ...seats,
+      seat(3, "A", "left", 1), seat(3, "B", "left", 2),
+      seat(3, "C", "right", 1), seat(3, "D", "right", 2),
+    ];
+    expect(labels(filterSeats(seats, { columns: ["A", "D"], trimRows: 0, excludeFamily: false }))).toEqual(["1A", "1D", "2A", "2D"]);
+    expect(labels(filterSeats(seats, { columns: [], trimRows: 0, excludeFamily: true }))).toEqual(["1A", "1B", "1C", "1D", "2C", "2D"]);
+    expect(maxTrimRows(seats)).toBe(0);
+    expect(maxTrimRows(threeRows)).toBe(1);
+    expect(labels(filterSeats(threeRows, { columns: ["A"], trimRows: 1, excludeFamily: false }))).toEqual(["2A"]);
+  });
+
+  it("reads window and aisle columns from the layout, including a 1+2 car", () => {
+    expect(seatColumnSets(seats)).toEqual({ columns: ["A", "B", "C", "D"], window: ["A", "D"], aisle: ["B", "C"] });
+    const special = [seat(1, "A", "solo", 1), seat(1, "B", "pair", 1), seat(1, "C", "pair", 2)];
+    expect(seatColumnSets(special)).toEqual({ columns: ["A", "B", "C"], window: ["A", "C"], aisle: ["A", "B"] });
   });
 
   it("never joins seats across an aisle, row, or car", () => {

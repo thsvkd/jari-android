@@ -634,8 +634,11 @@ it("starts cancellation waiting with the selected physical-seat range", async ()
   await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
 
   root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
-  await vi.waitFor(() => expect(root.querySelector("[data-seat-quick='family']")).not.toBeNull());
-  root.querySelector<HTMLButtonElement>("[data-seat-quick='family']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-filter='pair:window']")).not.toBeNull());
+  for (const action of ["pair:window", "family", "trim:+"]) {
+    root.querySelector<HTMLButtonElement>(`[data-seat-filter='${action}']`)!.click();
+  }
+  expect(root.querySelector("[data-seat-filter='pair:window']")!.getAttribute("aria-pressed")).toBe("true");
   root.querySelector<HTMLButtonElement>("[data-action='confirm-seat-dialog']")!.click();
   root.querySelector<HTMLButtonElement>("[data-action='start-cancellation-wait']")!.click();
 
@@ -651,7 +654,7 @@ it("starts cancellation waiting with the selected physical-seat range", async ()
       },
     },
   });
-  expect(search.mock.calls[0]![0].conditions.seat_plan.trains[0].targets).toHaveLength(4);
+  expect(search.mock.calls[0]![0].conditions.seat_plan.trains[0].targets.map((seat: { label: string }) => seat.label)).toEqual(["3A", "3D"]);
 });
 
 it("labels a nearby-date formation used for a sold-out train", async () => {
