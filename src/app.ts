@@ -569,13 +569,8 @@ export class TeumApp {
       const [previous, seat] = [row[index - 1], row[index]];
       return Boolean(previous?.adjacencyGroup && seat?.adjacencyGroup && previous.adjacencyGroup !== seat.adjacencyGroup);
     };
-    // The guide copies the widest row's cells, so 창가 and 통로 sit over the seats and aisle they name.
-    const widest = layout.reduce<SeatMapSeat[]>((best, row) => (row.length > best.length ? row : best), []);
-    const guide = widest.length
-      ? `<div class="seat-row carriage-guide" aria-hidden="true"><span></span><div class="seat-row-track">${widest.map((_, index) => `${aisleBefore(widest, index) ? "<b>통로</b>" : ""}<span>${index === 0 || index === widest.length - 1 ? "창가" : ""}</span>`).join("")}</div></div>`
-      : "";
     const rows = dialog.inventory
-      ? guide + layout.map((row) => {
+      ? layout.map((row) => {
           const cells = row.map((seat, index) => {
             const groupChanged = aisleBefore(row, index);
             const selected = dialog.selected.some((item) => item.carNo === seat.carNo && item.seatNo === seat.seatNo);
