@@ -564,12 +564,20 @@ export class TeumApp {
       : "좌석 범위를 선택해 주세요";
     const cars = dialog.cars.map((car) => `<button type="button" class="car-tab ${dialog.carNo === car.carNo ? "selected" : ""}" data-seat-car="${car.carNo}"><b>${car.carNo}호차</b><small>${dialog.layoutReference ? "좌석표" : `${car.remainingSeatCount}석 가능`}</small></button>`).join("");
     const selectable = (seat: SeatMapSeat) => dialog.mode === "wait" || seat.salePossible;
+    const layout = dialog.inventory ? groupSeatsByLayout(dialog.inventory.seats) : [];
+    const aisleBefore = (row: SeatMapSeat[], index: number) => {
+      const [previous, seat] = [row[index - 1], row[index]];
+      return Boolean(previous?.adjacencyGroup && seat?.adjacencyGroup && previous.adjacencyGroup !== seat.adjacencyGroup);
+    };
+    // The guide copies the widest row's cells, so 창가 and 통로 sit over the seats and aisle they name.
+    const widest = layout.reduce<SeatMapSeat[]>((best, row) => (row.length > best.length ? row : best), []);
+    const guide = widest.length
+      ? `<div class="seat-row carriage-guide" aria-hidden="true"><span></span><div class="seat-row-track">${widest.map((_, index) => `${aisleBefore(widest, index) ? "<b>통로</b>" : ""}<span>${index === 0 || index === widest.length - 1 ? "창가" : ""}</span>`).join("")}</div></div>`
+      : "";
     const rows = dialog.inventory
-      ? groupSeatsByLayout(dialog.inventory.seats).map((row) => {
-          let previousGroup = row[0]?.adjacencyGroup ?? "";
+      ? guide + layout.map((row) => {
           const cells = row.map((seat, index) => {
-            const groupChanged = index > 0 && Boolean(previousGroup) && Boolean(seat.adjacencyGroup) && seat.adjacencyGroup !== previousGroup;
-            previousGroup = seat.adjacencyGroup;
+            const groupChanged = aisleBefore(row, index);
             const selected = dialog.selected.some((item) => item.carNo === seat.carNo && item.seatNo === seat.seatNo);
             const description = [seat.label, seat.direction, seat.floor, seat.familyLabel].filter(Boolean).join(" · ");
             const available = seat.salePossible && !dialog.layoutReference;
@@ -593,10 +601,9 @@ export class TeumApp {
       <div class="car-tabs" aria-label="호차 선택">${cars}</div>
       ${dialog.inventory ? this.renderSeatFilter(dialog, dialog.inventory.seats) : ""}
       <div class="seat-legend">${dialog.layoutReference ? "" : '<span><i class="available"></i>현재 예약 가능</span>'}<span><i class="occupied"></i>${dialog.mode === "wait" ? "취소표 대기 가능" : "선택 불가"}</span><span><i class="selected"></i>선택</span></div>
-      <div class="carriage-guide" aria-hidden="true"><span>창가</span><b>통로</b><span>창가</span></div>
       <div class="seat-map-live">${rows}</div>
       ${dialog.inventory && dialog.error ? `<p class="notice warning seat-inline-error" role="alert">${escapeHtml(dialog.error)}</p>` : ""}
-      <footer><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p><button type="button" class="button primary" data-action="confirm-seat-dialog">${confirmText}</button></footer>
+      <footer><div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || dialog.filter.columns.length || dialog.filter.trimRows || dialog.filter.excludeFamily ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div><button type="button" class="button primary" data-action="confirm-seat-dialog">${confirmText}</button></footer>
     </section></div>`;
   }
 
@@ -613,7 +620,7 @@ export class TeumApp {
       : "";
     return `<div class="seat-filter">
       <div class="seat-filter-row"><span>열</span><div class="seat-chips">${columnChips}<i aria-hidden="true"></i>${chip("pair:window", "창가", allOn(sets.window))}${sets.aisle.length ? chip("pair:aisle", "복도", allOn(sets.aisle)) : ""}</div></div>
-      <div class="seat-filter-row"><span>앞뒤</span><div class="seat-stepper"><button type="button" data-seat-filter="trim:-" aria-label="앞뒤 제외 줄 수 줄이기" ${filter.trimRows <= 0 ? "disabled" : ""}>−</button><output>${trimLabel}</output><button type="button" data-seat-filter="trim:+" aria-label="앞뒤 제외 줄 수 늘리기" ${filter.trimRows >= maxTrimRows(seats) ? "disabled" : ""}>+</button></div>${family}<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button></div>
+      <div class="seat-filter-row"><span>앞뒤</span><div class="seat-stepper"><button type="button" data-seat-filter="trim:-" aria-label="앞뒤 제외 줄 수 줄이기" ${filter.trimRows <= 0 ? "disabled" : ""}>−</button><output>${trimLabel}</output><button type="button" data-seat-filter="trim:+" aria-label="앞뒤 제외 줄 수 늘리기" ${filter.trimRows >= maxTrimRows(seats) ? "disabled" : ""}>+</button></div>${family}</div>
     </div>`;
   }
 
