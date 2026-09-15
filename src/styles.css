@@ -254,7 +254,9 @@ small { color: var(--muted); }
 .seat-detail-note { margin-bottom: 0; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; align-items: end; justify-items: center; padding-top: max(12px, env(safe-area-inset-top)); background: rgb(15 20 29 / 58%); backdrop-filter: blur(4px); }
-.seat-dialog { width: min(100%, 520px); max-height: calc(100dvh - max(12px, env(safe-area-inset-top))); display: flex; flex-direction: column; gap: 12px; overflow: hidden; padding: 20px 20px max(18px, env(safe-area-inset-bottom)); border-radius: 24px 24px 0 0; background: var(--surface-raised); box-shadow: 0 -16px 60px rgb(0 0 0 / 25%); }
+.seat-dialog { width: min(100%, 520px); max-height: calc(100dvh - max(12px, env(safe-area-inset-top))); display: flex; flex-direction: column; gap: 12px; overflow-y: auto; padding: 20px 20px max(18px, env(safe-area-inset-bottom)); border-radius: 24px 24px 0 0; background: var(--surface-raised); box-shadow: 0 -16px 60px rgb(0 0 0 / 25%); }
+/* Only the seat map gives up height; every other part keeps its natural size and the sheet scrolls when they do not fit. */
+.seat-dialog > :not(.seat-map-live) { flex-shrink: 0; }
 .seat-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .seat-dialog h2 { margin: 0; font-size: 23px; letter-spacing: -.7px; }
 .seat-dialog-copy { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
@@ -266,10 +268,10 @@ small { color: var(--muted); }
 .car-tab.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
 .seat-filter { display: grid; gap: 8px; padding: 10px; border-radius: 14px; background: var(--bg); }
 .seat-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
-.seat-filter-row > span { width: 28px; color: var(--muted); font-size: 11px; font-weight: 700; }
-.seat-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.seat-chips > i { width: 1px; height: 20px; margin-inline: 2px; background: var(--line); }
-.seat-chip { min-width: 40px; min-height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); font-size: 13px; font-weight: 700; }
+.seat-filter-row > span { flex: none; width: 28px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.seat-chips { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; }
+.seat-chips > i { flex: none; width: 1px; height: 20px; margin-inline: 1px; background: var(--line); }
+.seat-chip { flex: 1 1 auto; min-width: 0; min-height: 40px; padding: 0 6px; white-space: nowrap; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); font-size: 13px; font-weight: 700; }
 .seat-chip.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
 .seat-stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); overflow: hidden; }
 .seat-stepper button { width: 40px; height: 40px; padding: 0; background: transparent; color: var(--accent-ink); font-size: 18px; }
@@ -290,7 +292,7 @@ small { color: var(--muted); }
 .carriage-guide span:first-child { grid-column: 1; grid-row: 1; }
 .carriage-guide b { grid-column: 2; grid-row: 1; color: var(--hint); font-size: 9px; font-weight: 700; }
 .carriage-guide span:last-child { grid-column: 3; grid-row: 1; }
-.seat-map-live { min-height: 180px; flex: 1 1 180px; overflow-y: auto; padding: 16px 12px; border: 1px solid var(--line); border-radius: 23px; background: var(--bg); box-shadow: inset 0 0 0 5px var(--surface); }
+.seat-map-live { min-height: 160px; flex: 1 1 160px; overflow-y: auto; padding: 16px 12px; border: 1px solid var(--line); border-radius: 23px; background: var(--bg); box-shadow: inset 0 0 0 5px var(--surface); }
 .seat-row { display: grid; grid-template-columns: 23px 1fr; align-items: center; gap: 8px; margin: 7px 0; }
 .seat-row > span { color: var(--muted); font-size: 11px; text-align: center; }
 .seat-row-track { display: flex; align-items: stretch; gap: 7px; }

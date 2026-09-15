@@ -46,7 +46,9 @@ export function seatColumnSets(seats: SeatMapSeat[]): { columns: string[]; windo
     });
   }
   const sorted = (values: Iterable<string>) => [...values].sort((a, b) => a.localeCompare(b));
-  return { columns: sorted(new Set(seats.map((seat) => seat.column))), window: sorted(window), aisle: sorted(aisle) };
+  // Only seats drawn on the map count; a seat whose label could not be read arrives with no row and no column.
+  const columns = new Set(rows.flat().map((seat) => seat.column).filter(Boolean));
+  return { columns: sorted(columns), window: sorted(window), aisle: sorted(aisle) };
 }
 
 /** Most rows that can be trimmed from each end while leaving at least one row. */

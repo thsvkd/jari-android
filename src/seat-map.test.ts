@@ -57,6 +57,8 @@ describe("dynamic Korail seat layouts", () => {
     expect(seatColumnSets(seats)).toEqual({ columns: ["A", "B", "C", "D"], window: ["A", "D"], aisle: ["B", "C"] });
     const shortRow = [...seats, seat(3, "A", "left", 1), seat(3, "B", "left", 2)];
     expect(seatColumnSets(shortRow).window).toEqual(["A", "D"]);
+    const unreadable = { ...seat(1, "", "", 0), row: null, label: "?" };
+    expect(seatColumnSets([...seats, unreadable]).columns).toEqual(["A", "B", "C", "D"]);
     const special = [seat(1, "A", "solo", 1), seat(1, "B", "pair", 1), seat(1, "C", "pair", 2)];
     expect(seatColumnSets(special)).toEqual({ columns: ["A", "B", "C"], window: ["A", "C"], aisle: ["A", "B"] });
   });
