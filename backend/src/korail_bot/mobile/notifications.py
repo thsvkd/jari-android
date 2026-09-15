@@ -188,7 +188,7 @@ def configured_fcm(credentials_path):
             messaging.Message(
                 token=token,
                 notification=messaging.Notification(
-                    title="틈", body="새 알림이 왔어요. 앱에서 확인해 주세요."
+                    title="자리났다", body="새 알림이 왔어요. 앱에서 확인해 주세요."
                 ),
                 data={"eventId": event_id},
                 android=messaging.AndroidConfig(priority="high"),

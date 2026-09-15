@@ -1,4 +1,4 @@
-# 틈 Android
+# 자리났다 Android
 
 Android 앱과 독립 예약 API 서버를 함께 관리합니다. 루트의 TypeScript/Vite 화면을 Capacitor로 패키징합니다.
 `backend/`에는 서버와 필요한 기존 공통 패키지가 포함됩니다. 앱은 `/api/mobile` 계약을 소비합니다.

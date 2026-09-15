@@ -1,4 +1,4 @@
-# 틈 독립 Python 백엔드
+# 자리났다 독립 Python 백엔드
 
 이 폴더는 자체 `pyproject.toml`, `uv.lock`, `src`, 앱 전용 테스트를 포함합니다.
 아래 CLI 명령은 모두 이 `backend/` 폴더에서 실행합니다.

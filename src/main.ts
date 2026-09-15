@@ -75,7 +75,7 @@ async function launch(): Promise<void> {
     const mark = document.createElement("span");
     mark.textContent = "!";
     const title = document.createElement("h1");
-    title.textContent = "틈을 열지 못했어요";
+    title.textContent = "앱을 열지 못했어요";
     const detail = document.createElement("p");
     detail.textContent = message;
     const hint = document.createElement("p");

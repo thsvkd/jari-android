@@ -347,7 +347,7 @@ export class TeumApp {
         ${this.options.demoMode ? '<aside class="demo-banner" data-demo-banner aria-label="데모 상태"><b>데모 모드</b><span>샘플 데이터 · 실제 조회·예약 없음</span></aside>' : ""}
         ${this.connection === "offline" ? '<aside class="offline-banner" aria-label="연결 상태">오프라인 · 마지막으로 받은 상태를 보여드려요</aside>' : ""}
         <header class="topbar">
-          <button class="brand" data-view="home" aria-label="틈 홈"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><rect x="5" y="7" width="9" height="14" rx="3"></rect><rect x="18" y="7" width="9" height="14" rx="3"></rect><path d="M7 25h18"></path></svg></span><span><b>틈</b><small>내 여행의 빈자리</small></span></button>
+          <button class="brand" data-view="home" aria-label="자리났다 홈"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><rect x="5" y="7" width="9" height="14" rx="3"></rect><rect x="18" y="7" width="9" height="14" rx="3"></rect><path d="M7 25h18"></path></svg></span><span><b>자리났다</b><small>내 여행의 빈자리</small></span></button>
           <button class="header-action notification-button" data-view="notifications" type="button" aria-label="알림 열기" title="알림"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg></button>
         </header>
         <main class="screen screen-${this.view}">${content}</main>
@@ -892,7 +892,7 @@ export class TeumApp {
 
   private renderAuth(): string {
     if (this.options.demoMode) {
-      return `<div class="auth-shell with-demo"><aside class="demo-banner" data-demo-banner aria-label="데모 상태"><b>데모 모드</b><span>실제 조회·예약 없음</span></aside><div class="auth-art"><span class="orbit one"></span><span class="orbit two"></span><i>틈</i></div><section class="auth-card"><p class="eyebrow">미리 둘러보기</p><h1>로그인 없이\n둘러보세요.</h1><p>데모에서는 샘플 데이터만 보여드려요. 로그인하거나 철도 서버에 요청을 보내지 않아요.</p><button class="button primary" data-action="demo-enter">샘플 화면 시작 <span>→</span></button></section></div>`;
+      return `<div class="auth-shell with-demo"><aside class="demo-banner" data-demo-banner aria-label="데모 상태"><b>데모 모드</b><span>실제 조회·예약 없음</span></aside><div class="auth-art"><span class="orbit one"></span><span class="orbit two"></span><i>자</i></div><section class="auth-card"><p class="eyebrow">미리 둘러보기</p><h1>로그인 없이\n둘러보세요.</h1><p>데모에서는 샘플 데이터만 보여드려요. 로그인하거나 철도 서버에 요청을 보내지 않아요.</p><button class="button primary" data-action="demo-enter">샘플 화면 시작 <span>→</span></button></section></div>`;
     }
     const register = this.authMode === "register";
     const admin = this.authGate === "admin";
@@ -913,7 +913,7 @@ export class TeumApp {
           : "가입할 때 만든 아이디와 비밀번호를 입력하세요.";
     return `<div class="auth-shell ${this.options.demoMode ? "with-demo" : ""}">
       ${this.options.demoMode ? '<aside class="demo-banner" data-demo-banner aria-label="데모 상태"><b>데모 모드</b><span>실제 조회·예약 없음</span></aside>' : ""}
-      <div class="auth-art"><span class="orbit one"></span><span class="orbit two"></span><i>틈</i></div>
+      <div class="auth-art"><span class="orbit one"></span><span class="orbit two"></span><i>자</i></div>
       <section class="auth-card"><p class="eyebrow">내 여행의 빈자리</p><h1>${title}</h1><p>${copy}</p>
         ${choosing ? `<div class="gate-list"><button class="gate-card" data-auth-gate="admin" type="button"><b>관리자</b><small>관리자 계정으로 로그인해요</small></button><button class="gate-card" data-auth-gate="guest" type="button"><b>초대 회원</b><small>로그인하거나 초대 코드로 가입해요</small></button></div>` : ""}
         ${admin ? `<form id="auth-form" class="form-stack"><label class="field"><span>관리자 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label><label class="field"><span>관리자 비밀번호</span><input name="password" type="password" minlength="12" maxlength="128" autocomplete="current-password" required></label>${this.renderError()}<button class="button primary" type="submit">관리자 로그인 <span>→</span></button></form><button class="text-button" data-auth-gate="choose" type="button">로그인 방법 바꾸기</button>` : ""}

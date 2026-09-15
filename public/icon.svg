@@ -10,5 +10,5 @@
   <circle cx="256" cy="256" r="98" fill="none" stroke="#fff" stroke-opacity=".32" stroke-width="4"/>
   <path d="M256 256 374 176a143 143 0 0 0-118-63Z" fill="#fff" fill-opacity=".18"/>
   <circle cx="343" cy="182" r="12" fill="#fff"/>
-  <text x="256" y="293" text-anchor="middle" font-family="sans-serif" font-size="116" font-weight="800" fill="#fff">틈</text>
+  <text x="256" y="293" text-anchor="middle" font-family="sans-serif" font-size="116" font-weight="800" fill="#fff">자</text>
 </svg>
