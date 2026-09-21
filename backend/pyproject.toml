@@ -17,8 +17,6 @@ license = { text = "MIT" }
 
 dependencies = [
     "flask>=3.1",
-    "flask-restful>=0.3.10",
-    "flask-cors>=6.0.2",
     "requests>=2.32",
     # hiredis is the C parser redis-py picks up automatically when present.
     "redis[hiredis]>=7.0",
@@ -69,9 +67,9 @@ dev = [
 default-groups = ["dev"]
 
 [tool.uv.sources]
-# Fork carrying the Dynapath bypass. Pinned to the branch; uv records the
-# resolved commit in uv.lock, so builds stay reproducible.
-korail2 = { git = "https://github.com/dhfhfk/korail2.git", rev = "bypassDynapath" }
+# Fork carrying the Dynapath bypass. Pinned to the commit its bypassDynapath
+# branch pointed at: the branch can move, and this package handles credentials.
+korail2 = { git = "https://github.com/dhfhfk/korail2.git", rev = "4b134266fff097ea0fd54e9f760cb128b6c8f878" }
 korail-mobile-api = { git = "https://github.com/yakisoba0728/korail-mobile-api.git", rev = "e798fbcf08e56297b4d16a5c300bd7a4f167722d" }
 
 [build-system]
@@ -171,8 +169,8 @@ no_implicit_optional = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-# Neither of these ships type information.
-module = ["korail2.*", "flask_restful.*"]
+# Ships no type information.
+module = ["korail2.*"]
 ignore_missing_imports = true
 
 # ----------------------------------------------------------------- coverage

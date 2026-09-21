@@ -582,9 +582,12 @@ class MiniAppGateway:
 
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(account.korail_id, account.korail_pw):
-            self.storage.delete_onboarded_account(chat_id)
+            # login() answers False for a timeout as well as for a refused
+            # password, so a failure here is no proof the account is stale.
+            # Deleting it would cost the user their link over a Korail hiccup.
             raise MiniAppError(
-                "코레일 로그인이 만료됐어요. 계정을 다시 연결해 주세요.",
+                "코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, "
+                "계속되면 계정을 다시 연결해 주세요.",
                 status=401,
             )
 

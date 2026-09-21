@@ -150,6 +150,7 @@ export class TeumApp {
   private seatDialog: SeatDialogState | null = null;
   private cancellationTargets: CancellationWaitPlan["trains"] = [];
   private notifications: NotificationItem[] = [];
+  private notificationsLoaded = false;
   private authGate: "choose" | "admin" | "guest" = "choose";
   private authMode: "login" | "register" = "login";
   private invitePreview = "";
@@ -205,6 +206,7 @@ export class TeumApp {
     this.notifySaveVersion += 1;
     this.cancellationTargets = [];
     this.notifications = [];
+    this.notificationsLoaded = false;
     this.authGate = "choose";
     this.authMode = "login";
     this.invitePreview = "";
@@ -321,9 +323,9 @@ export class TeumApp {
       if (error instanceof ApiError && error.kind === "auth") {
         this.handleError(error);
         return;
-      } else {
-        this.connection = "offline";
       }
+      // A server that answered with an error is reachable; only the state is unconfirmed.
+      this.connection = error instanceof ApiError && error.kind === "server" ? "unknown" : "offline";
       if (this.view === "home" || this.view === "activity") {
         this.render();
       }
@@ -560,7 +562,9 @@ export class TeumApp {
       ${this.trainListTruncated ? '<div class="notice warning">목록이 길어 일부 열차만 보여드려요. 시간대 전체 검색은 그대로 이용할 수 있어요.</div>' : ""}
       <div class="train-list">${list}</div>
       ${this.renderError()}
-      ${this.cancellationTargets.length ? `<button class="button primary sticky-action" data-action="start-cancellation-wait">취소표 대기 시작 <span>→</span></button>` : ""}`;
+      ${this.renderAccessRequest()}
+      ${this.cancellationTargets.length ? `<button class="button primary sticky-action" data-action="start-cancellation-wait">취소표 대기 시작 <span>→</span></button>` : ""}
+      <button class="button secondary" data-action="trains-next">시간대 전체 검색 · 조건 확인 <span>→</span></button>`;
   }
 
   private renderSeatDialog(): string {
@@ -989,7 +993,7 @@ export class TeumApp {
       <section class="notice calm"><b>${waitlist ? "코레일 예약 대기만 신청해요." : "예약까지만 자동으로 진행해요."}</b><p>${waitlist ? "빈자리 자동 감시는 함께 돌리지 않아요. 배정 결과는 코레일 앱이나 홈페이지에서도 확인해 주세요." : "좌석이 예약되면 알려드려요. 결제는 안내된 기한 안에 코레일에서 직접 해 주세요."}</p></section>
       <label class="field favourite-name"><span>즐겨찾기 이름 <small>선택</small></span><input id="favourite-name" maxlength="40" placeholder="예: 주말에 집으로"></label>
       ${this.renderError()}
-      ${this.accessRequired ? `<button class="button secondary" data-action="request-access" ${this.accessRequestPending ? "disabled" : ""}>${this.accessRequestPending ? "사용 승인 요청을 기다리는 중" : "운영자에게 사용 승인 요청"}</button>` : ""}
+      ${this.renderAccessRequest()}
       <button class="button primary" data-action="start-now">${waitlist ? "코레일 예약 대기 신청" : "지금 빈자리 찾기"} <span>${waitlist ? "→" : "⌁"}</span></button>
       <button class="button ghost" data-action="schedule-toggle" ${capabilities.scheduledSearch && !waitlist ? "" : "disabled"}>검색 시작 시간 예약</button>
       ${waitlist ? '<p class="availability center">예약 대기는 선택한 열차에 바로 신청해요.</p>' : capabilities.scheduledSearch ? "" : '<p class="availability center">검색 예약은 현재 서버에서 지원하지 않아요.</p>'}
@@ -1028,12 +1032,20 @@ export class TeumApp {
 
   private renderNotifications(): string {
     const capable = this.state!.capabilities.durableNotifications;
-    const items = this.notifications.length
+    // "No notifications" is only true once the server has answered.
+    const [title, text] = !capable
+      ? ["알림 내역을 불러올 수 없어요", "현재 서버에서는 앱 알림 내역을 제공하지 않아요."]
+      : this.notificationsLoaded
+        ? ["새 알림이 없어요", "검색이나 예약 상태가 바뀌면 여기에 알려드려요."]
+        : this.error
+          ? ["알림을 불러오지 못했어요", "잠시 후 알림 화면을 다시 열어 주세요."]
+          : ["알림을 불러오는 중이에요", "잠시만 기다려 주세요."];
+    const items = this.notificationsLoaded && this.notifications.length
       ? this.notifications
           .map((item) => `<article class="notification"><span class="notification-icon">${item.kind === "reservation" ? "예약" : "검색"}</span><div><b>${escapeHtml(item.text)}</b><small>${escapeHtml(formatStamp(item.createdAt))}</small></div></article>`)
           .join("")
-      : `<div class="empty"><span>◌</span><h2>${capable ? "새 알림이 없어요" : "알림 내역을 불러올 수 없어요"}</h2><p>${capable ? "검색이나 예약 상태가 바뀌면 여기에 알려드려요." : "현재 서버에서는 앱 알림 내역을 제공하지 않아요."}</p></div>`;
-    return `${this.renderSubhead("알림", "검색과 예약 소식")}${items}`;
+      : `<div class="empty"><span>◌</span><h2>${title}</h2><p>${text}</p></div>`;
+    return `${this.renderSubhead("알림", "검색과 예약 소식")}${this.renderError()}${items}`;
   }
 
   private renderSettings(): string {
@@ -1120,6 +1132,11 @@ export class TeumApp {
 
   private renderSubhead(eyebrow: string, title: string): string {
     return `<header class="subhead"><button class="back-button" data-action="back" type="button" aria-label="뒤로가기" title="뒤로가기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path><path d="M9 12h10"></path></svg></button><div><p class="eyebrow">${escapeHtml(eyebrow)}</p><h1>${escapeHtml(title)}</h1></div></header>`;
+  }
+
+  private renderAccessRequest(): string {
+    if (!this.accessRequired) return "";
+    return `<button class="button secondary" data-action="request-access" ${this.accessRequestPending ? "disabled" : ""}>${this.accessRequestPending ? "사용 승인 요청을 기다리는 중" : "운영자에게 사용 승인 요청"}</button>`;
   }
 
   private renderError(): string {
@@ -1295,13 +1312,21 @@ export class TeumApp {
 
   private async loadNotifications(): Promise<void> {
     if (!this.state?.capabilities.durableNotifications) return;
-    await this.run(async (isCurrent) => {
+    // Not run(): it drops the request while the app is busy, which would read as "no notifications".
+    const generation = this.generation;
+    try {
       const result = await this.api.notifications();
-      if (!isCurrent()) return;
+      if (generation !== this.generation) return;
       this.notifications = result.items;
+      this.notificationsLoaded = true;
       this.state!.pushAvailable = result.pushAvailable;
-      this.render();
-    });
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.handleError(error);
+      // handleError stays silent for a stale token; the screen must still leave "loading".
+      if (generation === this.generation && !this.error) this.error = "알림을 불러오지 못했어요.";
+    }
+    if (generation === this.generation) this.render();
   }
 
   private async run(work: (isCurrent: () => boolean) => Promise<void>): Promise<void> {
@@ -1403,14 +1428,6 @@ export class TeumApp {
       this.render();
       return;
     }
-    const train = button.dataset.train;
-    if (train) {
-      this.selectedTrains = this.selectedTrains.includes(train)
-        ? this.selectedTrains.filter((number) => number !== train)
-        : this.conditions?.waitlist ? [train] : [...this.selectedTrains, train];
-      this.render();
-      return;
-    }
     const favouriteId = button.dataset.useFavourite;
     if (favouriteId) {
       const favourite = this.state?.favourites.find((item) => item.id === favouriteId);
@@ -1438,7 +1455,7 @@ export class TeumApp {
         this.back();
         break;
       case "reload":
-        void this.reload();
+        if (!this.busy) void this.reload();
         break;
       case "demo-enter":
         this.view = "home";
@@ -1672,7 +1689,10 @@ export class TeumApp {
   private async changeNotify(direction: number): Promise<void> {
     const state = this.state!;
     const previous = state.notifyMinutes;
-    const current = NOTIFY_STEPS.indexOf(previous);
+    // A value the server kept from elsewhere sits between steps: move to the neighbouring step.
+    const above = NOTIFY_STEPS.findIndex((step) => step >= previous);
+    const at = above < 0 ? NOTIFY_STEPS.length : above;
+    const current = NOTIFY_STEPS[at] === previous || direction < 0 ? at : at - 1;
     const next = Math.min(NOTIFY_STEPS.length - 1, Math.max(0, current + direction));
     const minutes = NOTIFY_STEPS[next]!;
     if (minutes === previous) return;

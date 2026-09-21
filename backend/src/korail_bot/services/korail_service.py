@@ -218,11 +218,12 @@ class KorailService(RailService):
             candidate.close()
             self._korail_instance = None
             self._logged_in = False
+            # The exception's text is not logged: it may quote the request,
+            # and the request carries the password.
             logger.warning(
-                "Korail login failed for user %s (%s: %s)",
+                "Korail login failed for user %s (%s)",
                 mask_phone(username),
                 type(exc).__name__,
-                exc,
             )
             return False
 

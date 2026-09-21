@@ -172,3 +172,21 @@ print('auth-only ready')
     )
     assert result.returncode == 0, result.stderr
     assert "auth-only ready" in result.stdout
+
+
+def test_a_lost_lease_ends_the_process_instead_of_serving_on(tmp_path):
+    from korail_bot.mobile.config import MobileConfig
+    from korail_bot.mobile.runtime import MobileRuntime
+
+    lost = []
+    runtime = MobileRuntime(
+        MobileConfig(str(tmp_path / "app.sqlite3"), "a" * 40, "redis://localhost:1/1"),
+        redis_client=fakeredis.FakeRedis(decode_responses=True),
+        on_lease_lost=lambda: lost.append(True),
+    )
+    runtime.storage.redis.set("runtime_owner", "another-runtime")
+
+    runtime._run()
+
+    assert lost == [True]
+    assert runtime.stop_event.is_set()
