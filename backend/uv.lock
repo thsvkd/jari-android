@@ -867,7 +867,7 @@ requires-dist = [
     { name = "flask-cors", specifier = ">=6.0.2" },
     { name = "flask-restful", specifier = ">=0.3.10" },
     { name = "korail-mobile-api", git = "https://github.com/yakisoba0728/korail-mobile-api.git?rev=e798fbcf08e56297b4d16a5c300bd7a4f167722d" },
-    { name = "korail2", git = "https://github.com/dhfhfk/korail2.git?rev=bypassDynapath" },
+    { name = "korail2", git = "https://github.com/dhfhfk/korail2.git?rev=4b134266fff097ea0fd54e9f760cb128b6c8f878" },
     { name = "psutil", specifier = ">=7.0" },
     { name = "redis", extras = ["hiredis"], specifier = ">=7.0" },
     { name = "requests", specifier = ">=2.32" },
@@ -903,7 +903,7 @@ dependencies = [
 [[package]]
 name = "korail2"
 version = "0.4.0"
-source = { git = "https://github.com/dhfhfk/korail2.git?rev=bypassDynapath#4b134266fff097ea0fd54e9f760cb128b6c8f878" }
+source = { git = "https://github.com/dhfhfk/korail2.git?rev=4b134266fff097ea0fd54e9f760cb128b6c8f878#4b134266fff097ea0fd54e9f760cb128b6c8f878" }
 dependencies = [
     { name = "pycryptodome" },
     { name = "requests" },
