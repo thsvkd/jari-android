@@ -2,7 +2,7 @@
 # Deploy the 자리났다 mobile API on pi5-s2. Does not start or restart korail-bot.
 set -euo pipefail
 
-ROOT="/home/pi/Workspace/teum-android"
+ROOT="${JARI_ROOT:-/home/pi/Workspace/jari-android}"
 GATEWAY="/home/pi/Workspace/maintain/gateway"
 
 if [[ ! -d "$ROOT/backend" ]]; then
