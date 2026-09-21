@@ -269,7 +269,7 @@ class MobileGateway(MiniAppGateway):
             raise MiniAppError("코레일 계정을 연결해 주세요.", 428)
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(account.korail_id, account.korail_pw):
-            raise MiniAppError("코레일에 로그인하지 못했어요. 계정을 다시 연결해 주세요.", 428)
+            raise MiniAppError("코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요.", 428)
         return rail
 
     @staticmethod
@@ -302,7 +302,7 @@ class MobileGateway(MiniAppGateway):
 
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(credentials.korail_id, credentials.korail_pw):
-            raise MiniAppError("코레일에 로그인하지 못했어요. 계정을 다시 연결해 주세요.", 428)
+            raise MiniAppError("코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요.", 428)
         try:
             registered = rail.request_waitlist(
                 dep_date=submission.dep_date,
@@ -325,13 +325,21 @@ class MobileGateway(MiniAppGateway):
                 502,
             ) from exc
 
-        self.telegram.send_message(
-            chat_id,
-            f"{selected_trains[0]}편 코레일 예약 대기를 신청했어요. "
-            "배정 결과는 코레일 앱이나 홈페이지에서도 확인해 주세요.",
-        )
-        session.reset()
-        self.storage.save_user_session(session)
+        try:
+            self.telegram.send_message(
+                chat_id,
+                f"{selected_trains[0]}편 코레일 예약 대기를 신청했어요. "
+                "배정 결과는 코레일 앱이나 홈페이지에서도 확인해 주세요.",
+            )
+            session.reset()
+            self.storage.save_user_session(session)
+        except Exception as exc:
+            # Korail already holds the standby; failing here would invite a second one.
+            logger.error(
+                "Standby registered but the follow-up failed for chat_id=%s (%s)",
+                chat_id,
+                type(exc).__name__,
+            )
         return {"started": False, "waitlisted": True, "trainNo": registered["train_no"]}
 
     @serialized_operation

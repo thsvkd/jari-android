@@ -25,8 +25,9 @@ logger = get_logger(__name__)
 
 
 class MobileRuntime:
-    def __init__(self, config, *, redis_client=None, push=None):
+    def __init__(self, config, *, redis_client=None, push=None, on_lease_lost=None):
         self.config = config
+        self.on_lease_lost = on_lease_lost
         self.identity = IdentityStore(config.database)
         self.storage = (
             MobileStorage(secret=config.secret, url=config.redis_url, client=redis_client)
@@ -99,6 +100,11 @@ class MobileRuntime:
                 if self.storage:
                     if not self.storage.redis.renew_lease(self.owner, 120):
                         logger.error("Mobile runtime lease lost; stopping searches")
+                        # Another runtime may own the namespace now, and the HTTP
+                        # server would go on writing to it. End the process before
+                        # tearing down, so requests are refused rather than failed.
+                        if self.on_lease_lost:
+                            self.on_lease_lost()
                         self.stop()
                         return
                     self.remind_pending()

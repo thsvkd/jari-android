@@ -47,7 +47,9 @@ def main():
 
         from korail_bot.mobile.runtime import MobileRuntime
 
-        runtime = MobileRuntime(config)
+        runtime = MobileRuntime(
+            config, on_lease_lost=lambda: os.kill(os.getpid(), signal.SIGTERM)
+        )
 
         def shutdown(signum, frame):
             raise KeyboardInterrupt
