@@ -111,7 +111,7 @@ def test_mobile_worker_construction_and_callback_never_construct_bot(tmp_path, m
     monkeypatch.setattr(
         MobileSearchProcess,
         "_read_credentials",
-        staticmethod(lambda: ("01012345678", "rail password")),
+        staticmethod(lambda: ("01012345678", "rail password", "")),
     )
     monkeypatch.setattr(
         MobileSearchProcess,

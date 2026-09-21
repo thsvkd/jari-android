@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 from korail_bot.config.settings import settings
@@ -21,6 +22,10 @@ from korail_bot.utils.privacy import mask_phones
 from korail_bot.utils.timezone import format_user_datetime
 
 logger = get_logger(__name__)
+
+# Names the thread that feeds a child its credentials and seat plan, so it is
+# identifiable in a thread dump and joinable by a test.
+_STDIN_THREAD_PREFIX = "search-stdin-"
 
 
 class ReservationService:
@@ -122,7 +127,17 @@ class ReservationService:
                 # which is what lets a search started by an older build resume
                 # against the new one.
                 search_params.seat_preference,
-                search_params.seat_plan_json,
+                # The seat plan itself travels on stdin beside the credentials:
+                # a whole-formation plan is far past the 128KB a single argv
+                # string may hold. The slot keeps its position, because every
+                # argument before it would change meaning otherwise and a
+                # resumed search depends on those positions, and it carries a
+                # marker saying where the plan really is. A child from an older
+                # build reads the marker as a plan, cannot parse it, and refuses
+                # to start - which is the outcome to want: it has no way to
+                # honour the plan, and searching for any free seat would book
+                # one the user never picked.
+                "stdin" if search_params.seat_plan_json else "",
             ]
 
             # Start background process.
@@ -154,19 +169,41 @@ class ReservationService:
             if child_stdin is None:
                 raise RuntimeError(f"No stdin pipe for search process {proc.pid}")
 
-            # Hand over credentials and close the pipe so the child stops waiting.
+            # Hand over credentials and the seat plan, then close the pipe so
+            # the child stops waiting.
             #
             # A child that died on startup makes this a write to a pipe with no
             # reader. That is not the failure worth reporting - the death is -
             # so it is noted and left to the check below to describe.
-            credentials = json.dumps({"username": username, "password": password})
-            try:
-                child_stdin.write(credentials.encode("utf-8") + b"\n")
-                child_stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                logger.warning(f"Could not hand credentials to process {proc.pid}: {e}")
-            finally:
-                child_stdin.close()
+            # Written from a thread, because a seat plan runs to hundreds of
+            # kilobytes and the pipe buffer holds 64KB: the rest of the write
+            # blocks until the child drains it. The mobile runtime makes this
+            # call while holding one lock shared by every user, so a child that
+            # neither reads nor exits would otherwise freeze every start,
+            # cancel and dead-search sweep on the server, with nothing left to
+            # time it out. _confirm_started below still decides whether the
+            # child lives; a child that died takes EPIPE here and ends the
+            # thread.
+            handover = json.dumps(
+                {
+                    "username": username,
+                    "password": password,
+                    "seat_plan": search_params.seat_plan_json,
+                }
+            )
+
+            def hand_over():
+                try:
+                    child_stdin.write(handover.encode("utf-8") + b"\n")
+                    child_stdin.flush()
+                except (BrokenPipeError, OSError) as e:
+                    logger.warning(f"Could not hand credentials to process {proc.pid}: {e}")
+                finally:
+                    child_stdin.close()
+
+            threading.Thread(
+                target=hand_over, name=f"{_STDIN_THREAD_PREFIX}{proc.pid}", daemon=True
+            ).start()
 
             # Keep what a restart would need to log in again. Deleted as soon
             # as the search ends, whichever way it ends.

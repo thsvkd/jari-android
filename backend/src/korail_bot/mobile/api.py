@@ -4,7 +4,7 @@ import threading
 from functools import wraps
 
 from flask import Flask, g, jsonify, request
-from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 
 from korail_bot.mobile.identity import AuthError, timestamp
 from korail_bot.services.mini_app_gateway import MiniAppError
@@ -15,7 +15,10 @@ IDENTITY_FIELDS = {"chatId", "chat_id", "userId", "user_id", "storage_id", "iden
 
 def create_app(identity, gateway, notifications=None, *, origins=(), booking_available=True):
     app = Flask(__name__)
-    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
+    # This is what bounds the total size of a seat plan: one seat target is
+    # ~180 bytes of JSON, and "every seat in the train" for a few trains has
+    # to fit. The per-train count in seat_plan.py is a sanity bound, not this.
+    app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
     # The runtime is single-process; serialize each user's service mutations
     # so two simultaneous taps cannot launch competing search subprocesses.
     locks = [threading.RLock() for _ in range(128)]
@@ -31,6 +34,12 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
         if status in (502, 504):
             status = 503
         return jsonify(error=str(exc)), status
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def too_large(exc):
+        # Only a seat selection can realistically reach the body limit, and
+        # "요청 내용을 확인해 주세요" leaves the user nothing to act on.
+        return jsonify(error="좌석 범위가 너무 커요. 선택한 좌석을 줄여 주세요."), 413
 
     @app.errorhandler(HTTPException)
     def http_error(exc):

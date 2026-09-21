@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from typing import Any
 
 MAX_PLAN_TRAINS = 30
-MAX_TARGETS_PER_TRAIN = 200
+# A trust boundary, not a budget for the user: the longest real formation is
+# under 1000 seats, so "every seat in the train" has to fit comfortably. What
+# actually bounds a plan's size is the API body limit in mobile/api.py.
+MAX_TARGETS_PER_TRAIN = 2000
 MAX_TEXT_LENGTH = 64
 SEAT_CLASSES = ("general", "special")
 SEAT_STRATEGIES = ("independent", "consecutive")

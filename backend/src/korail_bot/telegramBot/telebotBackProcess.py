@@ -25,6 +25,7 @@ from korail_bot.models import (
     PaymentStatus,
     ReservationOutcome,
     ReservationPaymentStatus,
+    SeatPlanError,
     SeatPreference,
     SingleReservationInfo,
     parse_seat_plan,
@@ -106,7 +107,7 @@ class BackgroundReservationProcess:
             logger.error("Insufficient arguments")
             sys.exit(1)
 
-        self.username, self.password = self._read_credentials()
+        self.username, self.password, stdin_seat_plan = self._read_credentials()
         self.dep_date = sys.argv[1]
         self.src_locate = sys.argv[2]
         self.dst_locate = sys.argv[3]
@@ -134,9 +135,7 @@ class BackgroundReservationProcess:
         # absent, which is how a search started before seats could be asked
         # for arrives - means any seat, the behaviour that predates this.
         self.seat_preference = SeatPreference.decode(sys.argv[12] if len(sys.argv) > 12 else None)
-        self.seat_plan: CancellationWaitPlan | None = parse_seat_plan(
-            sys.argv[13] if len(sys.argv) > 13 else None
-        )
+        self.seat_plan: CancellationWaitPlan | None = self._seat_plan_from(stdin_seat_plan)
 
         # Parse train type
         self.train_type = self._parse_train_type(self.train_type_str)
@@ -186,6 +185,27 @@ class BackgroundReservationProcess:
         )
         logger.info("========================================")
 
+    @staticmethod
+    def _seat_plan_from(stdin_seat_plan: str) -> CancellationWaitPlan | None:
+        """
+        Read which exact seats may be booked, from wherever argv says they are.
+
+        "stdin" in the slot means the plan came down the same line as the
+        credentials, because a plan covering a whole formation is past what one
+        argv string may hold. Any other value is the plan itself, which is how
+        a search started by an older parent arrives.
+
+        A plan that was meant to be here and is not stops the search rather
+        than quietly widening it. The alternative is booking whatever seat
+        comes free, which is a seat the user never picked.
+        """
+        plan_slot = sys.argv[13] if len(sys.argv) > 13 else ""
+        if plan_slot == "stdin":
+            if not stdin_seat_plan:
+                raise SeatPlanError("좌석 계획을 읽을 수 없어요.")
+            plan_slot = stdin_seat_plan
+        return parse_seat_plan(plan_slot)
+
     def _runtime_services(self):
         """Default bot transport; independent runtimes inject their own services."""
         return RedisStorage(), TelegramService(settings.TELEGRAM_BOT_TOKEN)
@@ -193,14 +213,15 @@ class BackgroundReservationProcess:
     @staticmethod
     def _read_credentials() -> tuple:
         """
-        Read Korail credentials from the first line of stdin.
+        Read Korail credentials and the seat plan from the first line of stdin.
 
         The parent writes a single JSON object and closes the pipe. Reading
         them here keeps the password out of argv, where any local process
-        could see it.
+        could see it - and keeps the seat plan off a command line that cannot
+        hold one that covers a whole train.
 
         Returns:
-            Tuple of (username, password)
+            Tuple of (username, password, seat_plan_json)
         """
         try:
             raw = sys.stdin.readline()
@@ -219,6 +240,8 @@ class BackgroundReservationProcess:
             payload = json.loads(raw)
             username = payload["username"]
             password = payload["password"]
+            # Absent from a parent that predates moving the plan off argv.
+            seat_plan = payload.get("seat_plan") or ""
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.error(f"Malformed credentials payload on stdin: {type(e).__name__}")
             sys.exit(1)
@@ -227,7 +250,7 @@ class BackgroundReservationProcess:
             logger.error("Empty Korail credentials received")
             sys.exit(1)
 
-        return username, password
+        return username, password, seat_plan
 
     def _reservation_time_context(self, reservation) -> str:
         """Show a reserved train on both the user's clock and the railway clock."""

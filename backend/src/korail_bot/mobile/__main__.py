@@ -61,7 +61,9 @@ def main():
                 host=args.host,
                 port=args.port,
                 threads=8,
-                max_request_body_size=16384,
+                # One limit, set in create_app. A smaller number here rejects
+                # a seat plan before Flask ever sees it.
+                max_request_body_size=runtime.app.config["MAX_CONTENT_LENGTH"],
                 clear_untrusted_proxy_headers=True,
             )
         finally:

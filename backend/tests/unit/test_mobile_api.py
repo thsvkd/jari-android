@@ -1,5 +1,6 @@
 """Authentication gates must apply before any booking service runs."""
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -88,10 +89,13 @@ def test_malformed_oversized_rate_limited_and_no_callback(api):
     alice = signup(api, "alice")
     headers = {"Authorization": "Bearer " + alice["token"]}
     assert client.post("/api/mobile/search", headers=headers, json=[]).status_code == 400
-    assert (
-        client.post("/api/mobile/search", headers=headers, json={"x": "x" * 17000}).status_code
-        == 413
+    # The body limit is what bounds a seat plan, so the refusal has to say
+    # which choice was too big rather than "요청 내용을 확인해 주세요".
+    oversized = client.post(
+        "/api/mobile/search", headers=headers, json={"x": "x" * (2 * 1024 * 1024)}
     )
+    assert oversized.status_code == 413
+    assert "좌석" in oversized.json["error"]
     assert client.get("/reservation-callback").status_code == 404
     assert client.get("/check_payment").status_code == 404
     for _ in range(10):
@@ -199,6 +203,47 @@ def test_only_admin_can_create_invites(api):
     )
     assert guest.status_code == 200
     assert guest.json["user"]["role"] == "member"
+
+
+def test_a_whole_car_seat_plan_fits_inside_the_body_limit(api):
+    # The body limit is the only thing bounding a seat plan, so a plan the app
+    # can really produce - "apply to every car" over a long formation - has to
+    # arrive intact rather than as a 413.
+    client, identity, gateway = api
+    alice = signup(api, "alice")
+    headers = {"Authorization": "Bearer " + alice["token"]}
+    targets = [
+        {
+            "carNo": 1 + index // 60,
+            "seatNo": f"{index:06d}",
+            "label": f"{index % 60 + 1}",
+            "row": index % 60 // 4 + 1,
+            "column": "ABCD"[index % 4],
+            "direction": "forward",
+            "floor": "1",
+            "adjacencyGroup": f"{index % 60 // 4 + 1}:left",
+            "position": index % 4 + 1,
+        }
+        for index in range(900)
+    ]
+    payload = {
+        "conditions": {
+            "seat_plan": {
+                "strategy": "independent",
+                "passengerCount": 1,
+                "trains": [{"trainNo": "015", "seatClass": "general", "targets": targets}],
+            }
+        }
+    }
+
+    response = client.post("/api/mobile/search", headers=headers, json=payload)
+
+    # Well past the 16KiB the limit used to be, so this fails if it goes back.
+    assert len(json.dumps(payload)) > 100_000
+    assert response.status_code == 200
+    gateway.start_search.assert_called_once_with(
+        identity.authenticate(alice["token"])["storage_id"], payload
+    )
 
 
 def test_overly_nested_payload_is_a_client_error(api):

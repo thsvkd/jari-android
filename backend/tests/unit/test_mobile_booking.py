@@ -263,7 +263,7 @@ def test_waitlist_condition_is_validated_and_preserved():
         {
             "v": 1,
             "action": "prepare_search",
-            "dep_date": "20260920",
+            "dep_date": (utc_now() + timedelta(days=3)).strftime("%Y%m%d"),
             "src_station": "서울",
             "dst_station": "부산",
             "dep_time": "0900",
