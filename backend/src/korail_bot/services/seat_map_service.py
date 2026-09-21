@@ -86,7 +86,7 @@ class SeatMapService:
         seats: list[dict] = []
         for seat in response.seats:
             parsed = parse_seat_label(seat.specification)
-            row, column = parsed if parsed else (None, "")
+            row, column = parsed if parsed else self._numeric_grid(seat.specification)
             side, position = self._seat_side(column)
             family_label = ""
             message = seat.message.strip()
@@ -124,6 +124,35 @@ class SeatMapService:
                 for window in response.windows
             ],
         }
+
+    @staticmethod
+    def _numeric_grid(label: str | None) -> tuple[int | None, str]:
+        """
+        Place a plainly numbered seat on the same row/column grid as a KTX one.
+
+        무궁화호, ITX-새마을 and 누리로 label seats "1".."72" with no column
+        letter, so the label parser cannot read them and the app would drop
+        every one of those seats. They are numbered four abreast across the
+        car, which is exactly what A·B·C·D already mean here: 1 and 4 at the
+        windows, 2 and 3 on the aisle.
+
+        ponytail: assumes 4-abreast numbering. A car of a different width would
+        need arrangement_code/layout_type read instead of this.
+        """
+        text = str(label or "").strip()
+        # ASCII digits only. "１２" and the Arabic-Indic digits satisfy isdigit()
+        # and int() reads them as 12, which would quietly seat someone in a
+        # place the label never named. A superscript "²" satisfies it too, and
+        # int() then raises.
+        if not (text.isascii() and text.isdigit()):
+            return None, ""
+        number = int(text)
+        # The ceiling is what seat_plan.py will take back: a row past 999 fails
+        # _bounded_int, and that rejects the whole plan rather than this one
+        # seat. No formation numbers a car anywhere near this high.
+        if not 1 <= number <= 999 * 4:
+            return None, ""
+        return (number - 1) // 4 + 1, "ABCD"[(number - 1) % 4]
 
     @staticmethod
     def _seat_side(column: str) -> tuple[str, int]:

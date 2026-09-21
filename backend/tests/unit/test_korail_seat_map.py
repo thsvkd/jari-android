@@ -332,6 +332,68 @@ def test_seat_map_serializes_real_layout_without_inventing_family_seats():
     assert all(not seat["familyLabel"] for seat in described["seats"])
 
 
+def test_numeric_seat_labels_get_a_grid_so_the_app_can_show_them():
+    # 무궁화호·ITX-새마을·누리로 label seats "1".."72" with no column letter.
+    # Without a row the app drops every seat and the car looks empty.
+    service = SeatMapService()
+    described = service.describe_inventory(
+        inventory(
+            physical_seat(seat_no="000001", label="1"),
+            physical_seat(seat_no="000002", label="2"),
+            physical_seat(seat_no="000004", label="4"),
+            physical_seat(seat_no="000005", label="5"),
+        )
+    )
+    seats = {seat["label"]: seat for seat in described["seats"]}
+
+    assert [(seats[n]["row"], seats[n]["column"]) for n in ("1", "2", "4", "5")] == [
+        (1, "A"),
+        (1, "B"),
+        (1, "D"),
+        (2, "A"),
+    ]
+    # 1·2 sit together, 3·4 sit together, and 5 starts the next row.
+    assert seats["1"]["adjacencyGroup"] == seats["2"]["adjacencyGroup"] == "1:left"
+    assert seats["4"]["adjacencyGroup"] == "1:right"
+    assert seats["5"]["adjacencyGroup"] == "2:left"
+    assert (seats["1"]["position"], seats["2"]["position"]) == (1, 2)
+
+
+def test_unreadable_seat_label_still_has_no_row():
+    service = SeatMapService()
+    described = service.describe_inventory(inventory(physical_seat(label="창측")))
+
+    assert described["seats"][0]["row"] is None
+    assert described["seats"][0]["column"] == ""
+    assert described["seats"][0]["adjacencyGroup"] == ""
+    assert described["seats"][0]["label"] == "창측"
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        ("01", (1, "A")),
+        ("72", (18, "D")),
+        # Nothing to place, and nothing that may raise either: int() chokes on
+        # "²", while "１２" and the Arabic-Indic digits would be read as 12 and
+        # seat someone where the label never said.
+        ("0", (None, "")),
+        ("²", (None, "")),
+        ("１２", (None, "")),
+        ("٤", (None, "")),
+        # Past this the derived row fails seat_plan.py's 1..999 bound, and that
+        # rejects the whole plan rather than this one seat.
+        ("4000", (None, "")),
+    ],
+)
+def test_numeric_grid_places_only_plain_ascii_seat_numbers(label, expected):
+    described = SeatMapService().describe_inventory(inventory(physical_seat(label=label)))
+    seat = described["seats"][0]
+
+    assert (seat["row"], seat["column"]) == expected
+    assert seat["label"] == label
+
+
 def test_attribute_code_alone_does_not_invent_family_seat():
     seat = physical_seat()
     seat = PhysicalSeat(
