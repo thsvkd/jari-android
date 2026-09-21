@@ -10,6 +10,7 @@ import type {
   PendingReservation,
   SeatCarOption,
   SeatClass,
+  SeatInventoriesResult,
   SeatInventory,
   SeatMapSeat,
   SearchResult,
@@ -170,6 +171,11 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
     seatInventory: (trainKey: string, carNo: number, seatClass: SeatClass, passengerCount: number) =>
       request<SeatInventory>(
         `/trains/${encodeURIComponent(trainKey)}/cars/${carNo}/seats?seatClass=${encodeURIComponent(seatClass)}&passengerCount=${passengerCount}`,
+        { method: "GET" },
+      ),
+    seatInventories: (trainKey: string, seatClass: SeatClass, passengerCount: number) =>
+      request<SeatInventoriesResult>(
+        `/trains/${encodeURIComponent(trainKey)}/seats?seatClass=${encodeURIComponent(seatClass)}&passengerCount=${passengerCount}`,
         { method: "GET" },
       ),
     reserveDesignated: (payload: { trainKey: string; seatClass: SeatClass; passengerCount: number; carNo: number; seats: SeatMapSeat[] }) =>

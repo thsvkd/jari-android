@@ -419,6 +419,245 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
     runtime.storage.close()
 
 
+def car_inventory(car_no):
+    """One car holding one sellable seat."""
+    seat = PhysicalSeat(
+        seat_no=f"{car_no:06d}",
+        sale_possible="Y",
+        direction_code="1",
+        other_attribute_code="000",
+        requested_attribute_code="000",
+        floor=None,
+        specification="5A",
+        sequence_no="1",
+        message_code="",
+        message="",
+        visual_message_division_code="",
+    )
+    return SeatInventoryResponse(
+        layout_type=2,
+        arrangement_code="4",
+        remaining_count=1,
+        total_count=70,
+        seats=(seat,),
+        car_no=car_no,
+    )
+
+
+def listed_train(tmp_path, monkeypatch, *, cars, inventories):
+    """A runtime with one listed train, ready for a whole-formation seat read."""
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = MobileRuntime(
+        MobileConfig(str(tmp_path / "identity.sqlite3"), "a" * 40, "redis://localhost:1/1"),
+        redis_client=client,
+    )
+    rail = MagicMock()
+    rail.login.return_value = True
+    rail.seat_layout_is_reference.return_value = False
+    train = SimpleNamespace(
+        train_no="015",
+        departure_date=(utc_now() + timedelta(days=3)).strftime("%Y%m%d"),
+        departure_time="090000",
+        arrival_time="113000",
+        departure_station_name="서울",
+        arrival_station_name="부산",
+        train_class_name="KTX",
+        general_reservation_code="11",
+        special_reservation_code="13",
+        wait_reservation_flag=" 9",
+    )
+    rail.search_selectable_trains.return_value = [train]
+    rail.describe_waitlist_train.return_value = {
+        "no": "015",
+        "label": "09:00~11:30 KTX",
+        "dep_time": "090000",
+        "arr_time": "113000",
+        "name": "KTX",
+        "soldout": False,
+        "waitlistEligible": True,
+    }
+    rail.seat_cars.return_value = SeatCarListResponse(
+        cars=tuple(SeatCar(car_no, "일반실", 1, ()) for car_no in cars)
+    )
+    rail.seat_inventory.side_effect = inventories
+    monkeypatch.setattr(runtime.gateway.conversation, "_rail_service", lambda owner: rail)
+    alice = runtime.identity.register(
+        "alice", "a long secure passphrase", runtime.identity.create_invite()
+    )
+    owner = runtime.identity.authenticate(alice["token"])["storage_id"]
+    runtime.storage.save_onboarded_account(
+        OnboardedAccount(chat_id=owner, korail_id="01012345678", korail_pw="rail-password")
+    )
+    http = runtime.app.test_client()
+    headers = {"Authorization": "Bearer " + alice["token"]}
+    listed = http.post(
+        "/api/mobile/trains",
+        headers=headers,
+        json={
+            "v": 1,
+            "action": "prepare_search",
+            "dep_date": train.departure_date,
+            "src_station": "서울",
+            "dst_station": "부산",
+            "dep_time": "0900",
+            "max_dep_time": "1800",
+            "train_type": "1",
+            "seat_option": "2",
+            "passenger_count": 1,
+            "seat_strategy": "1",
+        },
+    )
+    assert listed.status_code == 200, listed.json
+    return runtime, http, headers, listed.json["trains"][0]["trainKey"], rail
+
+
+def test_whole_formation_read_returns_every_car_in_one_request(tmp_path, monkeypatch):
+    # Per-car reads log in to Korail each time and trip the rail limit partway
+    # through a long train, which is what this route exists to avoid.
+    runtime, http, headers, train_key, rail = listed_train(
+        tmp_path,
+        monkeypatch,
+        cars=(1, 3, 5),
+        inventories=[car_inventory(1), car_inventory(3), car_inventory(5)],
+    )
+
+    logins = rail.login.call_count
+
+    response = http.get(
+        f"/api/mobile/trains/{train_key}/seats?seatClass=general&passengerCount=1",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.json
+    assert [item["carNo"] for item in response.json["inventories"]] == [1, 3, 5]
+    assert response.json["failedCars"] == []
+    assert response.json["layoutReference"] is False
+    # Same shape the app already caches per car, so it can store these as-is.
+    first = response.json["inventories"][0]
+    assert first["seats"][0]["label"] == "5A"
+    assert {"layoutType", "arrangementCode", "remainingCount", "totalCount"} <= set(first)
+    assert first["layoutReference"] is False
+    # One login and one car list for the whole formation, then one read per
+    # car - against three logins and three car lists if the app asked per car.
+    assert rail.login.call_count - logins == 1
+    assert rail.seat_cars.call_count == 1
+    assert rail.seat_inventory.call_count == 3
+    runtime.storage.close()
+
+
+def test_one_unreadable_car_does_not_hide_the_rest_or_look_empty(tmp_path, monkeypatch):
+    runtime, http, headers, train_key, rail = listed_train(
+        tmp_path,
+        monkeypatch,
+        cars=(1, 3, 5),
+        inventories=[car_inventory(1), RuntimeError("Korail said no"), car_inventory(5)],
+    )
+
+    response = http.get(
+        f"/api/mobile/trains/{train_key}/seats?seatClass=general&passengerCount=1",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.json
+    assert [item["carNo"] for item in response.json["inventories"]] == [1, 5]
+    # Car 3 is reported as unread, never as a car with no seats left.
+    assert response.json["failedCars"] == [3]
+    runtime.storage.close()
+
+
+def test_a_formation_with_no_bookable_car_is_not_an_error(tmp_path, monkeypatch):
+    # Nothing failed here - there is simply nothing to show. Two empty lists
+    # say that, where an error would claim the read broke.
+    runtime, http, headers, train_key, rail = listed_train(
+        tmp_path, monkeypatch, cars=(), inventories=[]
+    )
+
+    response = http.get(
+        f"/api/mobile/trains/{train_key}/seats?seatClass=general&passengerCount=1",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.json
+    assert response.json == {"inventories": [], "failedCars": [], "layoutReference": False}
+    rail.seat_inventory.assert_not_called()
+    runtime.storage.close()
+
+
+def test_three_failures_in_a_row_stop_the_read_instead_of_holding_the_lock(tmp_path, monkeypatch):
+    # An expired session fails every car alike. Trying all eighteen would hold
+    # a striped mutation lock for one HTTP timeout per remaining car.
+    runtime, http, headers, train_key, rail = listed_train(
+        tmp_path,
+        monkeypatch,
+        cars=(1, 3, 5, 7, 9, 11),
+        inventories=[
+            car_inventory(1),
+            RuntimeError("Korail said no"),
+            RuntimeError("Korail said no"),
+            RuntimeError("Korail said no"),
+        ],
+    )
+
+    response = http.get(
+        f"/api/mobile/trains/{train_key}/seats?seatClass=general&passengerCount=1",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.json
+    assert [item["carNo"] for item in response.json["inventories"]] == [1]
+    # Cars 9 and 11 were never attempted but are still reported as unread, so
+    # the app cannot mistake them for cars with no seats left.
+    assert response.json["failedCars"] == [3, 5, 7, 9, 11]
+    assert rail.seat_inventory.call_count == 4
+    runtime.storage.close()
+
+
+def test_a_success_between_failures_keeps_the_read_going(tmp_path, monkeypatch):
+    runtime, http, headers, train_key, rail = listed_train(
+        tmp_path,
+        monkeypatch,
+        cars=(1, 3, 5, 7, 9),
+        inventories=[
+            RuntimeError("Korail said no"),
+            RuntimeError("Korail said no"),
+            car_inventory(5),
+            RuntimeError("Korail said no"),
+            RuntimeError("Korail said no"),
+        ],
+    )
+
+    response = http.get(
+        f"/api/mobile/trains/{train_key}/seats?seatClass=general&passengerCount=1",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.json
+    assert [item["carNo"] for item in response.json["inventories"]] == [5]
+    assert response.json["failedCars"] == [1, 3, 7, 9]
+    assert rail.seat_inventory.call_count == 5
+    runtime.storage.close()
+
+
+def test_a_formation_that_reads_nowhere_is_an_error_not_a_sold_out_train(tmp_path, monkeypatch):
+    runtime, http, headers, train_key, _ = listed_train(
+        tmp_path,
+        monkeypatch,
+        cars=(1, 3),
+        inventories=[RuntimeError("Korail said no"), RuntimeError("Korail said no")],
+    )
+
+    response = http.get(
+        f"/api/mobile/trains/{train_key}/seats?seatClass=general&passengerCount=1",
+        headers=headers,
+    )
+
+    # The gateway raises 502 like the per-car route; the API turns 502 into 503
+    # so Cloudflare cannot swap the body for one without CORS headers.
+    assert response.status_code == 503
+    assert "좌석표를 불러오지 못했어요" in response.json["error"]
+    runtime.storage.close()
+
+
 def test_scheduler_executes_persisted_conditions_without_chat(tmp_path, monkeypatch):
     from freezegun import freeze_time
 

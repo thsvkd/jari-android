@@ -30,6 +30,7 @@ import type {
   SearchDescription,
   SeatCarOption,
   SeatClass,
+  SeatInventoriesResult,
   SeatInventory,
   SeatMapSeat,
   SeatSelectionMode,
@@ -70,7 +71,7 @@ interface SeatDialogState {
   layoutReference: boolean;
   loading: boolean;
   error: string;
-  bulkProgress: { done: number; total: number } | null;
+  bulkApplying: boolean;
 }
 
 const SEAT_OPTIONS: Record<string, string> = {
@@ -581,7 +582,7 @@ export class TeumApp {
       selectedByCar.set(seat.carNo, (selectedByCar.get(seat.carNo) ?? 0) + 1);
       selectedKeys.add(`${seat.carNo}:${seat.seatNo}`);
     }
-    const locked = Boolean(dialog.bulkProgress);
+    const locked = dialog.bulkApplying;
     const cars = dialog.cars.map((car) => {
       const count = selectedByCar.get(car.carNo) ?? 0;
       return `<button type="button" class="car-tab ${dialog.carNo === car.carNo ? "selected" : ""}" data-seat-car="${escapeHtml(car.carNo)}" ${locked ? "disabled" : ""}><b>${escapeHtml(car.carNo)}호차</b><small>${dialog.layoutReference ? "좌석표" : `${escapeHtml(car.remainingSeatCount)}석 가능`}</small>${count ? `<em>${escapeHtml(count)}</em>` : ""}</button>`;
@@ -634,7 +635,7 @@ export class TeumApp {
   private renderSeatFilter(dialog: SeatDialogState, seats: SeatMapSeat[]): string {
     const { filter } = dialog;
     const sets = seatColumnSets(seats);
-    const locked = Boolean(dialog.bulkProgress);
+    const locked = dialog.bulkApplying;
     // A numeric-label car (무궁화 등) synthesizes A–D columns just to lay seats out; the letters aren't real, so don't offer them as a filter.
     // Judge the whole car by its placed seats (row !== null) with `every`: one unreadable seat in an otherwise normal KTX car shouldn't hide every column chip.
     const placedSeats = seats.filter((seat) => seat.row !== null);
@@ -648,7 +649,7 @@ export class TeumApp {
       ? `<button type="button" role="switch" class="seat-switch" data-seat-filter="family" aria-checked="${filter.excludeFamily}" ${locked ? "disabled" : ""}><span aria-hidden="true"></span>가족석 제외</button>`
       : "";
     const applyAll = dialog.mode === "wait" && dialog.cars.length > 1
-      ? `<button type="button" class="button ghost seat-apply-all" data-action="apply-all-cars" ${locked ? "disabled" : ""}>${dialog.bulkProgress ? `${escapeHtml(dialog.bulkProgress.done)}/${escapeHtml(dialog.bulkProgress.total)} 호차 확인 중…` : "모든 호차에 적용"}</button>`
+      ? `<button type="button" class="button ghost seat-apply-all" data-action="apply-all-cars" ${locked ? "disabled" : ""}>${locked ? "모든 호차 확인 중…" : "모든 호차에 적용"}</button>`
       : "";
     return `<div class="seat-filter">
       <div class="seat-filter-row"><span>열</span><div class="seat-chips">${columnChips}<i aria-hidden="true"></i>${chip("pair:window", "창가", allOn(sets.window))}${sets.aisle.length ? chip("pair:aisle", "복도", allOn(sets.aisle)) : ""}</div></div>
@@ -662,7 +663,7 @@ export class TeumApp {
     if (!train || !trainKey) return;
     const dialog: SeatDialogState = {
       train, seatClass, mode, cars: [], inventory: null, inventories: new Map(), carNo: null,
-      selected: [], filter: emptySeatFilter(), layoutReference: false, loading: true, error: "", bulkProgress: null,
+      selected: [], filter: emptySeatFilter(), layoutReference: false, loading: true, error: "", bulkApplying: false,
     };
     this.seatDialog = dialog;
     this.render();
@@ -733,7 +734,7 @@ export class TeumApp {
 
   private async loadSeatCar(carNo: number): Promise<void> {
     const dialog = this.seatDialog;
-    if (!dialog || dialog.carNo === carNo || dialog.bulkProgress) return;
+    if (!dialog || dialog.carNo === carNo || dialog.bulkApplying) return;
     const generation = this.generation;
     dialog.carNo = carNo;
     // Conditions describe the car they were applied to; chips left on over another car would read as applied when they are not.
@@ -767,16 +768,18 @@ export class TeumApp {
   }
 
   /**
-   * WAIT mode only: fetches every other car's inventory and reuses the current filter/selection to pick that car's seats.
+   * WAIT mode only: one request for every car's inventory, then reuses the current filter/selection to pick each car's seats.
+   * A per-car loop used to call seatInventory once per car, but each call is a fresh Korail login on the server, and the
+   * server's rate limit (10 calls/60s per user) means an 18-car KTX would reliably hit 429 partway through.
    * Locked for the whole run (render disables seat cells/filter/tabs/confirm; toggleSeat/changeSeatFilter/loadSeatCar/confirmSeatDialog
-   * bail out early too) so an edit mid-fetch can't be silently overwritten when the loop replaces dialog.selected at the end.
+   * bail out early too) so an edit mid-fetch can't be silently overwritten when this replaces dialog.selected at the end.
    */
   private async applyAllCars(): Promise<void> {
     const dialog = this.seatDialog;
-    if (!dialog || dialog.mode !== "wait" || dialog.bulkProgress || !dialog.inventory) return;
+    if (!dialog || dialog.mode !== "wait" || dialog.bulkApplying || !dialog.inventory) return;
     const currentCarNo = dialog.inventory.carNo;
     // Snapshot the filter and the current car's selection once, up front, so every other car is judged by the same condition
-    // the user tapped with, not by whatever dialog.filter happens to hold by the time that car's fetch resolves.
+    // the user tapped with, not by whatever dialog.filter happens to hold by the time the request resolves.
     const filterSnapshot: SeatFilter = { ...dialog.filter };
     const filterEmpty = !filterSnapshot.columns.length && !filterSnapshot.trimRows && !filterSnapshot.excludeFamily;
     const currentLabels = new Set(dialog.selected.filter((seat) => seat.carNo === currentCarNo).map((seat) => seat.label));
@@ -787,41 +790,41 @@ export class TeumApp {
     }
     const generation = this.generation;
     const stale = () => generation !== this.generation || this.seatDialog !== dialog;
-    const otherCars = dialog.cars.filter((car) => car.carNo !== currentCarNo);
-    const nextSelected = dialog.selected.filter((seat) => seat.carNo === currentCarNo);
-    const failedCars: number[] = [];
     dialog.error = "";
-    dialog.bulkProgress = { done: 0, total: otherCars.length };
+    dialog.bulkApplying = true;
     this.refreshSeatDialog(true);
     try {
-      for (let index = 0; index < otherCars.length; index += 1) {
-        const car = otherCars[index]!;
-        let inventory = dialog.inventories.get(car.carNo);
-        if (!inventory) {
-          try {
-            inventory = await this.api.seatInventory(dialog.train.trainKey!, car.carNo, dialog.seatClass, this.draft.passengerCount);
-          } catch {
-            if (stale()) return;
-            failedCars.push(car.carNo);
-            dialog.bulkProgress = { done: index + 1, total: otherCars.length };
-            this.refreshSeatDialog(true);
-            continue;
-          }
-          if (stale()) return;
-          dialog.inventories.set(car.carNo, inventory);
-        }
+      let result: SeatInventoriesResult;
+      try {
+        result = await this.api.seatInventories(dialog.train.trainKey!, dialog.seatClass, this.draft.passengerCount);
+      } catch (error) {
+        // The request itself failed (429 included): leave the selection untouched and just report it.
+        if (stale()) return;
+        dialog.error = error instanceof ApiError ? error.message : "모든 호차 좌석표를 불러오지 못했어요. 다시 시도해 주세요.";
+        return;
+      }
+      if (stale()) return;
+      const returnedCarNos = new Set(result.inventories.map((inventory) => inventory.carNo));
+      // A car missing from both the response and failedCars is still a car we couldn't apply to; count it as failed too.
+      const failedCars = [...new Set([
+        ...result.failedCars,
+        ...dialog.cars.filter((car) => car.carNo !== currentCarNo && !returnedCarNos.has(car.carNo)).map((car) => car.carNo),
+      ])].sort((a, b) => a - b);
+      const nextSelected = dialog.selected.filter((seat) => seat.carNo === currentCarNo);
+      for (const inventory of result.inventories) {
+        dialog.inventories.set(inventory.carNo, inventory);
+        if (inventory.carNo === currentCarNo) continue; // the car on screen keeps exactly its current selection
         const matched = filterEmpty
           ? inventory.seats.filter((seat) => currentLabels.has(seat.label))
           : filterSeats(inventory.seats, { ...filterSnapshot, trimRows: Math.min(filterSnapshot.trimRows, maxTrimRows(inventory.seats)) });
         nextSelected.push(...matched);
-        dialog.bulkProgress = { done: index + 1, total: otherCars.length };
-        this.refreshSeatDialog(true);
       }
+      dialog.layoutReference ||= result.layoutReference;
       dialog.selected = nextSelected;
       dialog.error = failedCars.length ? `${failedCars.join("·")}호차 좌석표를 불러오지 못해 빼고 적용했어요.` : "";
     } finally {
       if (!stale()) {
-        dialog.bulkProgress = null;
+        dialog.bulkApplying = false;
         this.refreshSeatDialog(true);
       }
     }
@@ -839,7 +842,7 @@ export class TeumApp {
 
   private toggleSeat(seatNo: string): void {
     const dialog = this.seatDialog;
-    if (!dialog || dialog.bulkProgress) return;
+    if (!dialog || dialog.bulkApplying) return;
     const seat = dialog.inventory?.seats.find((item) => item.seatNo === seatNo);
     if (!seat || !this.seatSelectable(dialog, seat)) return;
     const index = dialog.selected.findIndex((item) => item.carNo === seat.carNo && item.seatNo === seat.seatNo);
@@ -855,7 +858,7 @@ export class TeumApp {
   private changeSeatFilter(action: string): void {
     const dialog = this.seatDialog;
     const inventory = dialog?.inventory;
-    if (!dialog || !inventory || dialog.bulkProgress) return;
+    if (!dialog || !inventory || dialog.bulkApplying) return;
     const [kind, value = ""] = action.split(":");
     if (kind === "clear") {
       dialog.filter = emptySeatFilter();
@@ -891,7 +894,7 @@ export class TeumApp {
 
   private async confirmSeatDialog(): Promise<void> {
     const dialog = this.seatDialog;
-    if (!dialog || dialog.bulkProgress) return;
+    if (!dialog || dialog.bulkApplying) return;
     const passengerCount = this.draft.passengerCount;
     if (dialog.mode === "immediate") {
       if (dialog.selected.length !== passengerCount) {

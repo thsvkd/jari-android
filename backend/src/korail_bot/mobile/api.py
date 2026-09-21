@@ -255,6 +255,21 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
             )
         )
 
+    @app.get(PREFIX + "/trains/<train_key>/seats")
+    @authenticated
+    def seat_inventories(train_key):
+        # Under /trains/, so reading the whole formation costs one rail slot
+        # rather than one per car. That is the point of the route: per-car
+        # reads hit the limit partway through a long train.
+        return jsonify(
+            gateway.seat_inventories(
+                g.user["storage_id"],
+                train_key,
+                request.args.get("seatClass", ""),
+                request.args.get("passengerCount", ""),
+            )
+        )
+
     @app.get(PREFIX + "/trains/<train_key>/cars/<int:car_no>/seats")
     @authenticated
     def seat_inventory(train_key, car_no):

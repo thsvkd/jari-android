@@ -682,6 +682,8 @@ const threeCarSeatCars = async () => ({
   cars: [3, 4, 5].map((carNo) => ({ carNo, roomClassName: "일반실", remainingSeatCount: 4, attributes: [] })),
 });
 
+const seatInventoryFake = async (_trainKey: string, carNo: number) => makeCarInventory(carNo);
+
 async function openThreeCarWaitDialog(root: HTMLElement, app: TeumApp) {
   app.navigate("journey");
   root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
@@ -690,9 +692,14 @@ async function openThreeCarWaitDialog(root: HTMLElement, app: TeumApp) {
   await vi.waitFor(() => expect(root.querySelector("[data-action='apply-all-cars']")).not.toBeNull());
 }
 
-it("applies the current filter to every other car when bulk-applying seats", async () => {
+it("applies the current filter to every other car with a single batch request", async () => {
   const seatInventory = vi.fn(async (_trainKey: string, carNo: number) => makeCarInventory(carNo));
-  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory });
+  const seatInventories = vi.fn(async () => ({
+    inventories: [3, 4, 5].map((carNo) => makeCarInventory(carNo)),
+    failedCars: [] as number[],
+    layoutReference: false,
+  }));
+  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory, seatInventories });
   await openThreeCarWaitDialog(root, app);
 
   root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
@@ -700,17 +707,22 @@ it("applies the current filter to every other car when bulk-applying seats", asy
 
   await vi.waitFor(() => expect(root.querySelector("[data-seat-car='4'] em")?.textContent).toBe("2"));
   expect(root.querySelector("[data-seat-car='5'] em")?.textContent).toBe("2");
-  expect(seatInventory).toHaveBeenCalledTimes(3); // initial car 3 + bulk-fetched cars 4, 5
+  expect(seatInventories).toHaveBeenCalledTimes(1); // one request for every other car, not one per car
+  expect(seatInventory).toHaveBeenCalledTimes(1); // only the initial car 3 load
 
-  // Switching to a car the bulk apply already fetched reuses the cache instead of refetching.
+  // Switching to a car the bulk apply already cached reuses it instead of refetching.
   root.querySelector<HTMLButtonElement>("[data-seat-car='4']")!.click();
   await vi.waitFor(() => expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(2));
-  expect(seatInventory).toHaveBeenCalledTimes(3);
+  expect(seatInventory).toHaveBeenCalledTimes(1);
 });
 
 it("matches by seat label across cars when no filter is set", async () => {
-  const seatInventory = vi.fn(async (_trainKey: string, carNo: number) => makeCarInventory(carNo));
-  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory });
+  const seatInventories = vi.fn(async () => ({
+    inventories: [3, 4, 5].map((carNo) => makeCarInventory(carNo)),
+    failedCars: [] as number[],
+    layoutReference: false,
+  }));
+  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory: seatInventoryFake, seatInventories });
   await openThreeCarWaitDialog(root, app);
 
   root.querySelector<HTMLButtonElement>("[data-seat-no='3-1-A']")!.click();
@@ -721,22 +733,23 @@ it("matches by seat label across cars when no filter is set", async () => {
 });
 
 it("does nothing but hint when neither a filter nor a selection exists", async () => {
-  const seatInventory = vi.fn(async (_trainKey: string, carNo: number) => makeCarInventory(carNo));
-  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory });
+  const seatInventories = vi.fn();
+  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory: seatInventoryFake, seatInventories });
   await openThreeCarWaitDialog(root, app);
 
   root.querySelector<HTMLButtonElement>("[data-action='apply-all-cars']")!.click();
 
   expect(root.textContent).toContain("먼저 이 호차에서 좌석이나 조건을 골라 주세요.");
-  expect(seatInventory).toHaveBeenCalledTimes(1); // only the initial car load
+  expect(seatInventories).not.toHaveBeenCalled();
 });
 
-it("keeps the cars that loaded and names the ones that failed during a bulk apply", async () => {
-  const seatInventory = vi.fn(async (_trainKey: string, carNo: number) => {
-    if (carNo === 4) throw new Error("network down");
-    return makeCarInventory(carNo);
-  });
-  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory });
+it("keeps the cars that loaded and names the ones the batch response reports as failed", async () => {
+  const seatInventories = vi.fn(async () => ({
+    inventories: [makeCarInventory(3), makeCarInventory(5)],
+    failedCars: [4],
+    layoutReference: false,
+  }));
+  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory: seatInventoryFake, seatInventories });
   await openThreeCarWaitDialog(root, app);
 
   root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
@@ -745,6 +758,38 @@ it("keeps the cars that loaded and names the ones that failed during a bulk appl
   await vi.waitFor(() => expect(root.querySelector("[data-seat-car='5'] em")?.textContent).toBe("2"));
   expect(root.querySelector("[data-seat-car='4'] em")).toBeNull();
   expect(root.textContent).toContain("4호차 좌석표를 불러오지 못해 빼고 적용했어요.");
+});
+
+it("treats a car missing from the batch response (and not named in failedCars either) as failed too", async () => {
+  const seatInventories = vi.fn(async () => ({
+    inventories: [makeCarInventory(3), makeCarInventory(5)], // car 4 silently absent, not even in failedCars
+    failedCars: [] as number[],
+    layoutReference: false,
+  }));
+  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory: seatInventoryFake, seatInventories });
+  await openThreeCarWaitDialog(root, app);
+
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='apply-all-cars']")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-car='5'] em")?.textContent).toBe("2"));
+  expect(root.querySelector("[data-seat-car='4'] em")).toBeNull();
+  expect(root.textContent).toContain("4호차 좌석표를 불러오지 못해 빼고 적용했어요.");
+});
+
+it("keeps the selection untouched and shows the server message when the batch request itself fails (e.g. 429)", async () => {
+  const seatInventories = vi.fn().mockRejectedValue(new ApiError("요청이 너무 많아요. 잠시 후 다시 시도해 주세요.", 429));
+  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory: seatInventoryFake, seatInventories });
+  await openThreeCarWaitDialog(root, app);
+
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
+  expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(2);
+  root.querySelector<HTMLButtonElement>("[data-action='apply-all-cars']")!.click();
+
+  await vi.waitFor(() => expect(root.textContent).toContain("요청이 너무 많아요. 잠시 후 다시 시도해 주세요."));
+  expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(2); // car 3's own selection is unchanged
+  expect(root.querySelector("[data-seat-car='4'] em")).toBeNull();
+  expect(root.querySelector("[data-seat-car='5'] em")).toBeNull();
 });
 
 it("shows numeric seat labels and hides synthetic column chips for a 무궁화 car", async () => {

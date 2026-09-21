@@ -130,6 +130,31 @@ def test_tunnel_clients_and_seat_maps_have_their_own_limits(api):
     assert statuses == [200] * 10 + [429]
 
 
+def test_reading_a_whole_formation_costs_one_rail_slot(api):
+    # The per-car route spends a slot per car and runs out partway through a
+    # long train. This one reads every car for the price of a single call.
+    client, identity, gateway = api
+    gateway.seat_inventories.return_value = {
+        "inventories": [],
+        "failedCars": [],
+        "layoutReference": False,
+    }
+    alice = signup(api, "alice")
+    headers = {"Authorization": "Bearer " + alice["token"]}
+
+    statuses = [
+        client.get(
+            "/api/mobile/trains/T1/seats?seatClass=general&passengerCount=2", headers=headers
+        ).status_code
+        for _ in range(11)
+    ]
+
+    assert statuses == [200] * 10 + [429]
+    gateway.seat_inventories.assert_called_with(
+        identity.authenticate(alice["token"])["storage_id"], "T1", "general", "2"
+    )
+
+
 def test_railway_auth_failure_does_not_revoke_app_session(api):
     from korail_bot.services.mini_app_gateway import MiniAppError
 

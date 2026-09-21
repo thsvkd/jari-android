@@ -24,6 +24,13 @@ from korail_bot.utils.timezone import RAIL_TIMEZONE, as_utc, utc_now
 
 logger = get_logger(__name__)
 
+# How many cars in a row may fail before a whole-formation read gives up. An
+# expired session or a Korail outage fails every car for the same reason, and
+# finishing the formation anyway would hold this user's mutation lock - which
+# is striped, so it is not only this user's - for one HTTP timeout per
+# remaining car.
+MAX_CONSECUTIVE_CAR_FAILURES = 3
+
 
 def serialized_operation(method):
     """The scheduler and HTTP gateway must share one mutation boundary."""
@@ -130,29 +137,93 @@ class MobileGateway(MiniAppGateway):
             logger.error("Could not read Korail cars for chat_id=%s (%s)", chat_id, type(exc).__name__)
             raise MiniAppError("호차 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502) from exc
 
+    def _described_inventory(self, rail, train, car_no, seat_class, count):
+        """One car's seats, shaped the way the app caches them per car."""
+        response = rail.seat_inventory(
+            train,
+            car_no,
+            seat_class,
+            count,
+            allow_layout_reference=True,
+        )
+        result = self.seat_maps.describe_inventory(response)
+        result["layoutReference"] = bool(rail.seat_layout_is_reference(train, seat_class, count))
+        return result
+
     @serialized_operation
     def seat_inventory(self, chat_id, train_key, car_no, seat_class, passenger_count):
         train = self._seat_train(chat_id, train_key)
         count = self._passenger_count(passenger_count)
         rail = self._logged_in_rail(chat_id)
         try:
-            response = rail.seat_inventory(
-                train,
-                car_no,
-                seat_class,
-                count,
-                allow_layout_reference=True,
-            )
-            result = self.seat_maps.describe_inventory(response)
-            result["layoutReference"] = bool(
-                rail.seat_layout_is_reference(train, seat_class, count)
-            )
-            return result
+            return self._described_inventory(rail, train, car_no, seat_class, count)
         except ValueError as exc:
             raise MiniAppError(str(exc), 422) from exc
         except Exception as exc:
             logger.error("Could not read Korail seats for chat_id=%s (%s)", chat_id, type(exc).__name__)
             raise MiniAppError("좌석표를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502) from exc
+
+    @serialized_operation
+    def seat_inventories(self, chat_id, train_key, seat_class, passenger_count):
+        """
+        Every car of one train in a single request.
+
+        Read per car, this costs a Korail login each time and trips the rail
+        rate limit at around ten cars, so "apply to every car" could not finish
+        on an eighteen-car KTX. One login and one car list here, then the
+        per-car reads reuse the ScheduleView context korail_service already
+        caches on the rail instance.
+        """
+        train = self._seat_train(chat_id, train_key)
+        count = self._passenger_count(passenger_count)
+        rail = self._logged_in_rail(chat_id)
+        try:
+            cars = rail.seat_cars(train, seat_class, count)
+        except ValueError as exc:
+            raise MiniAppError(str(exc), 422) from exc
+        except Exception as exc:
+            logger.error("Could not read Korail cars for chat_id=%s (%s)", chat_id, type(exc).__name__)
+            raise MiniAppError("호차 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502) from exc
+
+        inventories = []
+        failed = []
+        reasons = []
+        consecutive = 0
+        car_numbers = [car.car_no for car in cars.cars]
+        for index, car_no in enumerate(car_numbers):
+            try:
+                inventories.append(
+                    self._described_inventory(rail, train, car_no, seat_class, count)
+                )
+                consecutive = 0
+            except Exception as exc:
+                # A car that could not be read is not a car with no free seats.
+                # Naming it lets the app say so instead of drawing it empty.
+                failed.append(car_no)
+                reasons.append(type(exc).__name__)
+                consecutive += 1
+                if consecutive >= MAX_CONSECUTIVE_CAR_FAILURES:
+                    # Whatever is wrong is not specific to these cars. Give the
+                    # app what was read and stop paying a timeout per car.
+                    failed.extend(car_numbers[index + 1 :])
+                    break
+        if failed:
+            logger.error(
+                "Could not read Korail seats for chat_id=%s cars=%s (%s)",
+                chat_id,
+                failed,
+                ",".join(sorted(set(reasons))),
+            )
+        # Every car failing is a failed read, and answering 200 with nothing in
+        # it would look exactly like a sold-out train. A train that simply has
+        # no bookable car answers with two empty lists, which does not.
+        if failed and not inventories:
+            raise MiniAppError("좌석표를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502)
+        return {
+            "inventories": inventories,
+            "failedCars": failed,
+            "layoutReference": bool(rail.seat_layout_is_reference(train, seat_class, count)),
+        }
 
     @serialized_operation
     def reserve_designated(self, chat_id, payload):

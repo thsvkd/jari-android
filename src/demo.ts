@@ -191,6 +191,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
       cars: [{ carNo: 3, roomClassName: "일반실", remainingSeatCount: 4, attributes: [] }],
     }),
     seatInventory: async () => demoInventory(),
+    seatInventories: async () => ({ inventories: [demoInventory()], failedCars: [], layoutReference: false }),
     reserveDesignated: async (payload) => {
       pending = [{
         reservationId: "DEMO",

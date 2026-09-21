@@ -167,6 +167,67 @@ def test_nearby_layout_uses_one_passenger_for_a_larger_party():
     )
 
 
+def test_reading_a_whole_formation_restores_the_schedule_context_once():
+    # What the batch route is for: eighteen cars must not mean eighteen
+    # ScheduleView calls. get_seat_cars is what restores that server-side
+    # context, and the cached seat context is what keeps it at one.
+    service = service_with_modern_client()
+    train = SimpleNamespace(train_no="015")
+    service._modern_client.get_seat_cars.return_value = SeatCarListResponse(
+        cars=tuple(SeatCar(car_no, "일반실", 1, ()) for car_no in range(1, 19))
+    )
+    service._modern_client.get_seat_inventory.return_value = inventory(physical_seat())
+
+    service.seat_cars(train, "general", 1)
+    for car_no in range(1, 19):
+        service.seat_inventory(train, car_no, "general", 1, allow_layout_reference=True)
+
+    assert service._modern_client.get_seat_cars.call_count == 1
+    assert service._modern_client.search_trains.call_count == 0
+    assert service._modern_client.get_seat_inventory.call_count == 18
+
+
+def test_a_sold_out_formation_looks_up_its_reference_date_only_once():
+    # The expensive path: a sold-out train searches up to seven days for a
+    # matching formation. Doing that per car would be eighteen searches.
+    service = service_with_modern_client()
+    train = SimpleNamespace(
+        train_no="009",
+        train_class_code="00",
+        departure_date="20260914",
+        departure_time="063300",
+        departure_station_name="서울",
+        arrival_station_name="부산",
+    )
+    reference = SimpleNamespace(
+        train_no="009",
+        train_class_code="00",
+        departure_date="20260921",
+        departure_time="063300",
+    )
+    cars = SeatCarListResponse(
+        cars=tuple(SeatCar(car_no, "일반실", 1, ()) for car_no in range(1, 19))
+    )
+    service._modern_client.get_seat_cars.side_effect = [
+        KorailAppError("ERI411321", "잔여석이 없습니다."),
+        cars,
+    ]
+    service._modern_client.search_trains.return_value = SimpleNamespace(trains=[reference])
+    service._modern_client.get_seat_inventory.return_value = inventory(
+        physical_seat(sale_possible="N")
+    )
+
+    service.seat_cars(train, "general", 1)
+    for car_no in range(1, 19):
+        service.seat_inventory(train, car_no, "general", 1, allow_layout_reference=True)
+
+    # One failed attempt plus one against the reference, and one date search.
+    assert service._modern_client.get_seat_cars.call_count == 2
+    assert service._modern_client.search_trains.call_count == 1
+    assert service._modern_client.get_seat_inventory.call_count == 18
+    assert service.seat_layout_is_reference(train, "general", 1)
+
+
 def test_sold_out_inventory_is_empty_until_actual_train_has_a_seat():
     service = service_with_modern_client()
     train = SimpleNamespace(train_no="009")

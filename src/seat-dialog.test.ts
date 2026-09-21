@@ -117,31 +117,37 @@ describe("seat dialog selectability and window detection", () => {
 });
 
 describe("bulk apply to all cars locks the dialog for the whole run", () => {
-  it("ignores seat taps, filter chips, car tabs and confirm while a car fetch is in flight, then applies a consistent result", async () => {
-    const car4 = deferred<SeatInventory>();
-    const seatInventory = vi.fn(async (_trainKey: string, carNo: number) => (carNo === 4 ? car4.promise : makeCarInventory(carNo)));
-    const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory });
+  it("ignores seat taps, filter chips, car tabs and confirm while the batch request is in flight, then applies a consistent result", async () => {
+    const batch = deferred<{ inventories: SeatInventory[]; failedCars: number[]; layoutReference: boolean }>();
+    const seatInventories = vi.fn(() => batch.promise);
+    const { app, root } = await mountLive({
+      seatCars: threeCarSeatCars,
+      seatInventory: async (_trainKey: string, carNo: number) => makeCarInventory(carNo),
+      seatInventories,
+    });
     await openThreeCarWaitDialog(root, app);
 
     root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
     expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(4); // one A seat per row (4 rows)
     root.querySelector<HTMLButtonElement>("[data-action='apply-all-cars']")!.click();
 
-    // Mid-flight (car 5's fetch is still pending behind car 4's): everything but closing the dialog is locked.
+    // Mid-flight (the single batch request hasn't resolved yet): everything but closing the dialog is locked.
     await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>("[data-seat-car='4']")!.disabled).toBe(true));
     expect(root.querySelector<HTMLButtonElement>("[data-seat-no='3-1-A']")!.disabled).toBe(true);
     expect(root.querySelector<HTMLButtonElement>("[data-seat-filter='col:B']")!.disabled).toBe(true);
     expect(root.querySelector<HTMLButtonElement>("[data-seat-filter='trim:+']")!.disabled).toBe(true);
     expect(root.querySelector<HTMLButtonElement>("[data-action='confirm-seat-dialog']")!.disabled).toBe(true);
+    expect(root.querySelector("[data-action='apply-all-cars']")!.textContent).toBe("모든 호차 확인 중…");
 
     // A tap on an already-selected seat (which would normally deselect it) must have no effect while locked.
     root.querySelector<HTMLButtonElement>("[data-seat-no='3-1-A']")!.click();
     root.querySelector<HTMLButtonElement>("[data-seat-filter='col:B']")!.click();
     expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(4);
 
-    car4.resolve(makeCarInventory(4));
+    batch.resolve({ inventories: [3, 4, 5].map((carNo) => makeCarInventory(carNo)), failedCars: [], layoutReference: false });
     await vi.waitFor(() => expect(root.querySelector("[data-seat-car='4'] em")?.textContent).toBe("4"));
     expect(root.querySelector("[data-seat-car='5'] em")?.textContent).toBe("4");
+    expect(seatInventories).toHaveBeenCalledTimes(1);
     // The col:A filter tapped before the run started is still what every car was matched against, not "col:A + col:B".
     expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(4);
     expect(root.querySelector<HTMLButtonElement>("[data-seat-car='4']")!.disabled).toBe(false);

@@ -171,6 +171,13 @@ export interface SeatInventory {
   layoutReference?: boolean;
 }
 
+// One request for every car's inventory, so a bulk seat pick doesn't burn through the per-user Korail-login rate limit one car at a time.
+export interface SeatInventoriesResult {
+  inventories: SeatInventory[];
+  failedCars: number[];
+  layoutReference: boolean;
+}
+
 // Only the fields SeatTarget.from_payload reads on the server; dropping salePossible/familyLabel keeps big plans small.
 export interface SeatTarget {
   carNo: number;
@@ -248,6 +255,7 @@ export interface MobileApi {
   trains(payload: { conditions: Conditions }): Promise<TrainsResult>;
   seatCars(trainKey: string, seatClass: SeatClass, passengerCount: number): Promise<{ cars: SeatCarOption[]; layoutReference?: boolean }>;
   seatInventory(trainKey: string, carNo: number, seatClass: SeatClass, passengerCount: number): Promise<SeatInventory>;
+  seatInventories(trainKey: string, seatClass: SeatClass, passengerCount: number): Promise<SeatInventoriesResult>;
   reserveDesignated(payload: {
     trainKey: string;
     seatClass: SeatClass;
