@@ -131,7 +131,7 @@ export function deriveRadarView(input: {
       animate: false,
       eyebrow: "서버 연결 확인 필요",
       title: "현재 상태를 확인할 수 없어요",
-      description: "인터넷 연결이 복구되면 서버 상태를 다시 확인해요.",
+      description: connection === "offline" ? "인터넷 연결이 복구되면 서버 상태를 다시 확인해요." : "서버가 응답하면 상태를 다시 확인해요.",
       lastCheckedLabel: null,
     };
   }

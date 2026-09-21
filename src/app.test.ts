@@ -791,3 +791,67 @@ it("shows approved empty-state copy and illustrated SVG marks", async () => {
   expect(root.querySelector(".empty-mark svg")).not.toBeNull();
   expect(root.querySelector(".timeline.status-guide-card")).not.toBeNull();
 });
+
+it("reports a failed notification request instead of an empty inbox", async () => {
+  const { app, root } = await mountLive({ notifications: async () => { throw new ApiError("알림 서버 오류", 500); } });
+
+  app.navigate("notifications");
+  await vi.waitFor(() => expect(root.textContent).toContain("알림을 불러오지 못했어요"));
+
+  expect(root.querySelector("[role='alert']")!.textContent).toBe("알림 서버 오류");
+  expect(root.textContent).not.toContain("새 알림이 없어요");
+});
+
+it("shows a server error during polling as unconfirmed, not as offline", async () => {
+  const status = vi.fn().mockRejectedValue(new ApiError("잠시 후 다시 시도해 주세요.", 503));
+  const { app, root } = await mountLive({ status });
+  vi.useFakeTimers();
+  // Restart to establish polling on the fake clock.
+  await app.start(true);
+  await vi.advanceTimersByTimeAsync(30_000);
+
+  expect(root.querySelector(".offline-banner")).toBeNull();
+  expect(root.textContent).toContain("현재 상태를 확인할 수 없어요");
+  expect(root.textContent).not.toContain("인터넷 연결이 복구되면");
+});
+
+it.each([[1, 10], [-1, 5]])("moves an off-step notify interval by %i to the neighbouring step", async (direction, expected) => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.notifyMinutes = 7;
+  const setNotify = vi.fn().mockImplementation(async (minutes: number) => ({ notifyMinutes: minutes }));
+  const { app, root } = await mountLive({ bootstrap: async () => state, setNotify });
+
+  app.navigate("settings");
+  root.querySelector<HTMLButtonElement>(`[data-action='${direction > 0 ? "notify-plus" : "notify-minus"}']`)!.click();
+
+  await vi.waitFor(() => expect(setNotify).toHaveBeenCalledWith(expected));
+});
+
+it("reaches the confirm screen from the train list by clicks alone and saves a favourite there", async () => {
+  const demo = createDemoApi();
+  const saveFavourite = vi.fn(demo.saveFavourite);
+  const { root } = await mountLive({ saveFavourite });
+
+  root.querySelector<HTMLButtonElement>("[data-action='new-journey']")!.click();
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-action='trains-next']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-action='trains-next']")!.click();
+
+  expect(root.querySelector("[data-action='start-now']")).not.toBeNull();
+  root.querySelector<HTMLButtonElement>("[data-action='save-favourite']")!.click();
+  await vi.waitFor(() => expect(saveFavourite).toHaveBeenCalledOnce());
+});
+
+it("offers the access request on the train list, where the error message points to it", async () => {
+  const search = vi.fn().mockResolvedValue({ started: false, needsAccessRequest: true });
+  const { app, root } = await mountLive({ search });
+
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-immediate-any]")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-immediate-any]")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector("[data-action='request-access']")).not.toBeNull());
+  expect(root.querySelector("[data-action='start-cancellation-wait'], .train-list")).not.toBeNull();
+});
