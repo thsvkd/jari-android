@@ -17,8 +17,6 @@ license = { text = "MIT" }
 
 dependencies = [
     "flask>=3.1",
-    "flask-restful>=0.3.10",
-    "flask-cors>=6.0.2",
     "requests>=2.32",
     # hiredis is the C parser redis-py picks up automatically when present.
     "redis[hiredis]>=7.0",
@@ -171,8 +169,8 @@ no_implicit_optional = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-# Neither of these ships type information.
-module = ["korail2.*", "flask_restful.*"]
+# Ships no type information.
+module = ["korail2.*"]
 ignore_missing_imports = true
 
 # ----------------------------------------------------------------- coverage

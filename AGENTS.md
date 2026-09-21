@@ -2,7 +2,7 @@
 
 Android 앱과 독립 예약 API 서버를 함께 관리합니다. 루트의 TypeScript/Vite 화면을 Capacitor로 패키징합니다.
 `backend/`에는 서버와 필요한 기존 공통 패키지가 포함됩니다. 앱은 `/api/mobile` 계약을 소비합니다.
-서버 진입점은 `python -m korail_bot.mobile`입니다. 기존 `korail_bot.app`은 실행하지 않습니다.
+서버 진입점은 `python -m korail_bot.mobile` 하나입니다. 텔레그램 봇 진입점(`korail_bot.app`)은 이 저장소에 없습니다.
 
 - 변경 전 관련 코드를 읽고 기존 변경을 보존합니다. 기능 작업은 별도 워크트리를 사용합니다.
 - 커밋 메시지는 한국어 현재형 평서문을 사용합니다.
