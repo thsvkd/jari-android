@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 
 import pytest
 
@@ -10,6 +11,7 @@ from korail_bot.models import (
 )
 from korail_bot.services.mini_app_service import MiniAppSubmission
 from korail_bot.storage.redis import RedisStorage
+from korail_bot.utils.timezone import utc_now
 
 
 def target(
@@ -172,7 +174,7 @@ def test_mobile_submission_preserves_validated_cancellation_wait_plan():
     conditions = {
         "v": 1,
         "action": "prepare_search",
-        "dep_date": "20260920",
+        "dep_date": (utc_now() + timedelta(days=3)).strftime("%Y%m%d"),
         "src_station": "서울",
         "dst_station": "부산",
         "dep_time": "0900",

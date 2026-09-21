@@ -82,26 +82,6 @@ def pytest_configure(config):
     os.environ["REDIS_PORT"] = str(_redis_container.get_exposed_port(6379))
 
 
-def _connections_owned_by_the_process():
-    """
-    Redis connections that belong to the process rather than to a test.
-
-    A module-level singleton opens its connection once, when its module is
-    imported, and holds it until the interpreter exits - so it is never
-    finalised while tests are running, and it is not what the check below is
-    looking for.
-    """
-    import sys
-
-    module = sys.modules.get("korail_bot.utils.station_codes")
-    client = getattr(getattr(module, "_station_manager", None), "_redis_client", None)
-    pool = getattr(client, "connection_pool", None)
-    if pool is None:
-        return set()
-    held = list(pool._available_connections) + list(pool._in_use_connections)
-    return {id(connection) for connection in held}
-
-
 def pytest_sessionfinish(session, exitstatus):
     """
     Fail the run if a test left a Redis connection open.
@@ -126,13 +106,11 @@ def pytest_sessionfinish(session, exitstatus):
     import redis
 
     gc.collect()
-    theirs = _connections_owned_by_the_process()
     leaked = [
         connection
         for connection in gc.get_objects()
         if isinstance(connection, redis.connection.AbstractConnection)
         and connection._sock is not None
-        and id(connection) not in theirs
     ]
     if leaked:
         session.exitstatus = 1
@@ -149,6 +127,21 @@ def pytest_unconfigure(config):
     if _redis_container:
         _redis_container.stop()
         _redis_container = None
+
+
+@pytest.fixture(autouse=True)
+def _stations_without_the_network(monkeypatch):
+    """
+    Answer station lookups from the snapshot instead of the Korail API.
+
+    Validating a booking checks its station names, and the real list comes
+    from Korail over HTTP. A test run must not depend on that server, nor
+    lean on it.
+    """
+    from korail_bot.models.station_snapshot import FALLBACK_STATIONS
+    from korail_bot.utils.station_codes import StationManager
+
+    monkeypatch.setattr(StationManager, "_fetch_stations_from_api", lambda self: FALLBACK_STATIONS)
 
 
 @pytest.fixture(scope="session")

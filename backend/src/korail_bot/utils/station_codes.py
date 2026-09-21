@@ -1,7 +1,6 @@
 """Station name validation and management for Korail."""
 
-import json
-from typing import Optional
+import time
 
 import requests
 
@@ -15,49 +14,15 @@ KORAIL_STATION_DB_URL = (
     "https://smart.letskorail.com:443/classes/com.korail.mobile.common.stationdata"
 )
 
-# Redis cache key and TTL
-REDIS_STATION_CACHE_KEY = "korail:station_list"
-REDIS_STATION_CACHE_TTL = 86400  # 24 hours
-
-# Fallback static list (snapshot from Korail API on 2026-06-02).
-# Used only when both Redis cache and API request fail.
+STATION_CACHE_TTL = 86400  # 24 hours
 
 
 class StationManager:
-    """Manages station data with Redis caching."""
+    """Manages station data, cached in this process."""
 
-    _instance: Optional["StationManager"] = None
-    _redis_client = None
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialize_redis()
-        return cls._instance
-
-    def _initialize_redis(self):
-        """Initialize Redis client (lazy loading)."""
-        try:
-            import redis
-
-            from korail_bot.config.settings import settings
-
-            self._redis_client = redis.Redis(
-                host=settings.REDIS_HOST,
-                port=settings.REDIS_PORT,
-                db=settings.REDIS_DB,
-                password=settings.REDIS_PASSWORD,
-                decode_responses=True,
-                socket_timeout=5,
-                socket_connect_timeout=5,
-            )
-            # Test connection
-            self._redis_client.ping()
-            logger.info("StationManager: Redis connected for station caching")
-        except Exception as e:
-            logger.warning(f"StationManager: Redis connection failed: {e}")
-            logger.warning("StationManager: Will operate without Redis caching")
-            self._redis_client = None
+    def __init__(self):
+        self._stations: set[str] | None = None
+        self._fetched_at = 0.0
 
     def _fetch_stations_from_api(self) -> set[str]:
         """
@@ -101,55 +66,13 @@ class StationManager:
             logger.error(f"Unexpected error fetching station data: {e}", exc_info=True)
             return FALLBACK_STATIONS
 
-    def _get_from_redis(self) -> set[str] | None:
-        """
-        Get station list from Redis cache.
-
-        Returns:
-            Set of station names or None if cache miss
-        """
-        if not self._redis_client:
-            return None
-
-        try:
-            cached_data = self._redis_client.get(REDIS_STATION_CACHE_KEY)
-            if cached_data:
-                stations = set(json.loads(cached_data))
-                logger.info(f"Loaded {len(stations)} stations from Redis cache")
-                return stations
-        except Exception as e:
-            logger.warning(f"Failed to load stations from Redis: {e}")
-
-        return None
-
-    def _save_to_redis(self, stations: set[str]) -> None:
-        """
-        Save station list to Redis cache.
-
-        Args:
-            stations: Set of station names
-        """
-        if not self._redis_client:
-            return
-
-        try:
-            data = json.dumps(list(stations))
-            self._redis_client.setex(REDIS_STATION_CACHE_KEY, REDIS_STATION_CACHE_TTL, data)
-            logger.info(
-                f"Saved {len(stations)} stations to Redis cache (TTL={REDIS_STATION_CACHE_TTL}s)"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to save stations to Redis: {e}")
-
     def get_valid_stations(self, force_refresh: bool = False) -> set[str]:
         """
-        Get valid station names with multi-tier caching.
+        Get valid station names.
 
-        Caching strategy:
-        1. Try Redis cache (24h TTL)
-        2. If cache miss, fetch from API
-        3. If API fails, use fallback static list
-        4. Save successful API result to Redis
+        The list is fetched from the Korail API at most once per
+        STATION_CACHE_TTL. A failed fetch answers with the fallback list and
+        is not cached, so the next call tries the API again.
 
         Args:
             force_refresh: Force refresh from API
@@ -157,19 +80,16 @@ class StationManager:
         Returns:
             Set of valid station names
         """
-        # Try Redis cache first (unless forced refresh)
-        if not force_refresh:
-            cached_stations = self._get_from_redis()
-            if cached_stations:
-                return cached_stations
+        fresh = time.monotonic() - self._fetched_at < STATION_CACHE_TTL
+        if self._stations is not None and fresh and not force_refresh:
+            return self._stations
 
-        # Fetch from API
         logger.info("Fetching fresh station data...")
         stations = self._fetch_stations_from_api()
 
-        # Save to Redis if not fallback
-        if stations != FALLBACK_STATIONS:
-            self._save_to_redis(stations)
+        if stations is not FALLBACK_STATIONS:
+            self._stations = stations
+            self._fetched_at = time.monotonic()
 
         return stations
 
