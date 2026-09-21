@@ -530,7 +530,11 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
   body { padding: 0; }
   .app-shell {
     width: 100%; max-width: 520px; min-height: 100dvh; margin: 0 auto;
-    border-radius: 0; box-shadow: none; overflow-x: hidden;
+    border-radius: 0; box-shadow: none;
+    /* clip is unsupported on WebView < Chromium 90 (possible on minSdk 23 devices); the invalid declaration there is
+       dropped, leaving this hidden fallback in effect, while newer WebViews apply clip and override it. */
+    overflow-x: hidden;
+    overflow-x: clip;
   }
   .topbar {
     min-height: calc(68px + env(safe-area-inset-top));
@@ -541,7 +545,11 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
   .brand small { font-size: 12px; letter-spacing: 0; }
   .screen {
     min-height: calc(100dvh - 68px); padding: 18px 20px calc(78px + env(safe-area-inset-bottom));
+    /* overflow-x: hidden here also sets overflow-y: auto per spec, turning .screen into an unwanted scroll container that
+       breaks position: sticky footers (they stick to .screen's scrollport, not the viewport); clip avoids that coupling,
+       but is unsupported on WebView < Chromium 90 (possible on minSdk 23), so keep hidden as the fallback for those. */
     overflow-x: hidden;
+    overflow-x: clip;
   }
   .bottom-nav {
     right: auto; left: 50%; transform: translateX(-50%);
