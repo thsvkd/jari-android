@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TeumApp } from "./app";
 import { ApiError } from "./api";
 import { createDemoApi } from "./demo";
-import type { StatusResult } from "./types";
+import type { SeatInventory, SeatMapSeat, StatusResult } from "./types";
 
 const mounted: TeumApp[] = [];
 
@@ -658,7 +658,118 @@ it("starts cancellation waiting with the selected physical-seat range", async ()
       },
     },
   });
-  expect(search.mock.calls[0]![0].conditions.seat_plan.trains[0].targets.map((seat: { label: string }) => seat.label)).toEqual(["3A", "3D"]);
+  const targets = search.mock.calls[0]![0].conditions.seat_plan.trains[0].targets;
+  expect(targets.map((seat: { label: string }) => seat.label)).toEqual(["3A", "3D"]);
+  // Only the fields SeatTarget.from_payload reads; salePossible/familyLabel would just bloat a big plan.
+  expect(Object.keys(targets[0]).sort()).toEqual(
+    ["adjacencyGroup", "carNo", "column", "direction", "floor", "label", "position", "row", "seatNo"].sort(),
+  );
+});
+
+function makeCarInventory(carNo: number): SeatInventory {
+  const seat = (row: number, column: "A" | "B"): SeatMapSeat => ({
+    carNo, seatNo: `${carNo}-${row}-${column}`, label: `${row}${column}`,
+    salePossible: true, direction: "1", floor: "", row, column,
+    adjacencyGroup: `${carNo}:${row}`, position: column === "A" ? 1 : 2, familyLabel: "",
+  });
+  return {
+    carNo, layoutType: 2, arrangementCode: "4", remainingCount: 4, totalCount: 4,
+    seats: [seat(1, "A"), seat(1, "B"), seat(2, "A"), seat(2, "B")],
+  };
+}
+
+const threeCarSeatCars = async () => ({
+  cars: [3, 4, 5].map((carNo) => ({ carNo, roomClassName: "일반실", remainingSeatCount: 4, attributes: [] })),
+});
+
+async function openThreeCarWaitDialog(root: HTMLElement, app: TeumApp) {
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-action='apply-all-cars']")).not.toBeNull());
+}
+
+it("applies the current filter to every other car when bulk-applying seats", async () => {
+  const seatInventory = vi.fn(async (_trainKey: string, carNo: number) => makeCarInventory(carNo));
+  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory });
+  await openThreeCarWaitDialog(root, app);
+
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='apply-all-cars']")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-car='4'] em")?.textContent).toBe("2"));
+  expect(root.querySelector("[data-seat-car='5'] em")?.textContent).toBe("2");
+  expect(seatInventory).toHaveBeenCalledTimes(3); // initial car 3 + bulk-fetched cars 4, 5
+
+  // Switching to a car the bulk apply already fetched reuses the cache instead of refetching.
+  root.querySelector<HTMLButtonElement>("[data-seat-car='4']")!.click();
+  await vi.waitFor(() => expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(2));
+  expect(seatInventory).toHaveBeenCalledTimes(3);
+});
+
+it("matches by seat label across cars when no filter is set", async () => {
+  const seatInventory = vi.fn(async (_trainKey: string, carNo: number) => makeCarInventory(carNo));
+  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory });
+  await openThreeCarWaitDialog(root, app);
+
+  root.querySelector<HTMLButtonElement>("[data-seat-no='3-1-A']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='apply-all-cars']")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-car='4'] em")?.textContent).toBe("1"));
+  expect(root.querySelector("[data-seat-car='5'] em")?.textContent).toBe("1");
+});
+
+it("does nothing but hint when neither a filter nor a selection exists", async () => {
+  const seatInventory = vi.fn(async (_trainKey: string, carNo: number) => makeCarInventory(carNo));
+  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory });
+  await openThreeCarWaitDialog(root, app);
+
+  root.querySelector<HTMLButtonElement>("[data-action='apply-all-cars']")!.click();
+
+  expect(root.textContent).toContain("먼저 이 호차에서 좌석이나 조건을 골라 주세요.");
+  expect(seatInventory).toHaveBeenCalledTimes(1); // only the initial car load
+});
+
+it("keeps the cars that loaded and names the ones that failed during a bulk apply", async () => {
+  const seatInventory = vi.fn(async (_trainKey: string, carNo: number) => {
+    if (carNo === 4) throw new Error("network down");
+    return makeCarInventory(carNo);
+  });
+  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory });
+  await openThreeCarWaitDialog(root, app);
+
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='apply-all-cars']")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-car='5'] em")?.textContent).toBe("2"));
+  expect(root.querySelector("[data-seat-car='4'] em")).toBeNull();
+  expect(root.textContent).toContain("4호차 좌석표를 불러오지 못해 빼고 적용했어요.");
+});
+
+it("shows numeric seat labels and hides synthetic column chips for a 무궁화 car", async () => {
+  const numericSeat = (column: "A" | "B", label: string): SeatMapSeat => ({
+    carNo: 6, seatNo: `demo-${label}`, label, salePossible: true, direction: "1", floor: "",
+    row: 1, column, adjacencyGroup: `1:${column}`, position: column === "A" ? 1 : 2, familyLabel: "",
+  });
+  const numericInventory: SeatInventory = {
+    carNo: 6, layoutType: 2, arrangementCode: "4", remainingCount: 2, totalCount: 2,
+    seats: [numericSeat("A", "23"), numericSeat("B", "24")],
+  };
+  const { app, root } = await mountLive({
+    seatCars: async () => ({ cars: [{ carNo: 6, roomClassName: "일반실", remainingSeatCount: 2, attributes: [] }] }),
+    seatInventory: async () => numericInventory,
+  });
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-no='demo-23']")).not.toBeNull());
+  expect(root.querySelector("[data-seat-no='demo-23'] b")?.textContent).toBe("23");
+  expect(root.querySelector("[data-seat-no='demo-24'] b")?.textContent).toBe("24");
+  expect(root.querySelector("[data-seat-filter='col:A']")).toBeNull();
+  expect(root.querySelector("[data-seat-filter='pair:window']")).not.toBeNull();
 });
 
 it("labels a nearby-date formation used for a sold-out train", async () => {

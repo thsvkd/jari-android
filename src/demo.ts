@@ -14,10 +14,9 @@ import type {
   TrainOption,
 } from "./types";
 
-const initialConditions: Conditions = {
+const initialConditions: Omit<Conditions, "dep_date"> = {
   v: 1,
   action: "prepare_search",
-  dep_date: "20260919",
   src_station: "서울",
   dst_station: "부산",
   dep_time: "0700",
@@ -27,6 +26,12 @@ const initialConditions: Conditions = {
   passenger_count: 1,
   seat_strategy: "1",
   seat_preference: "",
+};
+
+// A demo date fixed in the source goes stale the day after it's written; keep it a few days out from whenever the demo actually runs.
+const futureDepDate = (clock: () => Date, daysAhead = 3): string => {
+  const date = new Date(clock().getTime() + daysAhead * 86_400_000);
+  return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
 };
 
 const stations = [
@@ -82,6 +87,7 @@ const demoInventory = (): SeatInventory => ({
 });
 
 export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
+  const conditions: Conditions = { ...initialConditions, dep_date: futureDepDate(clock) };
   let registered = true;
   let running: RunningSearch | null = null;
   let scheduled: ScheduledSearch | null = null;
@@ -92,7 +98,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
       name: "주말에 집으로",
       route: "서울 → 부산",
       window: "07:00–12:00",
-      conditions: { ...initialConditions, dep_date: "" },
+      conditions: { ...conditions, dep_date: "" },
     },
   ];
   let notifyMinutes = 5;
@@ -123,7 +129,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     attemptCount: 18,
     elapsedSeconds: 1_680,
   });
-  running = asSearch(initialConditions, ["015", "019"]);
+  running = asSearch(conditions, ["015", "019"]);
 
   const auth = (username: string, role: AuthResult["user"]["role"] = "member"): AuthResult => ({
     token: `demo-${username}`,
@@ -146,7 +152,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     pending,
     favourites,
     notifyMinutes,
-    draft: { ...initialConditions },
+    draft: { ...conditions },
     paymentUrl: "https://www.letskorail.com/",
     capabilities: normalizeCapabilities({
       korail: true,

@@ -171,11 +171,24 @@ export interface SeatInventory {
   layoutReference?: boolean;
 }
 
+// Only the fields SeatTarget.from_payload reads on the server; dropping salePossible/familyLabel keeps big plans small.
+export interface SeatTarget {
+  carNo: number;
+  seatNo: string;
+  label: string;
+  row: number | null;
+  column: string;
+  direction: string;
+  floor: string;
+  adjacencyGroup: string;
+  position: number;
+}
+
 export interface TrainSeatTargets {
   trainNo: string;
   trainKey?: string;
   seatClass: SeatClass;
-  targets: SeatMapSeat[];
+  targets: SeatTarget[];
 }
 
 export interface CancellationWaitPlan {

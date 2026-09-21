@@ -265,10 +265,11 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .seat-dialog h2 { margin: 0; font-size: 23px; letter-spacing: -.7px; }
 .car-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 3px; scrollbar-width: none; }
 .car-tabs::-webkit-scrollbar { display: none; }
-.car-tab { min-width: 84px; min-height: 52px; display: grid; place-items: center; gap: 2px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
+.car-tab { position: relative; min-width: 84px; min-height: 52px; display: grid; place-items: center; gap: 2px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
 .car-tab b { font-size: 14px; }
 .car-tab small { font-size: 11px; }
 .car-tab.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+.car-tab em { position: absolute; top: -6px; right: -6px; display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; background: var(--accent-strong); color: #fff; font-size: 10px; font-style: normal; font-weight: 800; }
 .seat-filter { display: grid; gap: 8px; padding: 10px; border-radius: 14px; background: var(--bg); }
 .seat-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .seat-filter-row > span { flex: none; width: 28px; color: var(--muted); font-size: 11px; font-weight: 700; }

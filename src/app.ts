@@ -33,6 +33,7 @@ import type {
   SeatInventory,
   SeatMapSeat,
   SeatSelectionMode,
+  SeatTarget,
   TrainOption,
 } from "./types";
 
@@ -62,12 +63,14 @@ interface SeatDialogState {
   mode: SeatSelectionMode;
   cars: SeatCarOption[];
   inventory: SeatInventory | null;
+  inventories: Map<number, SeatInventory>;
   carNo: number | null;
   selected: SeatMapSeat[];
   filter: SeatFilter;
   layoutReference: boolean;
   loading: boolean;
   error: string;
+  bulkProgress: { done: number; total: number } | null;
 }
 
 const SEAT_OPTIONS: Record<string, string> = {
@@ -90,6 +93,11 @@ function escapeHtml(value: unknown): string {
     };
     return entities[character] ?? character;
   });
+}
+
+// True when a seat's label is the real seat number rather than the synthetic column letter the grid uses to lay it out (e.g. 무궁화 "23" vs KTX "3A").
+function isNumericSeatLabel(seat: SeatMapSeat): boolean {
+  return Boolean(seat.column) && !seat.label.endsWith(seat.column);
 }
 
 function formatStamp(value: string | null | undefined): string {
@@ -562,9 +570,22 @@ export class TeumApp {
     const title = dialog.mode === "immediate"
       ? "예약할 좌석을 선택해 주세요"
       : "좌석 범위를 선택해 주세요";
-    const cars = dialog.cars.map((car) => `<button type="button" class="car-tab ${dialog.carNo === car.carNo ? "selected" : ""}" data-seat-car="${car.carNo}"><b>${car.carNo}호차</b><small>${dialog.layoutReference ? "좌석표" : `${car.remainingSeatCount}석 가능`}</small></button>`).join("");
-    const selectable = (seat: SeatMapSeat) => dialog.mode === "wait" || seat.salePossible;
+    // Scanning dialog.selected per car tab and per cell is O(n) each; with a few hundred seats selected that adds up over a whole render. Index it once instead.
+    const selectedByCar = new Map<number, number>();
+    const selectedKeys = new Set<string>();
+    for (const seat of dialog.selected) {
+      selectedByCar.set(seat.carNo, (selectedByCar.get(seat.carNo) ?? 0) + 1);
+      selectedKeys.add(`${seat.carNo}:${seat.seatNo}`);
+    }
+    const locked = Boolean(dialog.bulkProgress);
+    const cars = dialog.cars.map((car) => {
+      const count = selectedByCar.get(car.carNo) ?? 0;
+      return `<button type="button" class="car-tab ${dialog.carNo === car.carNo ? "selected" : ""}" data-seat-car="${escapeHtml(car.carNo)}" ${locked ? "disabled" : ""}><b>${escapeHtml(car.carNo)}호차</b><small>${dialog.layoutReference ? "좌석표" : `${escapeHtml(car.remainingSeatCount)}석 가능`}</small>${count ? `<em>${escapeHtml(count)}</em>` : ""}</button>`;
+    }).join("");
+    const selectable = (seat: SeatMapSeat) => this.seatSelectable(dialog, seat);
     const layout = dialog.inventory ? groupSeatsByLayout(dialog.inventory.seats) : [];
+    // Window columns read from the layout once per car; a per-cell "first/last in this row" check mislabels the aisle seat next to a short row (door, wheelchair space) as a window seat.
+    const windowColumns = dialog.inventory ? new Set(seatColumnSets(dialog.inventory.seats).window) : new Set<string>();
     const aisleBefore = (row: SeatMapSeat[], index: number) => {
       const [previous, seat] = [row[index - 1], row[index]];
       return Boolean(previous?.adjacencyGroup && seat?.adjacencyGroup && previous.adjacencyGroup !== seat.adjacencyGroup);
@@ -573,18 +594,24 @@ export class TeumApp {
       ? layout.map((row) => {
           const cells = row.map((seat, index) => {
             const groupChanged = aisleBefore(row, index);
-            const selected = dialog.selected.some((item) => item.carNo === seat.carNo && item.seatNo === seat.seatNo);
+            const selected = selectedKeys.has(`${seat.carNo}:${seat.seatNo}`);
             const description = [seat.label, seat.direction, seat.floor, seat.familyLabel].filter(Boolean).join(" · ");
-            const available = seat.salePossible && !dialog.layoutReference;
-            const windowSeat = index === 0 || index === row.length - 1;
-            return `${groupChanged ? '<span class="train-aisle" aria-hidden="true">통로</span>' : ""}<button type="button" class="seat-cell ${available ? "available" : "occupied"} ${selected ? "selected" : ""} ${windowSeat ? "window-seat" : ""}" data-seat-no="${escapeHtml(seat.seatNo)}" aria-pressed="${selected}" ${selectable(seat) ? "" : "disabled"} title="${escapeHtml(description)}"><b>${escapeHtml(seat.column || seat.label)}</b><small>${seat.familyLabel ? "가족" : windowSeat ? "창가" : available ? "가능" : "대기"}</small></button>`;
+            const available = this.seatAvailable(dialog, seat);
+            const windowSeat = seat.column ? windowColumns.has(seat.column) : index === 0 || index === row.length - 1;
+            // A numeric-label car (무궁화 등) has a synthetic column letter; show the real seat number instead.
+            const cellText = seat.column && !isNumericSeatLabel(seat) ? seat.column : seat.label;
+            return `${groupChanged ? '<span class="train-aisle" aria-hidden="true">통로</span>' : ""}<button type="button" class="seat-cell ${available ? "available" : "occupied"} ${selected ? "selected" : ""} ${windowSeat ? "window-seat" : ""}" data-seat-no="${escapeHtml(seat.seatNo)}" aria-pressed="${selected}" ${selectable(seat) && !locked ? "" : "disabled"} title="${escapeHtml(description)}"><b>${escapeHtml(cellText)}</b><small>${seat.familyLabel ? "가족" : windowSeat ? "창가" : available ? "가능" : "대기"}</small></button>`;
           }).join("");
-          return `<div class="seat-row"><span>${row[0]?.row ?? ""}</span><div class="seat-row-track">${cells}</div></div>`;
-        }).join("")
+          return `<div class="seat-row"><span>${escapeHtml(row[0]?.row ?? "")}</span><div class="seat-row-track">${cells}</div></div>`;
+        }).join("") || (dialog.inventory.seats.length
+          ? '<div class="seat-dialog-error" role="alert"><b>이 열차의 좌석표 형식을 아직 읽지 못했어요.</b><p>다른 호차를 선택하거나 나중에 다시 시도해 주세요.</p></div>'
+          : "")
       : dialog.error
         ? `<div class="seat-dialog-error" role="alert"><b>좌석표를 불러오지 못했어요.</b><p>${escapeHtml(dialog.error)}</p><button type="button" class="button seat-action" data-action="retry-seat-dialog">다시 시도</button></div>`
         : '<div class="seat-loading"><span class="spinner"></span><p>실제 좌석표를 불러오고 있어요.</p></div>';
-    const selectedLabels = dialog.selected.map((seat) => `${seat.carNo}호차 ${seat.label}`).join(", ");
+    const selectedLabels = dialog.selected.length > 6
+      ? `${new Set(dialog.selected.map((seat) => seat.carNo)).size}개 호차 · ${dialog.selected.length}석`
+      : dialog.selected.map((seat) => `${seat.carNo}호차 ${seat.label}`).join(", ");
     const passengerCount = this.draft.passengerCount;
     const confirmText = dialog.mode === "immediate"
       ? `${dialog.selected.length}/${passengerCount}석 선택 · 예약하기`
@@ -596,24 +623,33 @@ export class TeumApp {
       <div class="seat-legend">${dialog.layoutReference ? "" : '<span><i class="available"></i>현재 예약 가능</span>'}<span><i class="occupied"></i>${dialog.mode === "wait" ? "취소표 대기 가능" : "선택 불가"}</span><span><i class="selected"></i>선택</span></div>
       <div class="seat-map-live">${rows}</div>
       ${dialog.inventory && dialog.error ? `<p class="notice warning seat-inline-error" role="alert">${escapeHtml(dialog.error)}</p>` : ""}
-      <footer><div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || dialog.filter.columns.length || dialog.filter.trimRows || dialog.filter.excludeFamily ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div><button type="button" class="button primary" data-action="confirm-seat-dialog">${confirmText}</button></footer>
+      <footer><div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || dialog.filter.columns.length || dialog.filter.trimRows || dialog.filter.excludeFamily ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div><button type="button" class="button primary" data-action="confirm-seat-dialog" ${locked ? "disabled" : ""}>${confirmText}</button></footer>
     </section></div>`;
   }
 
   private renderSeatFilter(dialog: SeatDialogState, seats: SeatMapSeat[]): string {
     const { filter } = dialog;
     const sets = seatColumnSets(seats);
+    const locked = Boolean(dialog.bulkProgress);
+    // A numeric-label car (무궁화 등) synthesizes A–D columns just to lay seats out; the letters aren't real, so don't offer them as a filter.
+    // Judge the whole car by its placed seats (row !== null) with `every`: one unreadable seat in an otherwise normal KTX car shouldn't hide every column chip.
+    const placedSeats = seats.filter((seat) => seat.row !== null);
+    const numericLabels = placedSeats.length > 0 && placedSeats.every((seat) => isNumericSeatLabel(seat));
     const chip = (action: string, label: string, on: boolean) =>
-      `<button type="button" class="seat-chip ${on ? "selected" : ""}" data-seat-filter="${escapeHtml(action)}" aria-pressed="${on}">${escapeHtml(label)}</button>`;
+      `<button type="button" class="seat-chip ${on ? "selected" : ""}" data-seat-filter="${escapeHtml(action)}" aria-pressed="${on}" ${locked ? "disabled" : ""}>${escapeHtml(label)}</button>`;
     const allOn = (columns: string[]) => columns.length > 0 && columns.every((column) => filter.columns.includes(column));
-    const columnChips = sets.columns.map((column) => chip(`col:${column}`, column, filter.columns.includes(column))).join("");
+    const columnChips = numericLabels ? "" : sets.columns.map((column) => chip(`col:${column}`, column, filter.columns.includes(column))).join("");
     const trimLabel = filter.trimRows ? `${filter.trimRows}줄 제외` : "제외 안 함";
     const family = seats.some((seat) => seat.familyLabel)
-      ? `<button type="button" role="switch" class="seat-switch" data-seat-filter="family" aria-checked="${filter.excludeFamily}"><span aria-hidden="true"></span>가족석 제외</button>`
+      ? `<button type="button" role="switch" class="seat-switch" data-seat-filter="family" aria-checked="${filter.excludeFamily}" ${locked ? "disabled" : ""}><span aria-hidden="true"></span>가족석 제외</button>`
+      : "";
+    const applyAll = dialog.mode === "wait" && dialog.cars.length > 1
+      ? `<button type="button" class="button ghost seat-apply-all" data-action="apply-all-cars" ${locked ? "disabled" : ""}>${dialog.bulkProgress ? `${escapeHtml(dialog.bulkProgress.done)}/${escapeHtml(dialog.bulkProgress.total)} 호차 확인 중…` : "모든 호차에 적용"}</button>`
       : "";
     return `<div class="seat-filter">
       <div class="seat-filter-row"><span>열</span><div class="seat-chips">${columnChips}<i aria-hidden="true"></i>${chip("pair:window", "창가", allOn(sets.window))}${sets.aisle.length ? chip("pair:aisle", "복도", allOn(sets.aisle)) : ""}</div></div>
-      <div class="seat-filter-row"><span>앞뒤</span><div class="seat-stepper"><button type="button" data-seat-filter="trim:-" aria-label="앞뒤 제외 줄 수 줄이기" ${filter.trimRows <= 0 ? "disabled" : ""}>−</button><output>${trimLabel}</output><button type="button" data-seat-filter="trim:+" aria-label="앞뒤 제외 줄 수 늘리기" ${filter.trimRows >= maxTrimRows(seats) ? "disabled" : ""}>+</button></div>${family}</div>
+      <div class="seat-filter-row"><span>앞뒤</span><div class="seat-stepper"><button type="button" data-seat-filter="trim:-" aria-label="앞뒤 제외 줄 수 줄이기" ${filter.trimRows <= 0 || locked ? "disabled" : ""}>−</button><output>${trimLabel}</output><button type="button" data-seat-filter="trim:+" aria-label="앞뒤 제외 줄 수 늘리기" ${filter.trimRows >= maxTrimRows(seats) || locked ? "disabled" : ""}>+</button></div>${family}</div>
+      ${applyAll}
     </div>`;
   }
 
@@ -621,8 +657,8 @@ export class TeumApp {
     const train = this.trainOptions.find((item) => item.no === trainNo);
     if (!train || !trainKey) return;
     const dialog: SeatDialogState = {
-      train, seatClass, mode, cars: [], inventory: null, carNo: null,
-      selected: [], filter: emptySeatFilter(), layoutReference: false, loading: true, error: "",
+      train, seatClass, mode, cars: [], inventory: null, inventories: new Map(), carNo: null,
+      selected: [], filter: emptySeatFilter(), layoutReference: false, loading: true, error: "", bulkProgress: null,
     };
     this.seatDialog = dialog;
     this.render();
@@ -635,6 +671,7 @@ export class TeumApp {
     dialog.error = "";
     dialog.cars = [];
     dialog.inventory = null;
+    dialog.inventories = new Map();
     dialog.carNo = null;
     dialog.filter = emptySeatFilter();
     this.refreshSeatDialog();
@@ -650,6 +687,7 @@ export class TeumApp {
       const inventory = await this.api.seatInventory(trainKey, dialog.carNo, dialog.seatClass, this.draft.passengerCount);
       if (generation !== this.generation || this.seatDialog !== dialog) return;
       dialog.inventory = inventory;
+      dialog.inventories.set(dialog.carNo, inventory);
       dialog.layoutReference ||= Boolean(inventory.layoutReference);
       dialog.loading = false;
       this.refreshSeatDialog();
@@ -691,19 +729,28 @@ export class TeumApp {
 
   private async loadSeatCar(carNo: number): Promise<void> {
     const dialog = this.seatDialog;
-    if (!dialog || dialog.carNo === carNo) return;
+    if (!dialog || dialog.carNo === carNo || dialog.bulkProgress) return;
     const generation = this.generation;
     dialog.carNo = carNo;
-    dialog.inventory = null;
     // Conditions describe the car they were applied to; chips left on over another car would read as applied when they are not.
     dialog.filter = emptySeatFilter();
-    dialog.loading = true;
     dialog.error = "";
+    const cached = dialog.inventories.get(carNo);
+    if (cached) {
+      dialog.inventory = cached;
+      dialog.layoutReference ||= Boolean(cached.layoutReference);
+      dialog.loading = false;
+      this.refreshSeatDialog();
+      return;
+    }
+    dialog.inventory = null;
+    dialog.loading = true;
     this.refreshSeatDialog();
     try {
       const inventory = await this.api.seatInventory(dialog.train.trainKey!, carNo, dialog.seatClass, this.draft.passengerCount);
       if (generation !== this.generation || this.seatDialog !== dialog) return;
       dialog.inventory = inventory;
+      dialog.inventories.set(carNo, inventory);
       dialog.layoutReference ||= Boolean(inventory.layoutReference);
       dialog.loading = false;
       this.refreshSeatDialog();
@@ -715,10 +762,82 @@ export class TeumApp {
     }
   }
 
+  /**
+   * WAIT mode only: fetches every other car's inventory and reuses the current filter/selection to pick that car's seats.
+   * Locked for the whole run (render disables seat cells/filter/tabs/confirm; toggleSeat/changeSeatFilter/loadSeatCar/confirmSeatDialog
+   * bail out early too) so an edit mid-fetch can't be silently overwritten when the loop replaces dialog.selected at the end.
+   */
+  private async applyAllCars(): Promise<void> {
+    const dialog = this.seatDialog;
+    if (!dialog || dialog.mode !== "wait" || dialog.bulkProgress || !dialog.inventory) return;
+    const currentCarNo = dialog.inventory.carNo;
+    // Snapshot the filter and the current car's selection once, up front, so every other car is judged by the same condition
+    // the user tapped with, not by whatever dialog.filter happens to hold by the time that car's fetch resolves.
+    const filterSnapshot: SeatFilter = { ...dialog.filter };
+    const filterEmpty = !filterSnapshot.columns.length && !filterSnapshot.trimRows && !filterSnapshot.excludeFamily;
+    const currentLabels = new Set(dialog.selected.filter((seat) => seat.carNo === currentCarNo).map((seat) => seat.label));
+    if (filterEmpty && !currentLabels.size) {
+      dialog.error = "먼저 이 호차에서 좌석이나 조건을 골라 주세요.";
+      this.refreshSeatDialog(true);
+      return;
+    }
+    const generation = this.generation;
+    const stale = () => generation !== this.generation || this.seatDialog !== dialog;
+    const otherCars = dialog.cars.filter((car) => car.carNo !== currentCarNo);
+    const nextSelected = dialog.selected.filter((seat) => seat.carNo === currentCarNo);
+    const failedCars: number[] = [];
+    dialog.error = "";
+    dialog.bulkProgress = { done: 0, total: otherCars.length };
+    this.refreshSeatDialog(true);
+    try {
+      for (let index = 0; index < otherCars.length; index += 1) {
+        const car = otherCars[index]!;
+        let inventory = dialog.inventories.get(car.carNo);
+        if (!inventory) {
+          try {
+            inventory = await this.api.seatInventory(dialog.train.trainKey!, car.carNo, dialog.seatClass, this.draft.passengerCount);
+          } catch {
+            if (stale()) return;
+            failedCars.push(car.carNo);
+            dialog.bulkProgress = { done: index + 1, total: otherCars.length };
+            this.refreshSeatDialog(true);
+            continue;
+          }
+          if (stale()) return;
+          dialog.inventories.set(car.carNo, inventory);
+        }
+        const matched = filterEmpty
+          ? inventory.seats.filter((seat) => currentLabels.has(seat.label))
+          : filterSeats(inventory.seats, { ...filterSnapshot, trimRows: Math.min(filterSnapshot.trimRows, maxTrimRows(inventory.seats)) });
+        nextSelected.push(...matched);
+        dialog.bulkProgress = { done: index + 1, total: otherCars.length };
+        this.refreshSeatDialog(true);
+      }
+      dialog.selected = nextSelected;
+      dialog.error = failedCars.length ? `${failedCars.join("·")}호차 좌석표를 불러오지 못해 빼고 적용했어요.` : "";
+    } finally {
+      if (!stale()) {
+        dialog.bulkProgress = null;
+        this.refreshSeatDialog(true);
+      }
+    }
+  }
+
+  // A seat is "available" (bookable right now) only when it's for sale and this isn't a reference layout from another day.
+  private seatAvailable(dialog: SeatDialogState, seat: SeatMapSeat): boolean {
+    return seat.salePossible && !dialog.layoutReference;
+  }
+
+  // Wait mode can pick any seat to wait for; immediate reservation can only take one that's actually available now.
+  private seatSelectable(dialog: SeatDialogState, seat: SeatMapSeat): boolean {
+    return dialog.mode === "wait" || this.seatAvailable(dialog, seat);
+  }
+
   private toggleSeat(seatNo: string): void {
     const dialog = this.seatDialog;
-    const seat = dialog?.inventory?.seats.find((item) => item.seatNo === seatNo);
-    if (!dialog || !seat || (dialog.mode === "immediate" && !seat.salePossible)) return;
+    if (!dialog || dialog.bulkProgress) return;
+    const seat = dialog.inventory?.seats.find((item) => item.seatNo === seatNo);
+    if (!seat || !this.seatSelectable(dialog, seat)) return;
     const index = dialog.selected.findIndex((item) => item.carNo === seat.carNo && item.seatNo === seat.seatNo);
     if (index >= 0) dialog.selected.splice(index, 1);
     else {
@@ -732,7 +851,7 @@ export class TeumApp {
   private changeSeatFilter(action: string): void {
     const dialog = this.seatDialog;
     const inventory = dialog?.inventory;
-    if (!dialog || !inventory) return;
+    if (!dialog || !inventory || dialog.bulkProgress) return;
     const [kind, value = ""] = action.split(":");
     if (kind === "clear") {
       dialog.filter = emptySeatFilter();
@@ -768,7 +887,7 @@ export class TeumApp {
 
   private async confirmSeatDialog(): Promise<void> {
     const dialog = this.seatDialog;
-    if (!dialog) return;
+    if (!dialog || dialog.bulkProgress) return;
     const passengerCount = this.draft.passengerCount;
     if (dialog.mode === "immediate") {
       if (dialog.selected.length !== passengerCount) {
@@ -793,6 +912,8 @@ export class TeumApp {
             dialog.inventory = await this.api.seatInventory(
               dialog.train.trainKey!, dialog.carNo!, dialog.seatClass, passengerCount,
             );
+            // Without this, tabbing away and back would hit loadSeatCar's cache and show the just-sold seat as selectable again.
+            dialog.inventories.set(dialog.carNo!, dialog.inventory);
             dialog.selected = [];
             dialog.filter = emptySeatFilter();
             dialog.error = "선택한 좌석이 방금 판매됐어요. 새 좌석표에서 다시 선택해 주세요.";
@@ -824,7 +945,11 @@ export class TeumApp {
       return;
     }
     const next = this.cancellationTargets.filter((target) => !(target.trainNo === dialog.train.no && target.seatClass === dialog.seatClass));
-    next.push({ trainNo: dialog.train.no, trainKey: dialog.train.trainKey, seatClass: dialog.seatClass, targets: dialog.selected });
+    // Only the fields the server reads; a full SeatMapSeat per seat bloats large multi-car plans.
+    const targets: SeatTarget[] = dialog.selected.map(({ carNo, seatNo, label, row, column, direction, floor, adjacencyGroup, position }) => (
+      { carNo, seatNo, label, row, column, direction, floor, adjacencyGroup, position }
+    ));
+    next.push({ trainNo: dialog.train.no, trainKey: dialog.train.trainKey, seatClass: dialog.seatClass, targets });
     this.cancellationTargets = next;
     this.seatDialog = null;
     this.error = "";
@@ -1360,6 +1485,9 @@ export class TeumApp {
         break;
       case "retry-seat-dialog":
         void this.retrySeatDialog();
+        break;
+      case "apply-all-cars":
+        void this.applyAllCars();
         break;
       case "start-cancellation-wait":
         void this.startCancellationWait();
