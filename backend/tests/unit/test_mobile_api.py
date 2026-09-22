@@ -1,12 +1,16 @@
 """Authentication gates must apply before any booking service runs."""
 
 import json
+from datetime import timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
 from korail_bot.mobile.api import create_app
+from korail_bot.mobile.gateway import MobileGateway
 from korail_bot.mobile.identity import IdentityStore
+from korail_bot.services.mini_app_service import MiniAppDataError, MiniAppSubmission
+from korail_bot.utils.timezone import utc_now
 
 
 @pytest.fixture
@@ -248,18 +252,29 @@ def test_a_whole_car_seat_plan_fits_inside_the_body_limit(api):
             "floor": "1",
             "adjacencyGroup": f"{index % 60 // 4 + 1}:left",
             "position": index % 4 + 1,
+            "rowPosition": index % 4 + 1,
         }
         for index in range(900)
     ]
-    payload = {
-        "conditions": {
-            "seat_plan": {
-                "strategy": "independent",
-                "passengerCount": 1,
-                "trains": [{"trainNo": "015", "seatClass": "general", "targets": targets}],
-            }
-        }
+    conditions = {
+        "v": 1,
+        "action": "prepare_search",
+        "dep_date": (utc_now() + timedelta(days=3)).strftime("%Y%m%d"),
+        "src_station": "서울",
+        "dst_station": "부산",
+        "dep_time": "0900",
+        "max_dep_time": "1800",
+        "train_type": "1",
+        "seat_option": "2",
+        "passenger_count": 1,
+        "seat_strategy": "1",
+        "seat_plan": {
+            "strategy": "independent",
+            "passengerCount": 1,
+            "trains": [{"trainNo": "015", "seatClass": "general", "targets": targets}],
+        },
     }
+    payload = {"conditions": conditions}
 
     response = client.post("/api/mobile/search", headers=headers, json=payload)
 
@@ -269,6 +284,14 @@ def test_a_whole_car_seat_plan_fits_inside_the_body_limit(api):
     gateway.start_search.assert_called_once_with(
         identity.authenticate(alice["token"])["storage_id"], payload
     )
+    # The gateway above is a mock, so the size limit that really decides this
+    # is the one on the submission boundary the real gateway calls.
+    submission = MobileGateway._submission(payload)
+    assert len(json.loads(submission.seat_plan_json)["trains"][0]["targets"]) == 900
+    # The Telegram Mini App keeps Telegram's own 64KB ceiling, which this
+    # plan is far too large for.
+    with pytest.raises(MiniAppDataError, match="너무 큽니다"):
+        MiniAppSubmission.parse(json.dumps(conditions, ensure_ascii=False))
 
 
 def test_overly_nested_payload_is_a_client_error(api):

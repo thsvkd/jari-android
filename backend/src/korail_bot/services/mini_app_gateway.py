@@ -22,11 +22,18 @@ from korail_bot.handlers.conversation_handler import ConversationHandler
 from korail_bot.models import (
     MAJOR_STATIONS,
     FavouriteSearch,
+    SeatPlanError,
     TrainSearchParams,
     UserProgress,
     UserSession,
+    parse_seat_plan,
 )
-from korail_bot.services.mini_app_service import MiniAppDataError, MiniAppSubmission
+from korail_bot.services.mini_app_service import (
+    ACTION,
+    SCHEMA_VERSION,
+    MiniAppDataError,
+    MiniAppSubmission,
+)
 from korail_bot.services.pending_payment_service import PendingPaymentService
 from korail_bot.services.reservation_service import ReservationService
 from korail_bot.services.scheduled_search_service import ScheduledSearchService, ScheduleError
@@ -190,7 +197,11 @@ class MiniAppGateway:
     @staticmethod
     def _conditions_of(info: dict) -> dict:
         """Turn a stored booking back into the app's own field names."""
-        return {
+        conditions = {
+            # The app hands this dict straight back as its conditions, and
+            # MiniAppSubmission.parse refuses one without the schema stamp.
+            "v": SCHEMA_VERSION,
+            "action": ACTION,
             "dep_date": info.get("depDate", ""),
             "src_station": info.get("srcLocate", ""),
             "dst_station": info.get("dstLocate", ""),
@@ -208,6 +219,15 @@ class MiniAppGateway:
             "seat_preference": info.get("seatPreference", ""),
             "trains": list(info.get("selectedTrains") or []),
         }
+        try:
+            plan = parse_seat_plan(info.get("seatPlan"))
+        except SeatPlanError:
+            # A draft that cannot carry its seat plan is still worth
+            # pre-filling; losing the whole screen over it is not.
+            plan = None
+        if plan is not None:
+            conditions["seat_plan"] = plan.as_payload()
+        return conditions
 
     # ==================== Registering an account ====================
 

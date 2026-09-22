@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import ClassVar
 
 from korail_bot.models import CancellationWaitPlan, SeatPlanError, SeatPreference
 from korail_bot.utils.validators import InputValidator
@@ -79,6 +80,9 @@ class MiniAppDataError(ValueError):
 class MiniAppSubmission:
     """Validated travel preferences submitted by the static Mini App."""
 
+    # Telegram's own ceiling on web_app_data. The app's boundary overrides it.
+    MAX_DATA_BYTES: ClassVar[int] = MAX_WEB_APP_DATA_BYTES
+
     dep_date: str
     src_station: str
     dst_station: str
@@ -102,7 +106,7 @@ class MiniAppSubmission:
         """Parse and validate client-controlled JSON from ``web_app_data``."""
         if not isinstance(raw, str) or not raw:
             raise MiniAppDataError("예약 정보가 비어 있습니다. 다시 열어 입력해주세요.")
-        if len(raw.encode("utf-8")) > MAX_WEB_APP_DATA_BYTES:
+        if len(raw.encode("utf-8")) > cls.MAX_DATA_BYTES:
             raise MiniAppDataError("예약 정보가 너무 큽니다. 다시 열어 입력해주세요.")
 
         try:

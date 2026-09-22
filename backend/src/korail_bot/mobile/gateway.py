@@ -8,6 +8,7 @@ from korail2 import TrainType
 
 from korail_bot.config.settings import settings
 from korail_bot.handlers.conversation_handler import ConversationHandler
+from korail_bot.mobile.config import MAX_REQUEST_BYTES
 from korail_bot.models import OnboardedAccount, PaymentStatus, SeatPreference, SeatTarget
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.access_service import AccessDecision, AccessLevel, AccessService
@@ -44,6 +45,10 @@ def serialized_operation(method):
 
 
 class MobileSubmission(MiniAppSubmission):
+    # The app posts its conditions over HTTP, so what bounds them is the body
+    # limit, not Telegram's 64KB: a whole-formation seat plan is larger.
+    MAX_DATA_BYTES = MAX_REQUEST_BYTES
+
     @classmethod
     def _validated_station(cls, payload, key):
         value = cls._text(payload, key)
@@ -455,7 +460,11 @@ class MobileGateway(MiniAppGateway):
                 if preference:
                     raise MiniAppError("코레일 예약 대기에서는 좌석 위치를 지정할 수 없어요.", 422)
         try:
-            return MobileSubmission.parse(json.dumps(conditions, ensure_ascii=False))
+            # Compact separators: the body limit was met on the wire, and the
+            # default spacing would push a plan just under it over the line.
+            return MobileSubmission.parse(
+                json.dumps(conditions, ensure_ascii=False, separators=(",", ":"))
+            )
         except (MiniAppDataError, TypeError, ValueError) as exc:
             raise MiniAppError(str(exc)) from exc
 

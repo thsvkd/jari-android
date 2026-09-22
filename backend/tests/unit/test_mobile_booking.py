@@ -1,5 +1,6 @@
 """Use the real gateway and services with only railway/process boundaries faked."""
 
+import json
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -19,6 +20,8 @@ from korail_bot.models import (
     TrainSearchParams,
     UserSession,
 )
+from korail_bot.services.mini_app_gateway import MiniAppGateway
+from korail_bot.services.mini_app_service import MiniAppSubmission
 from korail_bot.utils.timezone import utc_now
 
 
@@ -109,6 +112,75 @@ def test_real_gateway_delegates_booking_schedule_and_favourites(tmp_path, monkey
     assert runtime.storage.get_resume_credentials(owner) is None
     assert runtime.storage.get_onboarded_account(owner) is None
     runtime.storage.close()
+
+
+def test_draft_carries_the_seat_plan_back_to_the_app():
+    # Without this the app reopens a half-finished booking with every chosen
+    # seat forgotten, and the user picks the whole car again.
+    plan = {
+        "strategy": "consecutive",
+        "passengerCount": 2,
+        "trains": [
+            {
+                "trainNo": "015",
+                "seatClass": "general",
+                "targets": [
+                    {
+                        "carNo": 3,
+                        "seatNo": "000041",
+                        "label": "5A",
+                        "row": 5,
+                        "column": "A",
+                        "adjacencyGroup": "5:left",
+                        "position": 1,
+                        "rowPosition": 1,
+                    },
+                    {
+                        "carNo": 3,
+                        "seatNo": "000042",
+                        "label": "5B",
+                        "row": 5,
+                        "column": "B",
+                        "adjacencyGroup": "5:left",
+                        "position": 2,
+                        "rowPosition": 2,
+                    },
+                ],
+            }
+        ],
+    }
+    info = {
+        "depDate": (utc_now() + timedelta(days=3)).strftime("%Y%m%d"),
+        "srcLocate": "서울",
+        "dstLocate": "부산",
+        "depTime": "090000",
+        "maxDepTime": "1800",
+        "trainType": "KTX",
+        "specialInfo": "GENERAL_ONLY",
+        "passengerCount": 2,
+        "seatStrategy": "consecutive",
+        "seatPlan": json.dumps(plan),
+    }
+
+    conditions = MiniAppGateway._conditions_of(info)
+    assert conditions["seat_plan"]["strategy"] == "consecutive"
+    assert [seat["label"] for seat in conditions["seat_plan"]["trains"][0]["targets"]] == [
+        "5A",
+        "5B",
+    ]
+    # The app hands the draft straight back as its conditions, so the draft
+    # has to be something the submission boundary accepts, seat plan and all.
+    assert (conditions["v"], conditions["action"]) == (1, "prepare_search")
+    submission = MiniAppSubmission.parse(json.dumps(conditions, ensure_ascii=False))
+    assert submission.passenger_count == 2
+    assert submission.seat_strategy == "1"
+    assert json.loads(submission.seat_plan_json)["trains"][0]["targets"][1]["rowPosition"] == 2
+
+    assert "seat_plan" not in MiniAppGateway._conditions_of({"depDate": "20260913"})
+    # An unreadable plan costs the seats, never the rest of the draft.
+    assert "seat_plan" not in MiniAppGateway._conditions_of(
+        {"depDate": "20260913", "seatPlan": "{nonsense"}
+    )
 
 
 def test_railway_registration_accepts_member_number_and_normalizes_phone(tmp_path, monkeypatch):

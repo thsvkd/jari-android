@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+# One size for the whole app request path: the HTTP body limit and the
+# submission boundary that re-reads the conditions out of that body.
+MAX_REQUEST_BYTES = 2 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class MobileConfig:

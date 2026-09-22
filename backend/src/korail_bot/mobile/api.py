@@ -6,6 +6,7 @@ from functools import wraps
 from flask import Flask, g, jsonify, request
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 
+from korail_bot.mobile.config import MAX_REQUEST_BYTES
 from korail_bot.mobile.identity import AuthError, timestamp
 from korail_bot.services.mini_app_gateway import MiniAppError
 
@@ -18,7 +19,7 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
     # This is what bounds the total size of a seat plan: one seat target is
     # ~180 bytes of JSON, and "every seat in the train" for a few trains has
     # to fit. The per-train count in seat_plan.py is a sanity bound, not this.
-    app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
+    app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
     # The runtime is single-process; serialize each user's service mutations
     # so two simultaneous taps cannot launch competing search subprocesses.
     locks = [threading.RLock() for _ in range(128)]
