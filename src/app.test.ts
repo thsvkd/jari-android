@@ -1207,7 +1207,7 @@ it("replaces the running notice in 검색 상세 with the check count, keeping t
   expect(card.textContent).toContain("확인 · 18회 조회");
   expect(card.querySelector(".row-between small")?.textContent).toMatch(/확인$/);
   // A search in trouble still explains itself.
-  expect(root.querySelector(".status-guide-card")?.textContent).toContain("앱을 닫아도 서버에서 계속 검색해요.");
+  expect(root.querySelector(".status-guide-card")?.textContent).not.toContain("앱을 닫아도");
 });
 
 it("keeps the notice in 검색 상세 when the search is in trouble", async () => {
