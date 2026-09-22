@@ -234,6 +234,11 @@ class Settings:
     PROGRESS_PREFERENCE_TTL_SECONDS: float = float(
         os.environ.get("PROGRESS_PREFERENCE_TTL_SECONDS", "30")
     )
+    # How long the stamp a search leaves on every pass of its loop outlives
+    # that pass. Nothing clears the stamp when a search process is killed, so
+    # it has to expire on its own; generous enough that a search backing off
+    # from a run of failures still counts as having reported in.
+    SEARCH_HEARTBEAT_TTL_SECONDS: int = int(os.environ.get("SEARCH_HEARTBEAT_TTL_SECONDS", "600"))
 
     # Favourite searches
     #

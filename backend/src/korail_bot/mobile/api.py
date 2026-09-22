@@ -197,7 +197,12 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
             "favourites": booking_available,
             "notificationSettings": booking_available,
             "push": bool(notifications and notifications.push_available),
-            "lastChecked": False,
+            # The running search now carries when it last managed to ask and
+            # how many times it has. Left False while it did not: the app
+            # discards the fields rather than draw a check time it was never
+            # sent, and showing "방금 확인" for a search nobody was performing
+            # is the one thing worse than admitting the state is unknown.
+            "lastChecked": True,
         }
         result["notifications"] = {
             "pushAvailable": bool(notifications and notifications.push_available)

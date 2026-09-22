@@ -22,6 +22,7 @@ from korail_bot.handlers.conversation_handler import ConversationHandler
 from korail_bot.models import (
     MAJOR_STATIONS,
     FavouriteSearch,
+    RunningReservation,
     SeatPlanError,
     SeatTarget,
     TrainSearchParams,
@@ -42,7 +43,7 @@ from korail_bot.services.scheduled_search_service import ScheduledSearchService,
 from korail_bot.services.telegram_service import TelegramService
 from korail_bot.storage.base import StorageInterface
 from korail_bot.utils.logger import get_logger
-from korail_bot.utils.timezone import as_utc, is_valid_timezone
+from korail_bot.utils.timezone import as_utc, is_valid_timezone, utc_now
 
 logger = get_logger(__name__)
 
@@ -735,11 +736,72 @@ class MiniAppGateway:
         running = self.storage.get_running_reservation(chat_id)
         if not running:
             return None
+        started = as_utc(running.started_at) if running.started_at else None
         return {
             **self._describe_params(running.search_params),
-            "startedAt": as_utc(running.started_at).isoformat() if running.started_at else None,
+            "startedAt": started.isoformat() if started else None,
+            "elapsedSeconds": (utc_now() - started).total_seconds() if started else None,
+            **self._search_health(chat_id, running, started),
             **self._seat_plan_description(chat_id, running.search_params),
         }
+
+    def _search_health(
+        self, chat_id: int, running: RunningReservation, started: datetime | None
+    ) -> dict:
+        """
+        Whether anything is really performing this search, and since when.
+
+        A running record is a search that was started, not one that is being
+        performed: nothing clears the record when the process behind it is
+        killed. Without this the app can only say a search exists, which is
+        the one thing the user already knows - so every real search showed up
+        as "확인 안 됨" beside a spinner that meant nothing.
+
+        Two independent facts answer it. The process either exists or it does
+        not, which settles whether there is a search at all. The stamp the
+        search leaves on each pass of its loop says when it last managed to
+        ask, which is what separates a search being answered from one that is
+        alive but getting nothing back.
+        """
+        if not self.reservation.is_search_alive(running):
+            # The record outlived its process. The watchdog reports this in
+            # its own time; until then the screen must not claim a search.
+            return {"health": "unavailable", "lastCheckedAt": None, "attemptCount": None}
+
+        beat = self._heartbeat(chat_id, started)
+        if beat is None:
+            # Alive, but the first pass of the loop has not finished yet, or
+            # this build's stamp is not there to read. Saying it is running
+            # without inventing a time it last checked.
+            return {"health": "healthy", "lastCheckedAt": None, "attemptCount": None}
+
+        # A single failed request is normal and says nothing; the run of them
+        # that makes the bot warn the user is the same run that makes this a
+        # search in trouble rather than a search finding nothing.
+        failing = beat["failureStreak"] >= settings.KORAIL_FAILURE_ALERT_THRESHOLD
+        return {
+            "health": "error" if failing else "healthy",
+            "lastCheckedAt": beat["checkedAt"],
+            "attemptCount": beat["attempts"],
+        }
+
+    def _heartbeat(self, chat_id: int, started: datetime | None) -> dict | None:
+        """
+        The stamp this search left, never one left by the search before it.
+
+        The stamp expires on its own rather than being cleared, so a search
+        started moments ago can find the previous search's stamp still there
+        and report a last check from before it existed.
+        """
+        beat = self.storage.get_search_heartbeat(chat_id)
+        if beat is None or started is None:
+            return beat
+        try:
+            checked = as_utc(datetime.fromisoformat(beat["checkedAt"]))
+        except ValueError:
+            logger.warning("Unreadable heartbeat timestamp for chat_id=%s", chat_id)
+            return None
+        return beat if checked >= started else None
 
     def _seat_plan_description(self, chat_id: int, params: TrainSearchParams) -> dict:
         """

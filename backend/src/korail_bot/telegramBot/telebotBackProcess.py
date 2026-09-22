@@ -1197,13 +1197,35 @@ class BackgroundReservationProcess:
 
         return self._report_minutes
 
+    def _record_search_activity(self, progress) -> None:
+        """
+        Leave a stamp saying this pass happened, for the app to read back.
+
+        A side channel, and treated as one: the search does not wait on it and
+        never ends because of it. Redis being briefly unreachable makes the
+        app say it cannot tell how the search is doing, which is the truth,
+        rather than stopping a search that is working perfectly well.
+        """
+        try:
+            self.storage.save_search_heartbeat(
+                self.chat_id, progress.attempts, progress.failure_streak
+            )
+        except Exception as e:
+            logger.warning(f"Could not record the search heartbeat: {e}")
+
     def _report_search_progress(self, progress) -> None:
         """
         Say that the search is still going, no more often than asked.
 
         Called on every pass of the search loop, which is why nearly every
         call returns here without doing anything.
+
+        The stamp is written on every pass regardless of the interval. It is
+        not a message to the user and is not what /notify turns off: someone
+        who wants no messages still wants the app to show a living search.
         """
+        self._record_search_activity(progress)
+
         minutes = self._report_interval_minutes()
         if minutes <= 0:
             return

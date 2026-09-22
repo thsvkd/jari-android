@@ -25,7 +25,7 @@ from korail_bot.models import (
 from korail_bot.storage.base import StorageInterface
 from korail_bot.utils.crypto import get_secret_box
 from korail_bot.utils.logger import get_logger
-from korail_bot.utils.timezone import as_utc
+from korail_bot.utils.timezone import as_utc, utc_now
 
 logger = get_logger(__name__)
 
@@ -731,6 +731,55 @@ class RedisStorage(StorageInterface):
         else:
             self.redis.set(key, str(int(minutes)))
 
+    # ==================== Signs of life from a running search ====================
+    #
+    # A running record says a search was started. It cannot say whether the
+    # process behind it is still asking the operator anything: a process
+    # killed for memory leaves the record looking exactly like a working
+    # search does. So the search stamps this key once per pass of its loop,
+    # and the app can tell a search that is working from one that is merely
+    # on file.
+    #
+    # Written by the search process and read by the app. Nothing else depends
+    # on it, and no booking ever waits on it.
+
+    def save_search_heartbeat(self, chat_id: int, attempts: int, failure_streak: int) -> None:
+        """Note that this chat's search has just asked the operator again."""
+        self.redis.set(
+            f"search_heartbeat:{chat_id}",
+            json.dumps(
+                {
+                    "checkedAt": utc_now().isoformat(),
+                    "attempts": int(attempts),
+                    "failureStreak": int(failure_streak),
+                }
+            ),
+            ex=settings.SEARCH_HEARTBEAT_TTL_SECONDS,
+        )
+
+    def get_search_heartbeat(self, chat_id: int) -> dict | None:
+        """
+        What this chat's search last managed, or None when it has not said.
+
+        None is not bad news on its own: a search that has only just started
+        has not finished its first pass yet. A stamp that expired belongs to
+        a search that has been silent for longer than any working one is, and
+        the process check has the last word either way.
+        """
+        raw = self.redis.get(f"search_heartbeat:{chat_id}")
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            return {
+                "checkedAt": str(data["checkedAt"]),
+                "attempts": int(data["attempts"]),
+                "failureStreak": int(data["failureStreak"]),
+            }
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            logger.warning(f"Unreadable search heartbeat for chat_id={chat_id}: {raw!r}")
+            return None
+
     # ==================== User time zone ====================
 
     def get_user_timezone(self, chat_id: int) -> str:
@@ -1304,12 +1353,20 @@ class RedisStorage(StorageInterface):
             "process_id": reservation.process_id,
             "korail_id": reservation.korail_id,
             "run_id": reservation.run_id,
+            # Kept, because the field defaults to the moment the record is
+            # built: without writing it, every read handed back a search that
+            # had apparently started that instant, and "3시간째 검색 중" was
+            # unsayable for the one search anyone would want it for.
+            "started_at": (
+                as_utc(reservation.started_at).isoformat() if reservation.started_at else None
+            ),
             "search_params": self._serialize_search_params(reservation.search_params),
         }
 
     def _deserialize_running_reservation(self, data: dict) -> RunningReservation:
         """Deserialize dict to RunningReservation."""
         search_params = self._deserialize_search_params(data["search_params"])
+        started_raw = data.get("started_at")
 
         return RunningReservation(
             chat_id=data["chat_id"],
@@ -1319,6 +1376,10 @@ class RedisStorage(StorageInterface):
             # Records written before restart recovery existed have no run id,
             # which correctly marks them as belonging to an earlier run.
             run_id=data.get("run_id", ""),
+            # A record written before the start time was kept keeps the old
+            # behaviour: counted from now, which reads as a search that has
+            # just begun rather than one of unknown age.
+            **({"started_at": as_utc(datetime.fromisoformat(started_raw))} if started_raw else {}),
         )
 
     def _serialize_payment_status(self, status: PaymentStatus) -> dict:

@@ -250,6 +250,17 @@ class StorageInterface(ABC):
         """Set the reporting interval, or 0 to stop reporting."""
         pass
 
+    # Signs of life from a running search
+    @abstractmethod
+    def save_search_heartbeat(self, chat_id: int, attempts: int, failure_streak: int) -> None:
+        """Note that this chat's search has just asked the operator again."""
+        pass
+
+    @abstractmethod
+    def get_search_heartbeat(self, chat_id: int) -> dict | None:
+        """What this chat's search last managed, or None when it has not said."""
+        pass
+
     # User time zone
     @abstractmethod
     def get_user_timezone(self, chat_id: int) -> str:

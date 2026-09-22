@@ -600,6 +600,26 @@ class ReservationService:
         )
         return False
 
+    def is_search_alive(self, reservation: RunningReservation) -> bool:
+        """
+        Whether a process is still performing the search this record describes.
+
+        The same question detect_dead_searches asks, asked one record at a
+        time and without acting on the answer, so that a screen can say which
+        of the two a running record is: a search being performed, or one whose
+        process is gone and whose record nothing has cleared away yet.
+
+        A record left by an earlier run counts as gone however its PID looks.
+        The process that run started is not ours any more, and deciding what
+        becomes of such a record belongs to reconcile_after_restart.
+
+        Returns:
+            True when something is still asking the operator for trains
+        """
+        if reservation.is_stale(settings.RUN_ID):
+            return False
+        return self._owns_process(reservation.process_id)
+
     def _owns_process(self, pid: int) -> bool:
         """
         Check that a PID really belongs to one of our search processes.
