@@ -128,12 +128,35 @@ class KorailService(RailService):
         super().__init__(*args, **kwargs)
         self._korail_instance: K2MKorail | None = None
         self._modern_client: KorailClient | None = None
-        self._modern_seat_context: tuple[int, str, int] | None = None
-        self._seat_layout_references: dict[tuple[int, str, int], object] = {}
+        self._modern_seat_context: tuple | None = None
+        self._seat_layout_references: dict[tuple, object] = {}
 
         # Log class methods to verify correct version is loaded
         logger.debug(
             f"KorailService initialized with methods: {[m for m in dir(self) if not m.startswith('_')]}"
+        )
+
+    def close(self) -> None:
+        """Drop both HTTP sessions. The instance is logged out afterwards."""
+        modern, self._modern_client = self._modern_client, None
+        legacy, self._korail_instance = self._korail_instance, None
+        self._logged_in = False
+        self._modern_seat_context = None
+        if modern is not None:
+            modern.close()
+        if legacy is not None:
+            legacy._session.close()
+
+    @staticmethod
+    def _seat_key(train) -> tuple[str, str, str]:
+        """What names one scheduled service; the same across search results.
+
+        An instance now outlives the search results it is asked about, so
+        id(train) would be handed to another train once the first is freed.
+        """
+        return tuple(
+            str(getattr(train, name, "") or "")
+            for name in ("train_no", "departure_date", "departure_time")
         )
 
     @property
@@ -347,7 +370,7 @@ class KorailService(RailService):
         if not self._logged_in or client is None:
             raise ValueError("좌석을 조회하려면 먼저 로그인해 주세요.")
         cabin = self._seat_class(seat_class)
-        key = (id(train), cabin.value, passenger_count)
+        key = (self._seat_key(train), cabin.value, passenger_count)
         try:
             response = client.get_seat_cars(
                 train,
@@ -369,13 +392,17 @@ class KorailService(RailService):
             )
             self._seat_layout_references[key] = layout_train
         layout_passenger_count = 1 if layout_train is not train else passenger_count
-        self._modern_seat_context = (id(layout_train), cabin.value, layout_passenger_count)
+        self._modern_seat_context = (
+            self._seat_key(layout_train),
+            cabin.value,
+            layout_passenger_count,
+        )
         return response
 
     def seat_layout_is_reference(self, train, seat_class: str, passenger_count: int = 1) -> bool:
         """Whether selection uses the same train number on a nearby date."""
         cabin = self._seat_class(seat_class)
-        return (id(train), cabin.value, passenger_count) in self._seat_layout_references
+        return (self._seat_key(train), cabin.value, passenger_count) in self._seat_layout_references
 
     def seat_inventory(
         self,
@@ -391,10 +418,10 @@ class KorailService(RailService):
         if not self._logged_in or client is None:
             raise ValueError("좌석을 조회하려면 먼저 로그인해 주세요.")
         cabin = self._seat_class(seat_class)
-        key = (id(train), cabin.value, passenger_count)
+        key = (self._seat_key(train), cabin.value, passenger_count)
         layout_train = self._seat_layout_references.get(key, train)
         layout_passenger_count = 1 if layout_train is not train else passenger_count
-        context = (id(layout_train), cabin.value, layout_passenger_count)
+        context = (self._seat_key(layout_train), cabin.value, layout_passenger_count)
         # TResidualSeatsResearch depends on server-side context created by
         # ScheduleView. Mobile HTTP requests log in again independently, so a
         # seat-detail call must restore that context after every fresh login.
@@ -414,7 +441,7 @@ class KorailService(RailService):
                     )
                     self._seat_layout_references[key] = layout_train
                     layout_passenger_count = 1
-                    context = (id(layout_train), cabin.value, layout_passenger_count)
+                    context = (self._seat_key(layout_train), cabin.value, layout_passenger_count)
                 else:
                     raise
             self._modern_seat_context = context

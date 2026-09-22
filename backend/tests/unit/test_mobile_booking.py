@@ -610,9 +610,10 @@ def test_whole_formation_read_returns_every_car_in_one_request(tmp_path, monkeyp
     assert first["seats"][0]["label"] == "5A"
     assert {"layoutType", "arrangementCode", "remainingCount", "totalCount"} <= set(first)
     assert first["layoutReference"] is False
-    # One login and one car list for the whole formation, then one read per
-    # car - against three logins and three car lists if the app asked per car.
-    assert rail.login.call_count - logins == 1
+    # One car list for the whole formation, then one read per car - against
+    # three car lists if the app asked per car. The login listing the trains
+    # made is still good, so there is not even a new one of those.
+    assert rail.login.call_count - logins == 0
     assert rail.seat_cars.call_count == 1
     assert rail.seat_inventory.call_count == 3
     runtime.storage.close()

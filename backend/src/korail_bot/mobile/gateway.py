@@ -3,6 +3,7 @@
 import json
 from datetime import datetime, timedelta
 from functools import wraps
+from time import monotonic
 
 from korail2 import TrainType
 
@@ -32,6 +33,15 @@ logger = get_logger(__name__)
 # remaining car.
 MAX_CONSECUTIVE_CAR_FAILURES = 3
 
+# How long an idle Korail login is kept for a user's seat-map browsing.
+# Logging in on every car tab risked locking the Korail account. Each use
+# extends it, and it is no shorter than a train key lives (SeatMapService),
+# so every live key is served by the login that issued it - and by the same
+# reference formation a sold-out train was drawn with. A fresh login searches
+# for that formation again and can land on another date whose car list
+# differs, which is how a car could go missing from "모든 호차에 적용".
+RAIL_SESSION_SECONDS = 1800
+
 
 def serialized_operation(method):
     """The scheduler and HTTP gateway must share one mutation boundary."""
@@ -39,7 +49,14 @@ def serialized_operation(method):
     @wraps(method)
     def wrapped(self, chat_id, *args, **kwargs):
         with self.reservation.operation_lock(chat_id):
-            return method(self, chat_id, *args, **kwargs)
+            try:
+                return method(self, chat_id, *args, **kwargs)
+            except MiniAppError as exc:
+                # 502 is "Korail did not answer", and an expired session is
+                # one way that happens. Drop it so the retry logs in afresh.
+                if exc.status == 502:
+                    self._forget_rail(chat_id)
+                raise
 
     return wrapped
 
@@ -79,9 +96,13 @@ class MobileGateway(MiniAppGateway):
     def __init__(self, *args, seat_map_service=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.seat_maps = seat_map_service or SeatMapService()
+        # chat_id -> (rail, expires_at, korail_id). Only touched under the
+        # owner's operation lock, so a plain dict is enough.
+        self._rails = {}
 
     @serialized_operation
     def register(self, chat_id, username, password):
+        self._forget_rail(chat_id)
         return super().register(chat_id, username, password)
 
     @serialized_operation
@@ -374,14 +395,26 @@ class MobileGateway(MiniAppGateway):
     def _logged_in_rail(self, chat_id):
         account = self.storage.get_onboarded_account(chat_id)
         if not account:
+            self._forget_rail(chat_id)
             raise MiniAppError("코레일 계정을 연결해 주세요.", 428)
+        cached = self._rails.get(chat_id)
+        if cached and cached[1] > monotonic() and cached[2] == account.korail_id:
+            self._rails[chat_id] = (cached[0], monotonic() + RAIL_SESSION_SECONDS, cached[2])
+            return cached[0]
+        self._forget_rail(chat_id)
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(account.korail_id, account.korail_pw):
             raise MiniAppError(
                 "코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요.",
                 428,
             )
+        self._rails[chat_id] = (rail, monotonic() + RAIL_SESSION_SECONDS, account.korail_id)
         return rail
+
+    def _forget_rail(self, chat_id):
+        cached = self._rails.pop(chat_id, None)
+        if cached:
+            cached[0].close()
 
     @staticmethod
     def _payment_deadline(rail, hold):
@@ -519,6 +552,7 @@ class MobileGateway(MiniAppGateway):
         self.storage.delete_user_session(chat_id)
         self.storage.delete_app_session_start(chat_id)
         self.storage.delete_onboarded_account(chat_id)
+        self._forget_rail(chat_id)
         return {"registered": False}
 
     @serialized_operation

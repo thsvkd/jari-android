@@ -31,7 +31,9 @@ class SeatMapService:
     def __init__(
         self,
         *,
-        ttl: timedelta = timedelta(minutes=10),
+        # Browsing six cars and choosing seats took longer than ten minutes on a
+        # real phone, and the sheet then failed with "열차 정보가 만료".
+        ttl: timedelta = timedelta(minutes=30),
         clock: Callable[[], datetime] | None = None,
         token_factory: Callable[[], str] | None = None,
     ) -> None:
