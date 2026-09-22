@@ -554,10 +554,12 @@ export class JariApp {
     return chips;
   }
 
-  // 찾는 중 카드: 배지·구간·조건 한 줄과 두 개의 글자 버튼만. 나머지는 검색 상세에서 봐요.
+  // 찾는 중 카드: 배지·구간·조건 한 줄과 두 개의 글자 버튼만. 나머지는 자세히 보기에서 봐요.
+  // 배지의 상대 시각은 30초마다 도는 폴링이 홈을 다시 그릴 때 함께 갱신돼요.
   private renderRunningCard(kind: RadarKind, journey: SearchDescription): string {
+    const since = relativeTime(this.radarRunning(this.state!)?.lastCheckedAt, Date.now());
     return `<section class="card search-status-card running-compact" data-search-status data-state="${kind}" aria-label="자리 찾기 상태 요약">
-      <p class="idle-badge"><span class="idle-dot" aria-hidden="true"></span>찾는 중</p>
+      <p class="idle-badge"><span class="idle-dot" aria-hidden="true"></span>찾는 중${since ? ` · ${escapeHtml(since)}` : ""}</p>
       <div class="route-title"><strong>${escapeHtml(journey.srcLocate)}</strong><span>→</span><strong>${escapeHtml(journey.dstLocate)}</strong></div>
       <p class="route-meta">${escapeHtml(formatWindow(journey))} · ${journey.passengerCount}명</p>
       <div class="card-action-row split"><button class="text-button" data-view="activity">자세히 보기 →</button><button class="text-button danger" data-action="stop-search">그만 찾기</button></div>

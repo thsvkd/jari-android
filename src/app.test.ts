@@ -1634,3 +1634,30 @@ it("follows the system theme while none was chosen, and stops once one is", asyn
   app.dispose();
   expect(listeners.size).toBe(0);
 });
+
+it("puts the last check on the home 찾는 중 badge as a relative time", async () => {
+  const { root } = await mountLive();
+  expect(root.querySelector(".idle-badge")?.textContent).toBe("찾는 중 · 방금");
+
+  // 시각이 없으면 배지는 상태만 말해요.
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running!.lastCheckedAt = null;
+  const bare = await mountLive({ bootstrap: async () => state });
+  expect(bare.root.querySelector(".idle-badge")?.textContent).toBe("찾는 중");
+});
+
+it("redraws the home badge on each status poll", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  const status = vi.fn(async () => ({ running: state.running, scheduled: null, pending: [] }));
+  const { root } = await mountLive({ bootstrap: async () => state, status });
+  expect(root.querySelector(".idle-badge")?.textContent).toBe("찾는 중 · 방금");
+
+  // 폴링이 30초를 밀고 나면 90초 전이 된다. 2분을 넘기면 "확인 지연" 카드로 바뀌므로 그 안쪽을 쓴다.
+  state.running!.lastCheckedAt = new Date(Date.now() - 60_000).toISOString();
+  await vi.advanceTimersByTimeAsync(30_000);
+  await vi.waitFor(() => expect(status).toHaveBeenCalled());
+  expect(root.querySelector(".idle-badge")?.textContent).toBe("찾는 중 · 1분 전");
+});
