@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Deploy backend/ to any Docker host reachable over SSH (Pi today, anything
-# with `docker compose` and `ssh` later). Nothing host-specific is hardcoded;
-# everything comes from flags with env-var fallbacks. Does not touch a host's
+# Deploy backend/ to any Docker host reachable over SSH — anything with
+# `docker compose` and `ssh`. Nothing host-specific is hardcoded; everything
+# comes from flags with env-var fallbacks. Does not touch a host's
 # proxy/gateway config — pass that as --after.
 set -euo pipefail
 

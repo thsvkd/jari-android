@@ -3,10 +3,9 @@
 The package is installed (editable) into the environment, so there is no
 sys.path juggling here - `import korail_bot...` just works.
 
-tests/integration and tests/e2e talk to a real Redis, which testcontainers
-starts for them and which therefore needs a Docker daemon. tests/unit does
-not touch Redis at all, so a run restricted to that directory skips the
-container entirely and needs no Docker.
+Only tests/unit exists here, and it does not touch a real Redis, so a run
+restricted to that directory skips the testcontainers Redis and needs no
+Docker. The container path remains for a future integration directory.
 
 The `storage` fixture below is the way to reach that Redis. A test that
 builds its own RedisStorage owns closing it, and the check in

@@ -10,7 +10,7 @@ name = "korail-ktx-bot"
 # read as "4.2.0b1" everywhere it matters - the log line, the announcement,
 # and the key the release notes are looked up under.
 version = "4.9.0"
-description = "매진된 KTX 열차를 모니터링하다 좌석이 나오면 예약해주는 텔레그램 봇"
+description = "자리났다 Android 앱의 코레일 좌석 예약 API 서버"
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
@@ -43,7 +43,7 @@ mobile-push = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/thsvkd/korail_KTX_macro_telegrambot"
+Homepage = "https://github.com/thsvkd/jari-android"
 # The repository this one was forked from. Kept in the metadata because most
 # of the original author's code is still here - see the attribution section
 # of the README.

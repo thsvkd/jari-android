@@ -1,4 +1,4 @@
-# 자리났다 · Teum Android
+# 자리났다 Android
 
 텔레그램 없이 사용하는 지인 초대형 기차 예약 앱과 전용 Python API 서버입니다.
 선택한 **상태 카드형** 검색 현황, 여정 조건, 검색·예약 관리, 즐겨찾기,
@@ -14,10 +14,14 @@
 기존 패키지명 `korail_bot`과 버전/잠금 파일은 호환성을 위해 보존했습니다.
 원저작자 및 fork의 MIT 저작권은 [LICENSE](LICENSE)에 보존합니다.
 
-- 모바일 테스트 57개, 일반/데모 빌드와 S26 Ultra 데모 화면 검증을 수행했습니다.
+- 모바일 테스트 101개, 일반/데모 빌드와 S26 Ultra 데모 화면 검증을 수행했습니다.
 - 실철도 예약·결제 및 푸시 수신의 종단 간 검증은 완료되지 않았습니다.
-- SRT·예약대기 등은 서버 지원 여부에 따라 제한됩니다.
+- SRT는 지원하지 않습니다. 코레일 예약 대기는 일반실에만, 좌석 위치 지정 없이 신청합니다.
 - 배포 서명키와 Firebase 설정은 포함하지 않습니다. 현재 APK 빌드는 디버그용입니다.
+- 앱 이름을 바꾸면서 Android `applicationId`가 `com.jari.app`으로 바뀌었습니다.
+  기존 앱 위에 덮어쓰는 업데이트가 아니라 별도 앱으로 설치되고, 사용자는 다시 로그인해야 합니다.
+  즐겨찾기와 코레일 계정 연결은 서버에 있으므로 그대로 유지됩니다.
+  Firebase도 새 패키지명으로 Android 앱을 다시 등록해 `google-services.json`을 받아야 합니다.
 
 ## 로컬 시작
 
@@ -83,7 +87,8 @@ uv run --frozen python ../scripts/smoke-backend.py
 ```
 
 현재 포함된 서버 테스트는 독립 앱 API·인증·런타임·예약·알림에 대한 회귀 테스트이며,
-원본 텔레그램 UI와 배포 스크립트 전용 테스트는 이 저장소에 포함하지 않습니다.
+원본 텔레그램 UI 전용 테스트는 이 저장소에 포함하지 않습니다.
+배포 스크립트는 아래 `scripts/test-deploy-backend.sh`로 따로 검증합니다.
 실제 예약/푸시 검증과 Docker 실행 검증은 별도이며, 미검증 항목을 완료로 취급하지 않습니다.
 
 ### 원격 배포
@@ -183,7 +188,9 @@ repository. The client requests Android 13 notification permission and calls
 FCM registration only when the frontend passes `enablePushRegistration: true`
 and supplies `onPushToken`. Without a valid Firebase Android app configuration,
 the registration error is surfaced to the UI and no delivery is claimed. A
-future operator must provision Firebase outside this repository, place the
-appropriate non-secret runtime configuration through the approved Android
-release process, and configure the server's authenticated `/api/mobile/devices`
-endpoint before enabling that option.
+future operator must provision Firebase outside this repository for the current
+`com.jari.app` package name, place the appropriate non-secret runtime
+configuration through the approved Android release process, and configure the
+server's authenticated `/api/mobile/devices` endpoint before enabling that
+option. A `google-services.json` issued for the former package name no longer
+matches this build.
