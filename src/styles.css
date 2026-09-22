@@ -422,16 +422,6 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .activity-trains li span { color: var(--muted); font-weight: 600; overflow-wrap: anywhere; }
 .center { text-align: center; }
 .muted { color: var(--muted); }
-.timeline { margin: 26px 0 0; }
-.status-guide-card { padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow); }
-.status-guide-card > div:last-child { padding-bottom: 0; }
-.timeline h2 { font-size: 14px; }
-.timeline > div { display: grid; grid-template-columns: 9px 1fr; gap: 12px; padding-bottom: 18px; position: relative; }
-.timeline > div:not(:last-child)::before { content: ""; position: absolute; top: 10px; bottom: -4px; left: 4px; width: 1px; background: var(--line); }
-.timeline i { width: 9px; height: 9px; margin-top: 3px; border-radius: 50%; background: var(--accent); }
-.timeline p { display: grid; gap: 4px; margin: 0; }
-.timeline b { font-size: 11px; }
-.timeline span { color: var(--muted); font-size: 10px; line-height: 1.5; }
 
 .empty { min-height: 260px; display: grid; place-items: center; align-content: center; gap: 8px; padding: 30px 18px; text-align: center; }
 .empty.compact { min-height: 80px; padding: 14px; }
@@ -568,14 +558,14 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
 }
 .search-conditions, .search-status-description, .route-meta, .route-line span,
 .availability, .field-note, .intro, .notice, .summary-card dl,
-.activity-card > .muted, .timeline span, .empty p { font-size: 14px; }
+.activity-card > .muted, .empty p { font-size: 14px; }
 .search-last-check, .stats small, .payment-row small, .favourite-main small,
 .train-main > small, .train-main > em, .notification small,
 .profile-card small, .settings-row small, .account-state small,
 .auth-note, .auth-card > p:not(.eyebrow, .auth-note) { font-size: 13px; }
 .section-head h2, .empty h2 { font-size: 20px; }
 .card-label, .status-pill, .payment-row > b { font-size: 13px; }
-.payment-row strong, .context-line b, .timeline h2 { font-size: 17px; }
+.payment-row strong, .context-line b { font-size: 17px; }
 .favourite-main b, .account-state b { font-size: 16px; }
 .route-symbol, .notification-icon {
   width: auto; min-width: 48px; height: 40px; padding: 0 10px; border-radius: 11px;

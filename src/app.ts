@@ -1268,8 +1268,7 @@ export class JariApp {
       ${this.renderPendingCard(false)}
       ${running ? `<section class="card activity-card"><div class="row-between"><span class="status-pill status-${radar.kind}"><i></i>${escapeHtml(radar.eyebrow)}</span><small>${sinceCheck ? "" : "확인 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(running.srcLocate)}</span><i>→</i><span>${escapeHtml(running.dstLocate)}</span></div>${this.renderRunningConditions(running)}${detail}<button class="button danger" data-action="cancel-search">그만 찾기</button></section>` : ""}
       ${state.scheduled ? this.renderScheduledCard() : ""}
-      ${!state.running && !state.scheduled && !state.pending.length ? `<div class="empty">${activityEmptyMark()}<h2>찾고 있는 자리가 없어요</h2><p>새 여정을 등록하고 빈자리를 찾아보세요.</p><button class="button primary" data-action="new-journey">새 여정 찾기</button></div>` : ""}
-      <section class="timeline status-guide-card"><h2>상태 안내</h2>${radar.kind === "healthy" || radar.kind === "running-unverified" ? "" : `<div><i></i><p><b>${escapeHtml(radar.title)}</b><span>${escapeHtml(radar.description)}</span></p></div>`}${state.running?.startedAt ? `<div><i></i><p><b>검색 시작</b><span>${escapeHtml(formatStamp(state.running.startedAt))}</span></p></div>` : ""}</section>`;
+      ${!state.running && !state.scheduled && !state.pending.length ? `<div class="empty">${activityEmptyMark()}<h2>찾고 있는 자리가 없어요</h2><p>새 여정을 등록하고 빈자리를 찾아보세요.</p><button class="button primary" data-action="new-journey">새 여정 찾기</button></div>` : ""}`;
   }
 
   private renderFavourites(): string {
@@ -1430,6 +1429,7 @@ export class JariApp {
     const worded = /^[A-D,]*(:\d*-?\d*)?$/.test(rawPreference) ? this.describeSeatPreference(rawPreference) : rawPreference;
     const seatPreference = worded === "지정 없음" ? "" : worded;
     return `<dl class="activity-conditions">
+      ${running.startedAt ? `<dt>시작</dt><dd>${escapeHtml(formatStamp(running.startedAt))}</dd>` : ""}
       <dt>출발</dt><dd>${escapeHtml(formatWindow(running))}</dd>
       <dt>열차</dt><dd>${escapeHtml(running.trainTypeShow)} · ${trainCount ? `${trainCount}편 선택` : "시간대 전체"}</dd>
       ${trainRows.length ? `<dd class="activity-trains"><ul>${trainRows.join("")}</ul></dd>` : ""}

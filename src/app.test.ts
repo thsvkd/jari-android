@@ -1092,7 +1092,6 @@ it("shows approved empty-state copy and illustrated SVG marks", async () => {
 
   app.navigate("activity");
   expect(root.querySelector(".empty-mark svg")).not.toBeNull();
-  expect(root.querySelector(".timeline.status-guide-card")).not.toBeNull();
 });
 
 it("reports a failed notification request instead of an empty inbox", async () => {
@@ -1209,8 +1208,9 @@ it("prints the check time once in 검색 상세, as a relative time next to the 
   expect(card.querySelector(".activity-check")?.textContent).toBe("방금 확인 · 18회 조회");
   // 헤더는 시각을 되풀이하지 않아요.
   expect(card.querySelector(".row-between small")?.textContent).toBe("");
-  // A search in trouble still explains itself.
-  expect(root.querySelector(".status-guide-card")?.textContent).not.toContain("앱을 닫아도");
+  // 시작 시각은 별도 카드가 아니라 조건 표의 한 행이에요.
+  expect(root.querySelector(".status-guide-card")).toBeNull();
+  expect(card.querySelector(".activity-conditions")?.textContent).toContain("시작");
 });
 
 it("keeps the notice in 검색 상세 when the search is in trouble", async () => {
