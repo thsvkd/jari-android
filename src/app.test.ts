@@ -1691,3 +1691,19 @@ it("says what each train-list button will do", async () => {
   root.querySelector<HTMLButtonElement>("[data-train-toggle='015']")!.click();
   expect(root.querySelector("[data-action='trains-next']")?.textContent).toContain("1편 선택 · 다음: 조건 확인");
 });
+
+it("shows the whole-train pick as a check mark that matches aria-pressed", async () => {
+  const { app, root } = await mountLive();
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-toggle='015']")).not.toBeNull());
+  expect(root.textContent).toContain("카드를 누르면 그 열차의 어떤 자리든 기다려요.");
+
+  const card = () => root.querySelector<HTMLButtonElement>("[data-train-toggle='015']")!;
+  expect(card().querySelector(".train-check")).not.toBeNull();
+  expect(card().getAttribute("aria-pressed")).toBe("false");
+
+  card().click();
+  expect(card().getAttribute("aria-pressed")).toBe("true");
+  expect(card().querySelector(".train-check")).not.toBeNull();
+});

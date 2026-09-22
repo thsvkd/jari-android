@@ -690,13 +690,13 @@ export class JariApp {
             const targets = this.cancellationTargets.filter((target) => target.trainNo === train.no);
             const selectedCount = targets.reduce((sum, target) => sum + target.targets.length, 0);
             const wholeTrain = targets.some((target) => !target.targets.length);
-            return `<article class="train-card ${targets.length ? "selected" : ""}"><button type="button" class="train-main" data-train-toggle="${escapeHtml(train.no)}" aria-pressed="${wholeTrain}"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b></button><span class="seat-badge ${wholeTrain ? "chosen" : anyAvailable ? "available" : "soldout"}">${wholeTrain ? "좌석 무관 선택" : selectedCount ? `${selectedCount}석 지정` : anyAvailable ? "좌석 있음" : "매진"}</span><div class="train-actions">${anyAction}${official}</div></article>`;
+            return `<article class="train-card ${targets.length ? "selected" : ""}"><button type="button" class="train-main" data-train-toggle="${escapeHtml(train.no)}" aria-pressed="${wholeTrain}"><span class="train-check" aria-hidden="true">✓</span><span class="train-main-text"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b></span></button><span class="seat-badge ${wholeTrain ? "chosen" : anyAvailable ? "available" : "soldout"}">${wholeTrain ? "좌석 무관 선택" : selectedCount ? `${selectedCount}석 지정` : anyAvailable ? "좌석 있음" : "매진"}</span><div class="train-actions">${anyAction}${official}</div></article>`;
           })
           .join("")
       : '<div class="empty"><span>⌁</span><h2>조회된 열차가 없어요</h2><p>시간이나 구간을 바꿔 다시 조회해 주세요.</p></div>';
     return `${this.renderSubhead("열차 선택", "좌석 예약·취소표 대기")}
       <div class="context-line"><b>${escapeHtml(conditions.src_station)} → ${escapeHtml(conditions.dst_station)}</b><span>${escapeHtml(formatWindow(conditions))}</span></div>
-      <p class="intro">좌석이 있으면 바로 예약할 수 있어요. 매진이면 원하는 좌석 범위를 골라 취소표 대기를 시작하세요.</p>
+      <p class="intro">좌석이 있으면 바로 예약할 수 있어요. 매진이면 원하는 좌석 범위를 골라 취소표 대기를 시작하세요.<br>카드를 누르면 그 열차의 어떤 자리든 기다려요.</p>
       ${this.trainListTruncated ? '<div class="notice warning">목록이 길어 일부 열차만 보여드려요. 시간대 전체 찾기는 그대로 이용할 수 있어요.</div>' : ""}
       <div class="train-list">${list}</div>
       ${this.renderError()}

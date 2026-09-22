@@ -277,12 +277,15 @@ small { color: var(--muted); }
 /* Chosen as a whole or with seats picked: the same look a selected column chip has. */
 .train-card.selected { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 4px 0 0 var(--accent); }
 .train-card.selected .seat-action:not(.selected) { background: var(--surface); } /* keeps the pill visible on the tinted card */
-/* The card's text is the button that takes the train as a whole; it keeps the card's typography. */
-.train-main { min-width: 0; display: grid; gap: 3px; padding: 0; background: transparent; color: inherit; text-align: left; font: inherit; }
-.train-main > small { font-size: 9px; }
-.train-main > b { font-size: 17px; white-space: nowrap; }
-.train-main b i { margin: 0 5px; color: var(--hint); font-size: 11px; font-style: normal; }
-.train-main > em { overflow: hidden; color: var(--muted); font-size: 9px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+/* The card's text is the button that takes the train as a whole; it keeps the card's typography.
+   체크 표시가 앞에 붙어 카드를 누른 것이 곧 "이 열차의 어떤 자리든" 고른 것임을 보여줘요. */
+.train-main { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; padding: 0; background: transparent; color: inherit; text-align: left; font: inherit; }
+.train-main-text { min-width: 0; display: grid; gap: 3px; }
+.train-check { display: grid; place-items: center; width: 22px; height: 22px; border: 1.5px solid var(--line); border-radius: 7px; color: transparent; font-size: 12px; line-height: 1; }
+.train-main[aria-pressed="true"] .train-check { border-color: var(--accent); background: var(--accent); color: #fff; }
+.train-main-text > small { font-size: 9px; }
+.train-main-text > b { font-size: 17px; white-space: nowrap; }
+.train-main-text b i { margin: 0 5px; color: var(--hint); font-size: 11px; font-style: normal; }
 .seat-badge { padding: 5px 7px; border-radius: 7px; font-size: 8px; font-weight: 760; }
 .seat-badge.soldout { background: var(--danger-soft); color: var(--danger); }
 .seat-badge.available { background: var(--success-soft); color: var(--success); }
@@ -560,7 +563,7 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
 .availability, .field-note, .intro, .notice, .summary-card dl,
 .activity-card > .muted, .empty p { font-size: 14px; }
 .search-last-check, .stats small, .payment-row small, .favourite-main small,
-.train-main > small, .train-main > em, .notification small,
+.train-main-text > small, .notification small,
 .profile-card small, .settings-row small, .account-state small,
 .auth-note, .auth-card > p:not(.eyebrow, .auth-note) { font-size: 13px; }
 .section-head h2, .empty h2 { font-size: 20px; }
@@ -589,7 +592,7 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
 .seat-column small, .aisle { font-size: 12px; }
 .train-card { min-height: 96px; grid-template-columns: 1fr auto; }
 .train-check { width: 26px; height: 26px; font-size: 14px; }
-.train-main > b { font-size: 20px; }
+.train-main-text > b { font-size: 20px; }
 .seat-badge { padding: 7px 9px; font-size: 12px; }
 .profile-card b { font-size: 18px; }
 .settings-row { min-height: 72px; padding: 13px 4px; }
