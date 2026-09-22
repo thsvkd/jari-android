@@ -1501,3 +1501,20 @@ it("asks before 코레일 예약 대기 is submitted, and does nothing when dism
   root.querySelector<HTMLButtonElement>("[data-action='sheet-cancel']")!.click();
   expect(search).not.toHaveBeenCalled();
 });
+
+it("asks before deleting a favourite, naming it, and keeps it when dismissed", async () => {
+  const deleteFavourite = vi.fn(async () => ({ deleted: true, favourites: [] }));
+  const { app, root } = await mountLive({ deleteFavourite });
+  app.navigate("favourites");
+
+  root.querySelector<HTMLButtonElement>("[data-delete-favourite]")!.click();
+  const sheet = root.querySelector<HTMLElement>(".action-sheet")!;
+  expect(sheet.textContent).toContain("즐겨찾기를 삭제할까요?");
+  expect(sheet.textContent).toContain("주말에 집으로 · 서울 → 부산");
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-cancel']")!.click();
+  expect(deleteFavourite).not.toHaveBeenCalled();
+
+  root.querySelector<HTMLButtonElement>("[data-delete-favourite]")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+  await vi.waitFor(() => expect(deleteFavourite).toHaveBeenCalledOnce());
+});

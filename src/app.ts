@@ -1665,6 +1665,24 @@ export class JariApp {
     await this.startNow();
   }
 
+  private async deleteFavourite(id: string): Promise<void> {
+    const favourite = this.state?.favourites.find((item) => item.id === id);
+    if (!favourite) return;
+    const confirmed = await this.confirmSheet({
+      title: "즐겨찾기를 삭제할까요?",
+      body: `${favourite.name} · ${favourite.route}`,
+      confirmLabel: "삭제",
+      danger: true,
+    });
+    if (!confirmed) return;
+    await this.run(async (isCurrent) => {
+      const result = await this.api.deleteFavourite(id);
+      if (!isCurrent()) return;
+      this.state!.favourites = result.favourites;
+      this.showToast("즐겨찾기를 삭제했어요.");
+    });
+  }
+
   private async cancelPending(): Promise<void> {
     const confirmed = await this.confirmSheet({ title: "결제를 기다리는 예약을 모두 취소할까요?", confirmLabel: "예약 취소", danger: true });
     if (!confirmed) return;
@@ -1848,12 +1866,7 @@ export class JariApp {
     }
     const deleteId = button.dataset.deleteFavourite;
     if (deleteId) {
-      void this.run(async (isCurrent) => {
-        const result = await this.api.deleteFavourite(deleteId);
-        if (!isCurrent()) return;
-        this.state!.favourites = result.favourites;
-        this.showToast("즐겨찾기를 삭제했어요.");
-      });
+      void this.deleteFavourite(deleteId);
       return;
     }
     const action = button.dataset.action;
