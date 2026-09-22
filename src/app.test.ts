@@ -1537,6 +1537,39 @@ it("explains a home problem state and marks it with a glyph instead of the word 
   expect(card.querySelector("[data-view='activity']")?.textContent).toContain("검색 상세 보기");
 });
 
+it("keeps the seat sheet's confirm button out of reach until something is selected", async () => {
+  const demo = createDemoApi();
+  const { app, root } = await mountLive({ seatCars: demo.seatCars, seatInventory: demo.seatInventory });
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-filter='col:A']")).not.toBeNull());
+
+  const confirm = () => root.querySelector<HTMLButtonElement>("[data-action='confirm-seat-dialog']")!;
+  expect(confirm().textContent).toBe("0석 범위로 취소표 대기");
+  expect(confirm().disabled).toBe(true);
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
+  expect(confirm().disabled).toBe(false);
+});
+
+it("keeps the immediate seat sheet's confirm button out of reach until the party is seated", async () => {
+  const demo = createDemoApi();
+  const { app, root } = await mountLive({ seatCars: demo.seatCars, seatInventory: demo.seatInventory });
+  app.navigate("journey");
+  edit(root, "seat_grade_mode", "specific");
+  root.querySelector<HTMLInputElement>("[name='seat_class'][value='general']")!.click();
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='025'][data-seat-mode='immediate']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-train-no='025'][data-seat-mode='immediate']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-no='demo-1-A']")).not.toBeNull());
+
+  const confirm = () => root.querySelector<HTMLButtonElement>("[data-action='confirm-seat-dialog']")!;
+  expect(confirm().disabled).toBe(true);
+  root.querySelector<HTMLButtonElement>("[data-seat-no='demo-1-A']")!.click();
+  expect(confirm().disabled).toBe(false);
+});
+
 describe("확인 화면의 좌석 지정", () => {
   const withPlan = async (trains: { trainNo: string; seatClass: "general"; targets: SeatTarget[] }[] | null) => {
     const demo = createDemoApi();

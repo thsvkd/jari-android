@@ -752,6 +752,10 @@ export class JariApp {
     const confirmText = dialog.mode === "immediate"
       ? `${dialog.selected.length}/${passengerCount}석 선택 · 예약하기`
       : `${dialog.selected.length}석 범위로 취소표 대기`;
+    // 아직 고르지 않은 좌석으로는 누를 수 없어요. 누른 뒤에야 오류로 알리면 버튼이 거짓말을 하는 셈이에요.
+    const confirmDisabled = locked || (dialog.mode === "immediate"
+      ? dialog.selected.length !== passengerCount
+      : dialog.selected.length === 0);
     return `<div class="modal-backdrop" role="presentation"><section class="seat-dialog" role="dialog" aria-modal="true" aria-labelledby="seat-dialog-title">
       <header><div><p class="eyebrow">${escapeHtml(`${dialog.train.name || "열차"} ${dialog.train.no}`)} · ${classLabel}</p><h2 id="seat-dialog-title">${title}</h2></div><button type="button" class="icon-button" data-action="close-seat-dialog" aria-label="좌석 선택 닫기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
       <div class="car-tabs" aria-label="호차 선택">${cars}</div>
@@ -759,7 +763,7 @@ export class JariApp {
       <div class="seat-legend">${dialog.layoutReference ? "" : '<span><i class="available"></i>현재 예약 가능</span>'}<span><i class="occupied"></i>${dialog.mode === "wait" ? "취소표 대기 가능" : "선택 불가"}</span><span><i class="selected"></i>선택</span></div>
       <div class="seat-map-live">${rows}</div>
       ${dialog.inventory && dialog.error ? `<p class="notice warning seat-inline-error" role="alert">${escapeHtml(dialog.error)}</p>` : ""}
-      <footer><div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || dialog.filter.columns.length || dialog.filter.trimRows || dialog.filter.excludeFamily ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div><button type="button" class="button primary" data-action="confirm-seat-dialog" ${locked ? "disabled" : ""}>${confirmText}</button></footer>
+      <footer><div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || dialog.filter.columns.length || dialog.filter.trimRows || dialog.filter.excludeFamily ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div><button type="button" class="button primary" data-action="confirm-seat-dialog" ${confirmDisabled ? "disabled" : ""}>${confirmText}</button></footer>
     </section></div>`;
   }
 
