@@ -207,6 +207,8 @@ export class JariApp {
   private toast = "";
   private toastTimer: number | null = null;
   private pollTimer: number | null = null;
+  // Consecutive status polls that could not reach the server. One miss is a phone waking up or hopping networks; two is offline.
+  private pollMisses = 0;
   private theme: "light" | "dark";
 
   constructor(root: HTMLElement, api: MobileApi, options: AppOptions) {
@@ -368,6 +370,7 @@ export class JariApp {
       this.state.scheduled = status.scheduled;
       this.state.pending = status.pending;
       this.connection = "online";
+      this.pollMisses = 0;
       if (this.view === "home" || this.view === "activity") this.render();
     } catch (error) {
       if (generation !== this.generation || (error instanceof ApiError && error.kind === "stale")) return;
@@ -376,11 +379,28 @@ export class JariApp {
         return;
       }
       // A server that answered with an error is reachable; only the state is unconfirmed.
-      this.connection = error instanceof ApiError && error.kind === "server" ? "unknown" : "offline";
+      if (error instanceof ApiError && error.kind === "server") this.connection = "unknown";
+      else this.noteConnectionMiss();
       if (this.view === "home" || this.view === "activity") {
         this.render();
       }
     }
+  }
+
+  /**
+   * The first miss gets a second look five seconds later instead of an "오프라인" banner: on a phone a single failed
+   * fetch is usually the app resuming or switching networks, and the next scheduled poll is half a minute away.
+   */
+  private noteConnectionMiss(): void {
+    this.pollMisses += 1;
+    if (this.pollMisses >= 2 || navigator.onLine === false) {
+      this.connection = "offline";
+      return;
+    }
+    const generation = this.generation;
+    window.setTimeout(() => {
+      if (generation === this.generation) void this.pollStatus();
+    }, 5_000);
   }
 
   private render(preserveJourney = true): void {
@@ -1672,7 +1692,7 @@ export class JariApp {
         this.render();
         return;
       }
-      if (error.kind === "offline") this.connection = "offline";
+      if (error.kind === "offline") this.noteConnectionMiss();
       this.error = error.message;
       return;
     }

@@ -81,7 +81,8 @@ describe("concept C application shell", () => {
     if (["idle", "scheduled", "pending"].includes(scenario)) state.running = null;
     if (scenario === "offline") vi.useFakeTimers();
     const { root } = await mountLive({ bootstrap: async () => state, ...(scenario === "offline" ? { status: async () => { throw new Error("network unavailable"); } } : {}) });
-    if (scenario === "offline") await vi.advanceTimersByTimeAsync(30_000);
+    // A miss is confirmed by a second poll five seconds later before the card calls it offline.
+    if (scenario === "offline") await vi.advanceTimersByTimeAsync(35_000);
     const wanted = { unavailable: "철도 조회를 완료하지 못했어요", stale: "한동안 조회 결과가 없어요", idle: "떠날 채비는 끝났어요", scheduled: "예약한 시각에 검색을 시작해요", pending: "빈자리를 찾았어요", offline: "현재 상태를 확인할 수 없어요" };
     expect(root.querySelector("[data-search-status]")?.textContent).toContain(wanted[scenario]);
     if (scenario !== "idle") expect(root.querySelector("[data-search-status]")?.textContent).not.toContain("떠날 채비는 끝났어요");
@@ -1113,6 +1114,22 @@ it("shows a server error during polling as unconfirmed, not as offline", async (
   expect(root.querySelector(".offline-banner")).toBeNull();
   expect(root.textContent).toContain("현재 상태를 확인할 수 없어요");
   expect(root.textContent).not.toContain("인터넷 연결이 복구되면");
+});
+
+it("shows the offline banner only after a failed poll is confirmed five seconds later", async () => {
+  const status = vi.fn().mockRejectedValue(new ApiError("서버에 연결하지 못했어요.", 0, "offline"));
+  const { app, root } = await mountLive({ status });
+  vi.useFakeTimers();
+  await app.start(true);
+  await vi.advanceTimersByTimeAsync(30_000);
+  // One miss: no banner yet, a second look is pending.
+  expect(root.querySelector(".offline-banner")).toBeNull();
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(root.querySelector(".offline-banner")).not.toBeNull();
+
+  status.mockResolvedValue({ running: null, scheduled: null, pending: [] });
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(root.querySelector(".offline-banner")).toBeNull();
 });
 
 it.each([[1, 10], [-1, 5]])("moves an off-step notify interval by %i to the neighbouring step", async (direction, expected) => {
