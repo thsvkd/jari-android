@@ -826,7 +826,7 @@ export class JariApp {
       `<button type="button" class="seat-chip ${on ? "selected" : ""}" data-seat-filter="${escapeHtml(action)}" aria-pressed="${on}" ${locked ? "disabled" : ""}>${escapeHtml(label)}</button>`;
     const allOn = (columns: string[]) => columns.length > 0 && columns.every((column) => filter.columns.includes(column));
     const columnChips = numericLabels ? "" : sets.columns.map((column) => chip(`col:${column}`, column, filter.columns.includes(column))).join("");
-    const trimLabel = filter.trimRows ? `${filter.trimRows}줄` : "없음";
+    const trimLabel = `${filter.trimRows}줄`;
     const family = seats.some((seat) => seat.familyLabel)
       ? `<button type="button" role="switch" class="seat-switch" data-seat-filter="family" aria-checked="${filter.excludeFamily}" ${locked ? "disabled" : ""}><span aria-hidden="true"></span>가족석 제외</button>`
       : "";
@@ -835,7 +835,7 @@ export class JariApp {
       `<div class="seat-stepper-block"><div class="seat-stepper"><button type="button" data-seat-filter="${key}:-" aria-label="${caption} 줄이기" ${atMin || locked ? "disabled" : ""}>−</button><output>${value}</output><button type="button" data-seat-filter="${key}:+" aria-label="${caption} 늘리기" ${atMax || locked ? "disabled" : ""}>+</button></div><small>${caption}</small></div>`;
     const multiCar = dialog.mode === "wait" && dialog.cars.length > 1;
     const carStepper = multiCar
-      ? stepper("cars", "호차 앞뒤 제외", dialog.trimCars ? `${dialog.trimCars}개` : "없음", dialog.trimCars <= 0, dialog.trimCars >= maxTrimCars(dialog.cars.length))
+      ? stepper("cars", "호차 앞뒤 제외", `${dialog.trimCars}개`, dialog.trimCars <= 0, dialog.trimCars >= maxTrimCars(dialog.cars.length))
       : "";
     const applyAll = multiCar
       ? `<button type="button" class="button ghost seat-apply-all" data-action="apply-all-cars" ${locked ? "disabled" : ""}>${locked ? "모든 호차 확인 중…" : "모든 호차에 적용"}</button>`

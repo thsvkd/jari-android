@@ -1661,6 +1661,22 @@ it("redraws the home badge on each status poll", async () => {
   await vi.waitFor(() => expect(status).toHaveBeenCalled());
   expect(root.querySelector(".idle-badge")?.textContent).toBe("찾는 중 · 1분 전");
 });
+
+it("names the stepper units instead of an unqualified 없음", async () => {
+  const demo = createDemoApi();
+  const { app, root } = await mountLive({ seatCars: demo.seatCars, seatInventory: demo.seatInventory });
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-filter='trim:+']")).not.toBeNull());
+
+  const trim = () => root.querySelector("[data-seat-filter='trim:+']")!.parentElement!.querySelector("output")!.textContent;
+  expect(trim()).toBe("0줄");
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='trim:+']")!.click();
+  expect(trim()).toBe("1줄");
+});
+
 it("says what each train-list button will do", async () => {
   const { app, root } = await mountLive();
   app.navigate("journey");
