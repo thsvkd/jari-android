@@ -151,7 +151,7 @@ export function deriveRadarView(input: {
       kind: "idle",
       animate: false,
       eyebrow: "대기 중",
-      title: "진행 중인 검색이 없어요",
+      title: "찾고 있는 자리가 없어요",
       description: "새 여정을 등록하면 서버가 빈자리를 찾아요.",
       lastCheckedLabel: null,
     };
@@ -167,7 +167,7 @@ export function deriveRadarView(input: {
       animate: false,
       eyebrow: "조회 문제",
       title: "철도 조회를 완료하지 못했어요",
-      description: "검색 기록은 남아 있지만 현재 조회 상태를 확인할 수 없어요.",
+      description: "자리 찾기는 남아 있지만 현재 조회 상태를 확인할 수 없어요.",
       lastCheckedLabel: checkedLabel,
     };
   }
@@ -180,7 +180,7 @@ export function deriveRadarView(input: {
       animate: false,
       eyebrow: "확인 지연",
       title: "한동안 조회 결과가 없어요",
-      description: "서버 연결과 검색 상태를 확인해 주세요.",
+      description: "서버 연결과 자리 찾기 상태를 확인해 주세요.",
       lastCheckedLabel: checkedLabel,
     };
   }
@@ -191,16 +191,16 @@ export function deriveRadarView(input: {
       animate: true,
       eyebrow: "정상 작동",
       title: "빈자리를 찾고 있어요",
-      description: "앱을 닫아도 서버에서 계속 검색해요.",
+      description: "앱을 닫아도 서버에서 계속 찾아요.",
       lastCheckedLabel: checkedLabel,
     };
   }
   return {
     kind: "running-unverified",
     animate: false,
-    eyebrow: "검색 실행 기록",
-    title: "검색은 서버에 등록돼 있어요",
-    description: "최근 조회 상태는 알 수 없어요. 자세한 내용은 검색 상세에서 확인해 주세요.",
+    eyebrow: "자리 찾기 기록",
+    title: "자리 찾기는 서버에 등록돼 있어요",
+    description: "최근 조회 상태는 알 수 없어요. 자세한 내용은 자세히 보기에서 확인해 주세요.",
     lastCheckedLabel: null,
   };
 }

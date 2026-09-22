@@ -225,7 +225,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
       scheduled = null;
       notifications.unshift({
         id: `demo-event-${notifications.length + 1}`,
-        text: `${payload.conditions.src_station} → ${payload.conditions.dst_station} 데모 검색을 시작했어요.`,
+        text: `${payload.conditions.src_station} → ${payload.conditions.dst_station} 데모 자리 찾기를 시작했어요.`,
         createdAt: clock().toISOString(),
         kind: "search",
       });

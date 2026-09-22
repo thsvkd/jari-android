@@ -82,7 +82,7 @@ describe("concept C application shell", () => {
     const { root } = await mountLive({ bootstrap: async () => state, ...(scenario === "offline" ? { status: async () => { throw new Error("network unavailable"); } } : {}) });
     // A miss is confirmed by a second poll five seconds later before the card calls it offline.
     if (scenario === "offline") await vi.advanceTimersByTimeAsync(35_000);
-    const wanted = { unavailable: "철도 조회를 완료하지 못했어요", stale: "한동안 조회 결과가 없어요", idle: "대기 중인 항목이 없어요", scheduled: "예약한 시각에 검색을 시작해요", pending: "빈자리를 찾았어요", offline: "현재 상태를 확인할 수 없어요" };
+    const wanted = { unavailable: "철도 조회를 완료하지 못했어요", stale: "한동안 조회 결과가 없어요", idle: "대기 중인 항목이 없어요", scheduled: "정한 시각에 찾기 시작해요", pending: "빈자리를 찾았어요", offline: "현재 상태를 확인할 수 없어요" };
     expect(root.querySelector("[data-search-status]")?.textContent).toContain(wanted[scenario]);
     if (scenario !== "idle") expect(root.querySelector("[data-search-status]")?.textContent).not.toContain("대기 중인 항목이 없어요");
   });
@@ -141,7 +141,7 @@ describe("concept C application shell", () => {
     expect(root.querySelector("[data-operator='srt']")).toBeNull();
     expect(root.querySelector<HTMLInputElement>("[name='waitlist']")).toBeNull();
     expect(root.textContent).toContain("기존 SRT 노선은 KTX로 통합됐어요");
-    expect(root.textContent).toContain("코레일 계정 하나로 검색하고 예약할 수 있어요");
+    expect(root.textContent).toContain("코레일 계정 하나로 조회하고 예약할 수 있어요");
 
     app.navigate("confirm");
     expect(root.querySelector<HTMLButtonElement>("[data-action='schedule-toggle']")?.disabled).toBe(
@@ -1086,7 +1086,7 @@ it("shows approved empty-state copy and illustrated SVG marks", async () => {
 
   app.navigate("favourites");
   expect(root.textContent).toContain("즐겨찾기가 없어요");
-  expect(root.textContent).toContain("자주 가는 구간을 저장해 두면 다음 검색이 더 빨라져요.");
+  expect(root.textContent).toContain("자주 가는 구간을 저장해 두면 다음 찾기가 더 빨라져요.");
   expect(root.textContent).toContain("새 즐겨찾기 만들기");
   expect(root.querySelector(".empty-mark svg")).not.toBeNull();
 
@@ -1170,7 +1170,7 @@ it("keeps the running home card to a badge, the route and its two shortcuts", as
   expect(card.dataset.state).toBe("healthy");
   expect(card.textContent).toContain("찾는 중");
   expect(card.textContent).toContain("1명");
-  expect(card.textContent).toContain("검색 상세 보기");
+  expect(card.textContent).toContain("자세히 보기");
   expect(card.textContent).toContain("그만 찾기");
   expect(card.textContent).not.toContain("빈자리를 찾고 있어요");
   expect(card.textContent).not.toContain("앱을 닫아도 서버에서 계속 검색해요.");
@@ -1341,7 +1341,7 @@ it("asks in an in-app sheet instead of window.confirm, and only acts when it is 
   const sheet = root.querySelector<HTMLElement>(".action-sheet");
   expect(sheet?.getAttribute("role")).toBe("dialog");
   expect(sheet?.getAttribute("aria-modal")).toBe("true");
-  expect(sheet?.textContent).toContain("진행 중인 검색이나 예약된 검색을 취소할까요?");
+  expect(sheet?.textContent).toContain("자리 찾기를 그만할까요?");
 
   root.querySelector<HTMLButtonElement>("[data-action='sheet-cancel']")!.click();
   expect(root.querySelector(".action-sheet")).toBeNull();
@@ -1534,8 +1534,8 @@ it("explains a home problem state and marks it with a glyph instead of the word 
 
   expect(card.dataset.state).toBe("error");
   expect(card.querySelector(".search-status-icon")?.textContent).toBe("!");
-  expect(card.querySelector(".search-status-description")?.textContent).toBe("검색 기록은 남아 있지만 현재 조회 상태를 확인할 수 없어요.");
-  expect(card.querySelector("[data-view='activity']")?.textContent).toContain("검색 상세 보기");
+  expect(card.querySelector(".search-status-description")?.textContent).toBe("자리 찾기는 남아 있지만 현재 조회 상태를 확인할 수 없어요.");
+  expect(card.querySelector("[data-view='activity']")?.textContent).toContain("자세히 보기");
 });
 
 it("keeps the seat sheet's confirm button out of reach until something is selected", async () => {

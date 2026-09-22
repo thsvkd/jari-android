@@ -494,7 +494,7 @@ export class JariApp {
       ? state.pending.length
         ? { kind: "reserved", title: "빈자리를 찾았어요", description: "아래 예약 내역에서 결제 기한을 확인하세요." }
         : !state.running && state.scheduled
-          ? { kind: "scheduled", title: "예약한 시각에 검색을 시작해요", description: `${formatStamp(state.scheduled.startAt)} 시작 예정` }
+          ? { kind: "scheduled", title: "정한 시각에 찾기 시작해요", description: `${formatStamp(state.scheduled.startAt)} 시작 예정` }
           : radar
       : radar;
     // 찾는 중인 검색은 배지·구간·조건 한 줄이면 충분해요. 설명과 마지막 조회 시각은 검색 상세의 몫이에요.
@@ -503,19 +503,19 @@ export class JariApp {
       ? this.renderIdleCard()
       : (status.kind === "healthy" || status.kind === "running-unverified") && journey
         ? this.renderRunningCard(status.kind, journey)
-        : `<section class="card search-status-card" data-search-status data-state="${status.kind}" aria-label="검색 상태 요약">
+        : `<section class="card search-status-card" data-search-status data-state="${status.kind}" aria-label="자리 찾기 상태 요약">
         <div class="search-status-title"><span class="search-status-icon">${status.kind === "reserved" ? "예약" : ["error", "stale", "offline"].includes(status.kind) ? "!" : "대기"}</span><h2>${escapeHtml(status.title)}</h2></div>
         ${route}
         ${journey ? `<p class="search-conditions">${escapeHtml(journey.trainTypeShow)} · ${escapeHtml(seatLabels[journey.specialInfoShow] ?? journey.specialInfoShow)} · ${journey.passengerCount}명</p>` : ""}
         ${["reserved", "scheduled", "error", "stale", "offline"].includes(status.kind) ? `<p class="search-status-description">${escapeHtml(status.description)}</p>` : ""}
         ${!paymentFirst && state.running && radar.lastCheckedLabel ? `<p class="search-last-check">마지막 조회 ${escapeHtml(radar.lastCheckedLabel)}</p>` : ""}
-        ${busy ? `<button class="button secondary" data-view="activity">${paymentFirst ? "예약 확인하기" : "검색 상세 보기"}<span>→</span></button>` : ""}
+        ${busy ? `<button class="button secondary" data-view="activity">${paymentFirst ? "예약 확인하기" : "자세히 보기"}<span>→</span></button>` : ""}
       </section>`;
     // 바로가기는 대기 여부와 상관없이 제목 바로 밑 한 자리에만 둬요. 대기 카드는 그 아래에서 조용히 비어 있어요.
     const chips = this.homeChips();
     return `<div class="home-layout"><div class="home-primary">
       <section class="status-heading">
-        <div><p class="eyebrow">검색 현황</p><h1>내 검색 현황</h1></div>
+        <div><h1>내 자리 찾기</h1></div>
       </section>
       ${chips.length ? `<section class="chip-shelf">${this.renderChipShelf(chips)}</section>` : ""}
       ${statusCard}
@@ -556,11 +556,11 @@ export class JariApp {
 
   // 찾는 중 카드: 배지·구간·조건 한 줄과 두 개의 글자 버튼만. 나머지는 검색 상세에서 봐요.
   private renderRunningCard(kind: RadarKind, journey: SearchDescription): string {
-    return `<section class="card search-status-card running-compact" data-search-status data-state="${kind}" aria-label="검색 상태 요약">
+    return `<section class="card search-status-card running-compact" data-search-status data-state="${kind}" aria-label="자리 찾기 상태 요약">
       <p class="idle-badge"><span class="idle-dot" aria-hidden="true"></span>찾는 중</p>
       <div class="route-title"><strong>${escapeHtml(journey.srcLocate)}</strong><span>→</span><strong>${escapeHtml(journey.dstLocate)}</strong></div>
       <p class="route-meta">${escapeHtml(formatWindow(journey))} · ${journey.passengerCount}명</p>
-      <div class="card-action-row split"><button class="text-button" data-view="activity">검색 상세 보기 →</button><button class="text-button danger" data-action="stop-search">그만 찾기</button></div>
+      <div class="card-action-row split"><button class="text-button" data-view="activity">자세히 보기 →</button><button class="text-button danger" data-action="stop-search">그만 찾기</button></div>
     </section>`;
   }
 
@@ -571,7 +571,7 @@ export class JariApp {
   }
 
   private renderIdleCard(): string {
-    return `<section class="card search-status-card idle-quiet" data-search-status data-state="idle" aria-label="검색 상태 요약">
+    return `<section class="card search-status-card idle-quiet" data-search-status data-state="idle" aria-label="자리 찾기 상태 요약">
       ${activityEmptyMark()}
       <p class="idle-quiet-text">대기 중인 항목이 없어요</p>
     </section>`;
@@ -592,7 +592,7 @@ export class JariApp {
 
   private renderScheduledCard(): string {
     const scheduled = this.state!.scheduled!;
-    return `<section class="card scheduled-card"><div class="card-label"><i></i>예약된 검색</div><div class="route-line"><strong>${escapeHtml(scheduled.search.srcLocate)} → ${escapeHtml(scheduled.search.dstLocate)}</strong><span>${escapeHtml(formatStamp(scheduled.startAt))} 시작</span></div><button class="text-button danger" data-action="cancel-search">검색 예약 취소</button></section>`;
+    return `<section class="card scheduled-card"><div class="card-label"><i></i>예약된 자리 찾기</div><div class="route-line"><strong>${escapeHtml(scheduled.search.srcLocate)} → ${escapeHtml(scheduled.search.dstLocate)}</strong><span>${escapeHtml(formatStamp(scheduled.startAt))} 시작</span></div><button class="text-button danger" data-action="cancel-search">예약 취소</button></section>`;
   }
 
   private renderJourney(): string {
@@ -615,7 +615,7 @@ export class JariApp {
             ${this.radioCard("train_type", "1", "KTX 계열", "KTX·KTX-산천", this.draft.trainType === "1")}
             ${this.radioCard("train_type", "2", "모든 열차", "무궁화호 포함", this.draft.trainType === "2")}
           </fieldset>
-          <div class="notice rail-merge-note"><b>수서 출발 열차도 함께 찾아요.</b><p>기존 SRT 노선은 KTX로 통합됐어요. 코레일 계정 하나로 검색하고 예약할 수 있어요.</p></div>
+          <div class="notice rail-merge-note"><b>수서 출발 열차도 함께 찾아요.</b><p>기존 SRT 노선은 KTX로 통합됐어요. 코레일 계정 하나로 조회하고 예약할 수 있어요.</p></div>
         </section>
         <section class="card form-card">
           <div class="form-section-head"><div><span>02</span><h2>언제 떠나세요?</h2></div></div>
@@ -624,7 +624,7 @@ export class JariApp {
             <label class="field"><span>이 시간부터</span><input name="dep_time" type="time" value="${escapeHtml(this.draft.depTime)}" required></label>
             <label class="field"><span>이 시간까지</span><input name="max_dep_time" type="time" value="${escapeHtml(this.draft.maxDepTime)}" ${this.draft.unlimitedTime ? "disabled" : "required"}></label>
           </div>
-          <label class="check-row"><input name="unlimited_time" type="checkbox" ${this.draft.unlimitedTime ? "checked" : ""}><span><b>마지막 열차까지 찾기</b><small>자정 전 마지막 열차까지 검색해요</small></span></label>
+          <label class="check-row"><input name="unlimited_time" type="checkbox" ${this.draft.unlimitedTime ? "checked" : ""}><span><b>마지막 열차까지 찾기</b><small>자정 전 마지막 열차까지 찾아요</small></span></label>
         </section>
         <section class="card form-card">
           <div class="form-section-head"><div><span>03</span><h2>어떤 좌석이 좋으세요?</h2></div></div>
@@ -695,7 +695,7 @@ export class JariApp {
     return `${this.renderSubhead("열차 선택", "좌석 예약·취소표 대기")}
       <div class="context-line"><b>${escapeHtml(conditions.src_station)} → ${escapeHtml(conditions.dst_station)}</b><span>${escapeHtml(formatWindow(conditions))}</span></div>
       <p class="intro">좌석이 있으면 바로 예약할 수 있어요. 매진이면 원하는 좌석 범위를 골라 취소표 대기를 시작하세요.</p>
-      ${this.trainListTruncated ? '<div class="notice warning">목록이 길어 일부 열차만 보여드려요. 시간대 전체 검색은 그대로 이용할 수 있어요.</div>' : ""}
+      ${this.trainListTruncated ? '<div class="notice warning">목록이 길어 일부 열차만 보여드려요. 시간대 전체 찾기는 그대로 이용할 수 있어요.</div>' : ""}
       <div class="train-list">${list}</div>
       ${this.renderError()}
       ${this.renderAccessRequest()}
@@ -1241,9 +1241,9 @@ export class JariApp {
       ${this.renderError()}
       ${this.renderAccessRequest()}
       <button class="button primary" data-action="start-now">${waitlist ? "코레일 예약 대기 신청" : "지금 빈자리 찾기"} <span>${waitlist ? "→" : "⌁"}</span></button>
-      <button class="button ghost" data-action="schedule-toggle" ${capabilities.scheduledSearch && !waitlist ? "" : "disabled"}>검색 시작 시간 예약</button>
-      ${waitlist ? '<p class="availability center">예약 대기는 선택한 열차에 바로 신청해요.</p>' : capabilities.scheduledSearch ? "" : '<p class="availability center">검색 예약은 현재 서버에서 지원하지 않아요.</p>'}
-      ${this.scheduleOpen && capabilities.scheduledSearch && !waitlist ? `<section class="schedule-panel"><label class="field"><span>검색을 시작할 시각</span><input id="schedule-at" type="datetime-local" required></label><button class="button secondary" data-action="schedule-start">이 시각으로 검색 예약</button></section>` : ""}
+      <button class="button ghost" data-action="schedule-toggle" ${capabilities.scheduledSearch && !waitlist ? "" : "disabled"}>찾기 시작 시각 예약</button>
+      ${waitlist ? '<p class="availability center">예약 대기는 선택한 열차에 바로 신청해요.</p>' : capabilities.scheduledSearch ? "" : '<p class="availability center">찾기 예약은 현재 서버에서 지원하지 않아요.</p>'}
+      ${this.scheduleOpen && capabilities.scheduledSearch && !waitlist ? `<section class="schedule-panel"><label class="field"><span>찾기를 시작할 시각</span><input id="schedule-at" type="datetime-local" required></label><button class="button secondary" data-action="schedule-start">이 시각으로 찾기 예약</button></section>` : ""}
       <div class="split-actions"><button class="text-button" data-action="save-favourite" ${capabilities.favourites ? "" : "disabled"}>☆ ${capabilities.favourites ? "이 조건 즐겨찾기" : "즐겨찾기 이용 불가"}</button><button class="text-button" data-view="journey">조건 수정</button></div>`;
   }
 
@@ -1262,11 +1262,11 @@ export class JariApp {
     const detail = radar.kind === "healthy" || radar.kind === "running-unverified"
       ? running?.attemptCount ? `<p class="center muted activity-check">${escapeHtml(checkLine)}</p>` : ""
       : `<div class="notice ${radar.kind === "error" || radar.kind === "stale" ? "warning" : "calm"}"><b>${escapeHtml(radar.title)}</b><p>${escapeHtml(radar.description)}</p></div>`;
-    return `${this.renderSubhead("내 예약", "검색과 결제 상태")}
+    return `${this.renderSubhead("내 예약", "자리 찾기와 결제")}
       ${this.renderPendingCard(false)}
-      ${running ? `<section class="card activity-card"><div class="row-between"><span class="status-pill status-${radar.kind}"><i></i>${escapeHtml(radar.eyebrow)}</span><small>${sinceCheck ? "" : "확인 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(running.srcLocate)}</span><i>→</i><span>${escapeHtml(running.dstLocate)}</span></div>${this.renderRunningConditions(running)}${detail}<button class="button danger" data-action="cancel-search">검색 중지</button></section>` : ""}
+      ${running ? `<section class="card activity-card"><div class="row-between"><span class="status-pill status-${radar.kind}"><i></i>${escapeHtml(radar.eyebrow)}</span><small>${sinceCheck ? "" : "확인 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(running.srcLocate)}</span><i>→</i><span>${escapeHtml(running.dstLocate)}</span></div>${this.renderRunningConditions(running)}${detail}<button class="button danger" data-action="cancel-search">그만 찾기</button></section>` : ""}
       ${state.scheduled ? this.renderScheduledCard() : ""}
-      ${!state.running && !state.scheduled && !state.pending.length ? `<div class="empty">${activityEmptyMark()}<h2>진행 중인 검색이 없어요</h2><p>새 여정을 등록하고 빈자리를 찾아보세요.</p><button class="button primary" data-action="new-journey">새 여정 찾기</button></div>` : ""}
+      ${!state.running && !state.scheduled && !state.pending.length ? `<div class="empty">${activityEmptyMark()}<h2>찾고 있는 자리가 없어요</h2><p>새 여정을 등록하고 빈자리를 찾아보세요.</p><button class="button primary" data-action="new-journey">새 여정 찾기</button></div>` : ""}
       <section class="timeline status-guide-card"><h2>상태 안내</h2>${radar.kind === "healthy" || radar.kind === "running-unverified" ? "" : `<div><i></i><p><b>${escapeHtml(radar.title)}</b><span>${escapeHtml(radar.description)}</span></p></div>`}${state.running?.startedAt ? `<div><i></i><p><b>검색 시작</b><span>${escapeHtml(formatStamp(state.running.startedAt))}</span></p></div>` : ""}</section>`;
   }
 
@@ -1277,7 +1277,7 @@ export class JariApp {
     }
     return `${this.renderSubhead("즐겨찾기", "자주 가는 구간")}
       <p class="intro">자주 가는 구간을 저장해 두고, 날짜만 바꿔 바로 조회하세요.</p>
-      <div class="favourite-list">${favourites.length ? favourites.map((favourite) => this.renderFavouriteRow(favourite, false)).join("") : `<div class="empty">${favouriteEmptyMark()}<h2>즐겨찾기가 없어요</h2><p>자주 가는 구간을 저장해 두면 다음 검색이 더 빨라져요.</p></div>`}</div>
+      <div class="favourite-list">${favourites.length ? favourites.map((favourite) => this.renderFavouriteRow(favourite, false)).join("") : `<div class="empty">${favouriteEmptyMark()}<h2>즐겨찾기가 없어요</h2><p>자주 가는 구간을 저장해 두면 다음 찾기가 더 빨라져요.</p></div>`}</div>
       <button class="button primary" data-action="new-journey">새 즐겨찾기 만들기 <span>＋</span></button>`;
   }
 
@@ -1291,16 +1291,16 @@ export class JariApp {
     const [title, text] = !capable
       ? ["알림 내역을 불러올 수 없어요", "현재 서버에서는 앱 알림 내역을 제공하지 않아요."]
       : this.notificationsLoaded
-        ? ["새 알림이 없어요", "검색이나 예약 상태가 바뀌면 여기에 알려드려요."]
+        ? ["새 알림이 없어요", "자리 찾기나 예약 상태가 바뀌면 여기에 알려드려요."]
         : this.error
           ? ["알림을 불러오지 못했어요", "잠시 후 알림 화면을 다시 열어 주세요."]
           : ["알림을 불러오는 중이에요", "잠시만 기다려 주세요."];
     const items = this.notificationsLoaded && this.notifications.length
       ? this.notifications
-          .map((item) => `<article class="notification"><span class="notification-icon">${item.kind === "reservation" ? "예약" : "검색"}</span><div><b>${escapeHtml(item.text)}</b><small>${escapeHtml(formatStamp(item.createdAt))}</small></div></article>`)
+          .map((item) => `<article class="notification"><span class="notification-icon">${item.kind === "reservation" ? "예약" : "찾기"}</span><div><b>${escapeHtml(item.text)}</b><small>${escapeHtml(formatStamp(item.createdAt))}</small></div></article>`)
           .join("")
       : `<div class="empty"><span>◌</span><h2>${title}</h2><p>${text}</p></div>`;
-    return `${this.renderSubhead("알림", "검색과 예약 소식")}${this.renderError()}${items}`;
+    return `${this.renderSubhead("알림", "자리 찾기와 예약 소식")}${this.renderError()}${items}`;
   }
 
   private renderSettings(): string {
@@ -1313,7 +1313,7 @@ export class JariApp {
     return `${this.renderSubhead("설정", "계정과 알림")}
       <div class="settings-layout"><aside class="settings-profile"><section class="profile-card"><span class="profile-avatar">${escapeHtml((state.user?.username || "나").slice(0, 1))}</span><div><b>${escapeHtml(state.user?.username || "여행자")}</b><small>${state.user?.role === "admin" ? "관리자 계정" : "초대로 가입한 계정"}</small></div></section><button class="button ghost danger" data-action="app-logout">앱에서 로그아웃</button></aside>
       <div class="settings-groups"><section class="settings-section"><p class="eyebrow">철도 계정</p><button class="settings-row" data-view="rail-account"><span><b>코레일 계정</b><small>${state.rail.registered ? "연결됨 · 모든 고속열차 예약 준비 완료" : "연결되지 않음"}</small></span><em>${state.rail.registered ? "관리" : "연결"} →</em></button><div class="settings-row static"><span><b>수서 출발 고속열차</b><small>별도 SRT 계정 없이 코레일 계정으로 이용해요</small></span><em class="integrated-badge">통합됨</em></div></section>
-      <section class="settings-section"><p class="eyebrow">알림</p><div class="settings-row static"><span><b>검색 상황 알림</b><small>${notifyAvailable ? "검색 중 진행 상황을 알려드리는 간격" : "현재 서버에서는 알림 간격을 바꿀 수 없어요"}</small></span><div class="stepper small"><button data-action="notify-minus" ${notifyAvailable ? "" : "disabled"}>−</button><output>${notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가"}</output><button data-action="notify-plus" ${notifyAvailable ? "" : "disabled"}>＋</button></div></div><button class="settings-row" data-action="request-push" ${pushAvailable ? "" : "disabled"}><span><b>휴대폰 알림</b><small>${pushAvailable ? "Android 알림 권한 열기" : "휴대폰 알림 서비스가 아직 준비되지 않았어요"}</small></span><em>${pushAvailable ? "설정" : "이용 불가"}</em></button></section>
+      <section class="settings-section"><p class="eyebrow">알림</p><div class="settings-row static"><span><b>찾기 상황 알림</b><small>${notifyAvailable ? "찾는 중 진행 상황을 알려드리는 간격" : "현재 서버에서는 알림 간격을 바꿀 수 없어요"}</small></span><div class="stepper small"><button data-action="notify-minus" ${notifyAvailable ? "" : "disabled"}>−</button><output>${notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가"}</output><button data-action="notify-plus" ${notifyAvailable ? "" : "disabled"}>＋</button></div></div><button class="settings-row" data-action="request-push" ${pushAvailable ? "" : "disabled"}><span><b>휴대폰 알림</b><small>${pushAvailable ? "Android 알림 권한 열기" : "휴대폰 알림 서비스가 아직 준비되지 않았어요"}</small></span><em>${pushAvailable ? "설정" : "이용 불가"}</em></button></section>
       ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p><span class="admin-only-badge">관리자 전용</span></div><p class="settings-section-copy">회원 가입 권한은 관리자만 발급할 수 있어요.</p><button class="settings-row" data-action="create-invite" ${this.inviteLoading ? "disabled" : ""}><span><b>회원 초대 코드</b><small>관리자만 만들 수 있는 일회용 가입 코드예요</small></span><em>${this.inviteLoading ? '<span class="inline-spinner" aria-hidden="true"></span><span class="sr-only">만드는 중</span>' : "만들기 →"}</em></button>${this.invitePreview ? `<div class="invite-card"><p>코드는 이 화면을 닫으면 다시 볼 수 없어요. 가입할 분에게 바로 전달해 주세요.</p><code>${escapeHtml(this.invitePreview)}</code><div class="invite-actions"><button class="button primary" data-action="copy-invite" type="button">복사</button><button class="button ghost" data-action="dismiss-invite" type="button">닫기</button></div></div>` : ""}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">앱</p><button class="settings-row" data-action="theme"><span><b>화면 테마</b><small>시스템과 별도로 바꿀 수 있어요</small></span><em>${this.theme === "dark" ? "다크" : "라이트"}</em></button><div class="settings-row static"><span><b>앱 버전</b><small>서버 ${escapeHtml(state.version)}</small></span><em>v${escapeHtml(appPackage.version)}</em></div></section></div></div>`;
   }
@@ -1503,7 +1503,7 @@ export class JariApp {
     }
     if (draft.srcStation === draft.dstStation) return "출발역과 도착역은 달라야 해요.";
     if (!draft.unlimitedTime && (!draft.maxDepTime || draft.maxDepTime <= draft.depTime)) {
-      return "검색 종료 시각은 시작 시각보다 늦어야 해요.";
+      return "찾기 종료 시각은 시작 시각보다 늦어야 해요.";
     }
     if (draft.seatGradeMode === "specific" && !(draft.seatClasses ?? []).length) {
       return "일반실이나 특실을 한 가지 이상 선택해 주세요.";
@@ -1567,10 +1567,10 @@ export class JariApp {
           await this.reload();
           return;
         }
-        this.error = "서버에서 검색 시작을 확인하지 못했어요.";
+        this.error = "서버에서 자리 찾기 시작을 확인하지 못했어요.";
         return;
       }
-      this.showToast("서버에서 검색을 시작했어요.");
+      this.showToast("서버에서 자리 찾기를 시작했어요.");
       this.history = [];
       this.view = "home";
       await this.reload();
@@ -1580,13 +1580,13 @@ export class JariApp {
   private async schedule(): Promise<void> {
     const input = this.root.querySelector<HTMLInputElement>("#schedule-at");
     if (!input?.value) {
-      this.error = "검색을 시작할 시각을 골라 주세요.";
+      this.error = "찾기를 시작할 시각을 골라 주세요.";
       this.render();
       return;
     }
     const selected = new Date(input.value);
     if (Number.isNaN(selected.getTime())) {
-      this.error = "검색 시작 시각을 확인할 수 없어요.";
+      this.error = "찾기 시작 시각을 확인할 수 없어요.";
       this.render();
       return;
     }
@@ -1601,7 +1601,7 @@ export class JariApp {
         this.error = "서버에서 시작 예약을 확인하지 못했어요.";
         return;
       }
-      this.showToast(`${formatStamp(result.startAt)}에 검색을 시작해요.`);
+      this.showToast(`${formatStamp(result.startAt)}에 찾기를 시작해요.`);
       this.history = [];
       this.view = "home";
       await this.reload();
@@ -1668,20 +1668,23 @@ export class JariApp {
     });
   }
 
-  // The home card's "그만 찾기" and the detail screen's "검색 중지" ask differently but stop the same search.
-  private async cancelSearch(fromHome: boolean): Promise<void> {
-    const confirmed = fromHome
-      ? await this.confirmSheet({ title: "자리 찾기를 그만할까요?", body: "지금까지 잡은 예약은 그대로 남아요.", confirmLabel: "그만 찾기", danger: true })
-      : await this.confirmSheet({ title: "진행 중인 검색이나 예약된 검색을 취소할까요?", confirmLabel: "검색 취소", danger: true });
+  // 홈 카드, 상세 카드, 예약된 자리 찾기 — 멈추는 자리는 셋이지만 묻는 말과 하는 일은 하나예요.
+  private async cancelSearch(): Promise<void> {
+    const confirmed = await this.confirmSheet({
+      title: "자리 찾기를 그만할까요?",
+      body: "지금까지 잡은 예약은 그대로 남아요.",
+      confirmLabel: "그만 찾기",
+      danger: true,
+    });
     if (!confirmed) return;
     await this.run(async (isCurrent) => {
       const result = await this.api.cancelSearch();
       if (!isCurrent()) return;
       if (!result.stopped && !result.unscheduled) {
-        this.error = "서버에서 중지할 검색을 찾지 못했어요.";
+        this.error = "서버에서 멈출 자리 찾기를 찾지 못했어요.";
         return;
       }
-      this.showToast("검색을 중지했어요.");
+      this.showToast("자리 찾기를 그만뒀어요.");
       await this.reload();
     });
   }
@@ -1734,7 +1737,7 @@ export class JariApp {
   }
 
   private async railLogout(): Promise<void> {
-    const confirmed = await this.confirmSheet({ title: "코레일 계정 연결을 해제할까요?", body: "진행 중인 검색은 따로 중지해야 해요.", confirmLabel: "연결 해제", danger: true });
+    const confirmed = await this.confirmSheet({ title: "코레일 계정 연결을 해제할까요?", body: "진행 중인 자리 찾기는 따로 그만둬야 해요.", confirmLabel: "연결 해제", danger: true });
     if (!confirmed) return;
     await this.run(async (isCurrent) => {
       const result = await this.api.railwayLogout();
@@ -1993,7 +1996,7 @@ export class JariApp {
         break;
       case "cancel-search":
       case "stop-search":
-        void this.cancelSearch(action === "stop-search");
+        void this.cancelSearch();
         break;
       case "cancel-pending":
         void this.cancelPending();
@@ -2144,7 +2147,7 @@ export class JariApp {
       const result = await this.api.setNotify(minutes);
       if (version !== this.notifySaveVersion || this.state !== state) return;
       state.notifyMinutes = result.notifyMinutes;
-      this.showToast(result.notifyMinutes ? `${result.notifyMinutes}분마다 알려드려요.` : "검색 상황 알림을 껐어요.");
+      this.showToast(result.notifyMinutes ? `${result.notifyMinutes}분마다 알려드려요.` : "찾기 상황 알림을 껐어요.");
       this.render();
     } catch {
       if (version !== this.notifySaveVersion || this.state !== state) return;
