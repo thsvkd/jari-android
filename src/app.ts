@@ -469,14 +469,16 @@ export class JariApp {
           ? { kind: "scheduled", title: "예약한 시각에 검색을 시작해요", description: `${formatStamp(state.scheduled.startAt)} 시작 예정` }
           : radar
       : radar;
+    // A healthy search says all it needs to in its title and route; the sentence and the last-check time belong in 검색 상세, not here.
+    const quiet = status.kind === "healthy";
     const statusCard = status.kind === "idle"
       ? this.renderIdleCard()
       : `<section class="card search-status-card" data-search-status data-state="${status.kind}" aria-label="검색 상태 요약">
         <div class="search-status-title"><span class="search-status-icon">${status.kind === "reserved" ? "예약" : ["error", "stale", "offline"].includes(status.kind) ? "확인" : "대기"}</span><h2>${escapeHtml(status.title)}</h2></div>
         ${route}
         ${journey ? `<p class="search-conditions">${escapeHtml(journey.trainTypeShow)} · ${escapeHtml(seatLabels[journey.specialInfoShow] ?? journey.specialInfoShow)} · ${journey.passengerCount}명</p>` : ""}
-        <p class="search-status-description">${escapeHtml(status.description)}</p>
-        ${!paymentFirst && state.running && radar.lastCheckedLabel ? `<p class="search-last-check">마지막 조회 ${escapeHtml(radar.lastCheckedLabel)}</p>` : ""}
+        ${quiet ? '<div class="card-action-row"><button class="text-button danger" data-action="stop-search">그만 찾기</button></div>' : `<p class="search-status-description">${escapeHtml(status.description)}</p>`}
+        ${!paymentFirst && !quiet && state.running && radar.lastCheckedLabel ? `<p class="search-last-check">마지막 조회 ${escapeHtml(radar.lastCheckedLabel)}</p>` : ""}
         ${state.running || state.scheduled || state.pending.length ? `<button class="button secondary" data-view="activity">${paymentFirst ? "예약 확인하기" : "검색 상세 보기"}<span>→</span></button>` : ""}
       </section>`;
     return `<div class="home-layout"><div class="home-primary">
@@ -753,7 +755,7 @@ export class JariApp {
     this.render();
   }
 
-  // In-app replacement for window.confirm: same sheet, no input, answers true only when the confirm button is pressed.
+  // The in-app replacement for the browser's own confirm dialog: the same sheet without an input, true only when confirmed.
   private confirmSheet(options: { title: string; body?: string; confirmLabel: string; danger?: boolean }): Promise<boolean> {
     return this.openSheet(options).then((value) => value !== null);
   }
@@ -1198,9 +1200,15 @@ export class JariApp {
       running: this.radarRunning(state),
       connection: this.connection,
     });
+    // A search that is simply running says so in its pill; only a problem state earns the notice box.
+    const running = state.running;
+    const checkLine = [radar.lastCheckedLabel ? `${radar.lastCheckedLabel} 확인` : "", `${running?.attemptCount ?? 0}회 조회`].filter(Boolean).join(" · ");
+    const detail = radar.kind === "healthy" || radar.kind === "running-unverified"
+      ? running?.attemptCount ? `<p class="center muted activity-check">${escapeHtml(checkLine)}</p>` : ""
+      : `<div class="notice ${radar.kind === "error" || radar.kind === "stale" ? "warning" : "calm"}"><b>${escapeHtml(radar.title)}</b><p>${escapeHtml(radar.description)}</p></div>`;
     return `${this.renderSubhead("내 예약", "검색과 결제 상태")}
       ${this.renderPendingCard(false)}
-      ${state.running ? `<section class="card activity-card"><div class="row-between"><span class="status-pill status-${radar.kind}"><i></i>${escapeHtml(radar.eyebrow)}</span><small>${radar.lastCheckedLabel ? `${escapeHtml(radar.lastCheckedLabel)} 확인` : "최근 조회 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(state.running.srcLocate)}</span><i>→</i><span>${escapeHtml(state.running.dstLocate)}</span></div><p class="center muted">${escapeHtml(formatWindow(state.running))} · ${state.running.passengerCount}명</p><div class="notice ${radar.kind === "error" || radar.kind === "stale" ? "warning" : "calm"}"><b>${escapeHtml(radar.title)}</b><p>${escapeHtml(radar.description)}</p></div><button class="button ghost danger" data-action="cancel-search">검색 중지</button></section>` : ""}
+      ${running ? `<section class="card activity-card"><div class="row-between"><span class="status-pill status-${radar.kind}"><i></i>${escapeHtml(radar.eyebrow)}</span><small>${radar.lastCheckedLabel ? `${escapeHtml(radar.lastCheckedLabel)} 확인` : "최근 조회 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(running.srcLocate)}</span><i>→</i><span>${escapeHtml(running.dstLocate)}</span></div><p class="center muted">${escapeHtml(formatWindow(running))} · ${running.passengerCount}명</p>${detail}<button class="button ghost danger" data-action="cancel-search">검색 중지</button></section>` : ""}
       ${state.scheduled ? this.renderScheduledCard() : ""}
       ${!state.running && !state.scheduled && !state.pending.length ? `<div class="empty">${activityEmptyMark()}<h2>진행 중인 검색이 없어요</h2><p>새 여정을 등록하고 빈자리를 찾아보세요.</p><button class="button primary" data-action="new-journey">새 여정 찾기</button></div>` : ""}
       <section class="timeline status-guide-card"><h2>상태 안내</h2><div><i></i><p><b>${escapeHtml(radar.title)}</b><span>${escapeHtml(radar.description)}</span></p></div>${state.running?.startedAt ? `<div><i></i><p><b>검색 시작</b><span>${escapeHtml(formatStamp(state.running.startedAt))}</span></p></div>` : ""}</section>`;

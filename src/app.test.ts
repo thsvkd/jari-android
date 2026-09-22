@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { JariApp } from "./app";
@@ -1141,6 +1143,44 @@ it("reaches the confirm screen from the train list by clicks alone and saves a f
   await vi.waitFor(() => expect(saveFavourite).toHaveBeenCalledOnce());
 });
 
+it("keeps the running home card to its title and route, and offers 그만 찾기 there", async () => {
+  const cancelSearch = vi.fn(async () => ({ stopped: true, unscheduled: false }));
+  const { root } = await mountLive({ cancelSearch });
+  const card = root.querySelector<HTMLElement>("[data-search-status]")!;
+
+  expect(card.dataset.state).toBe("healthy");
+  expect(card.textContent).toContain("빈자리를 찾고 있어요");
+  expect(card.textContent).not.toContain("앱을 닫아도 서버에서 계속 검색해요.");
+  expect(card.querySelector(".search-last-check")).toBeNull();
+
+  card.querySelector<HTMLButtonElement>("[data-action='stop-search']")!.click();
+  expect(root.querySelector(".action-sheet")?.textContent).toContain("자리 찾기를 그만할까요?");
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+  await vi.waitFor(() => expect(cancelSearch).toHaveBeenCalledOnce());
+});
+
+it("replaces the running notice in 검색 상세 with the check count, keeping the timestamp", async () => {
+  const { app, root } = await mountLive();
+  app.navigate("activity");
+  const card = root.querySelector<HTMLElement>(".activity-card")!;
+
+  expect(card.querySelector(".notice")).toBeNull();
+  expect(card.textContent).toContain("확인 · 18회 조회");
+  expect(card.querySelector(".row-between small")?.textContent).toMatch(/확인$/);
+  // A search in trouble still explains itself.
+  expect(root.querySelector(".status-guide-card")?.textContent).toContain("앱을 닫아도 서버에서 계속 검색해요.");
+});
+
+it("keeps the notice in 검색 상세 when the search is in trouble", async () => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running!.health = "error";
+  const { app, root } = await mountLive({ bootstrap: async () => state });
+  app.navigate("activity");
+
+  expect(root.querySelector(".activity-card .notice.warning")?.textContent).toContain("철도 조회를 완료하지 못했어요");
+});
+
 async function mountIdle(overrides: Partial<ReturnType<typeof createDemoApi>> = {}) {
   const demo = createDemoApi();
   const state = await demo.bootstrap();
@@ -1257,6 +1297,11 @@ it("asks in an in-app sheet instead of window.confirm, and only acts when it is 
   root.querySelector<HTMLButtonElement>("[data-action='cancel-search']")!.click();
   root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
   await vi.waitFor(() => expect(cancelSearch).toHaveBeenCalledOnce());
+});
+
+it("asks nothing through the browser's own dialog any more", async () => {
+  const source = await readFile("src/app.ts", "utf8");
+  expect(source).not.toContain("window.confirm");
 });
 
 it.each([

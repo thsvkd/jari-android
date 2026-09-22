@@ -395,6 +395,7 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .split-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .activity-card > .muted { font-size: 10px; }
+.activity-check { margin: 14px 0; }
 .center { text-align: center; }
 .muted { color: var(--muted); }
 .timeline { margin: 26px 0 0; }
