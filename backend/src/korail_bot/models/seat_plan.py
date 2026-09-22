@@ -15,6 +15,9 @@ MAX_PLAN_TRAINS = 30
 MAX_TARGETS_PER_TRAIN = 2000
 MAX_TEXT_LENGTH = 64
 SEAT_CLASSES = ("general", "special")
+# A train chosen without any seats: "any seat will do", in one class or in
+# either. Only such an entry may name the "any" class.
+ANY_SEAT_CLASS = "any"
 SEAT_STRATEGIES = ("independent", "consecutive")
 
 
@@ -125,11 +128,13 @@ class TrainSeatTargets:
         if not train_no.isdigit() or len(train_no) > 5:
             raise SeatPlanError("열차 번호를 확인할 수 없어요.")
         seat_class = _small_text(item.get("seatClass"), "좌석 등급")
-        if seat_class not in SEAT_CLASSES:
+        if seat_class not in (*SEAT_CLASSES, ANY_SEAT_CLASS):
             raise SeatPlanError("좌석 등급을 확인할 수 없어요.")
         raw_targets = item.get("targets")
-        if not isinstance(raw_targets, list) or not raw_targets:
-            raise SeatPlanError("예약할 좌석 후보를 한 자리 이상 골라 주세요.")
+        if not isinstance(raw_targets, list):
+            raise SeatPlanError("예약할 좌석 후보를 확인할 수 없어요.")
+        if raw_targets and seat_class == ANY_SEAT_CLASS:
+            raise SeatPlanError("좌석을 고른 열차는 좌석 등급이 있어야 해요.")
         if len(raw_targets) > MAX_TARGETS_PER_TRAIN:
             raise SeatPlanError(
                 f"한 열차의 좌석 후보는 {MAX_TARGETS_PER_TRAIN}개까지 고를 수 있어요."
@@ -139,6 +144,11 @@ class TrainSeatTargets:
         if len(set(keys)) != len(keys):
             raise SeatPlanError("중복된 좌석 후보가 있어요.")
         return cls(train_no=train_no, seat_class=seat_class, targets=targets)
+
+    @property
+    def any_seat(self) -> bool:
+        """Chosen as a train, not as seats: whatever the operator assigns will do."""
+        return not self.targets
 
     def as_payload(self) -> dict[str, object]:
         return {
@@ -173,7 +183,13 @@ class CancellationWaitPlan:
         if len(set(keys)) != len(keys):
             raise SeatPlanError("같은 열차와 좌석 등급이 중복됐어요.")
         plan = cls(strategy=strategy, passenger_count=passenger_count, trains=trains)
-        if strategy == "consecutive" and not plan.consecutive_groups():
+        # A train taken as "any seat" lets the operator seat the party, so the
+        # picked seats only have to hold a block when they are all there is.
+        if (
+            strategy == "consecutive"
+            and not plan.consecutive_groups()
+            and not any(train.any_seat for train in trains)
+        ):
             if passenger_count >= 3:
                 raise SeatPlanError(
                     "선택한 좌석 안에 인원수만큼 같은 줄에 나란히 붙은 좌석이 없어요."

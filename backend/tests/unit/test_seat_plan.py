@@ -69,6 +69,32 @@ def test_independent_plan_accepts_more_candidates_than_passengers():
     assert parse_seat_plan(plan.to_json()) == plan
 
 
+def test_a_train_taken_whole_needs_no_seats_and_satisfies_a_consecutive_plan():
+    plan = CancellationWaitPlan.from_payload(
+        {
+            "strategy": "consecutive",
+            "passengerCount": 2,
+            "trains": [
+                # One seat cannot hold two people, but the other train can seat them anywhere.
+                {"trainNo": "015", "seatClass": "general", "targets": [target("S1", "5A")]},
+                {"trainNo": "019", "seatClass": "any", "targets": []},
+            ],
+        }
+    )
+
+    assert [train.any_seat for train in plan.trains] == [False, True]
+    assert parse_seat_plan(plan.to_json()) == plan
+
+    with pytest.raises(SeatPlanError, match="좌석 등급이 있어야"):
+        CancellationWaitPlan.from_payload(
+            {
+                "strategy": "independent",
+                "passengerCount": 1,
+                "trains": [{"trainNo": "015", "seatClass": "any", "targets": [target("S1", "5A")]}],
+            }
+        )
+
+
 def test_consecutive_groups_do_not_cross_an_aisle_car_or_class():
     plan = CancellationWaitPlan.from_payload(
         {

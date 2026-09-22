@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from korail2 import ReserveOption
+
 from korail_bot.models import CancellationWaitPlan, SeatTarget, TrainSeatTargets
 from korail_bot.utils.logger import get_logger
 
@@ -67,7 +69,9 @@ class CancellationWaitService:
                 continue
             attempted += 1
             try:
-                if consecutive:
+                if wanted.any_seat:
+                    capture = self._any_seat_capture(train, wanted, passenger_count)
+                elif consecutive:
                     capture = self._consecutive_capture(
                         train, wanted, blocks_by_train.get(wanted, ())
                     )
@@ -109,6 +113,28 @@ class CancellationWaitService:
             train, wanted.seat_class, passenger_count, allow_layout_reference=False
         )
         return {car.car_no for car in cars.cars if car.remaining_seat_count > 0} & candidates
+
+    def _any_seat_capture(self, train, wanted, passenger_count: int) -> DesignatedCapture | None:
+        """
+        A train chosen without seats: let the operator seat the party, the way
+        the plain search does, but only in the class the card was chosen for.
+        """
+        classes = ("general", "special") if wanted.seat_class == "any" else (wanted.seat_class,)
+        if not any(
+            getattr(train, f"{seat_class}_reservation_code", None) == AVAILABLE_RESERVATION_CODE
+            for seat_class in classes
+        ):
+            return None
+        option = {
+            "general": ReserveOption.GENERAL_ONLY,
+            "special": ReserveOption.SPECIAL_ONLY,
+        }.get(wanted.seat_class, ReserveOption.GENERAL_FIRST)
+        hold = self.rail.reserve_train(train, option=option, passenger_count=passenger_count)
+        if not hold or hold == "DUPLICATE":
+            # "DUPLICATE" is this account already holding the train; the plain
+            # loop tells the user once, here it is simply not a capture.
+            return None
+        return DesignatedCapture(hold, train, wanted.seat_class, ())
 
     def _independent_capture(self, train, wanted, excluded) -> DesignatedCapture | None:
         by_car = self._by_car(wanted.targets)

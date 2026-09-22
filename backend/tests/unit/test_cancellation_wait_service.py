@@ -79,6 +79,42 @@ def test_independent_capture_reserves_one_matching_seat_and_honours_exclusion():
     }
 
 
+def test_a_train_taken_whole_is_booked_like_a_plain_search_in_its_class():
+    from korail2 import ReserveOption
+
+    raw = payload("consecutive")
+    raw["trains"].append({"trainNo": "019", "seatClass": "any", "targets": []})
+    sold_out = SimpleNamespace(train_no="015")
+    open_train = SimpleNamespace(
+        train_no="019", general_reservation_code="11", special_reservation_code="13"
+    )
+    wait, rail = service(raw, [target("1A", 1, possible="N"), target("1B", 2, possible="N")])
+    rail.search_selectable_trains.return_value = [sold_out, open_train]
+    rail.reserve_train.return_value = SimpleNamespace(rsv_id="plain-hold")
+
+    capture = wait.poll_once()
+
+    assert capture.train is open_train
+    assert capture.targets == ()
+    assert capture.seat_class == "any"
+    rail.reserve_designated.assert_not_called()
+    assert rail.reserve_train.call_args.kwargs == {
+        "option": ReserveOption.GENERAL_FIRST,
+        "passenger_count": 2,
+    }
+
+    # The class the card was chosen for is the class it is booked in, and a
+    # class that is not bookable costs no request at all.
+    raw["trains"][1]["seatClass"] = "special"
+    wait, rail = service(raw, [], trains=[open_train])
+    assert wait.poll_once() is None
+    rail.reserve_train.assert_not_called()
+    open_train.special_reservation_code = "11"
+    rail.reserve_train.return_value = "DUPLICATE"
+    assert wait.poll_once() is None
+    assert rail.reserve_train.call_args.kwargs["option"] == ReserveOption.SPECIAL_ONLY
+
+
 def test_consecutive_capture_requires_the_whole_block_to_be_sellable():
     wait, rail = service(payload("consecutive"), [target("1A", 1), target("1B", 2, possible="N")])
     assert wait.poll_once() is None
