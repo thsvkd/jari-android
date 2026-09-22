@@ -161,3 +161,43 @@ def test_search_restores_leading_zeros_korail_drops_from_numeric_fields():
     assert (train.departure_time, train.train_class_code) == ("063000", "07")
     assert (train.departure_run_order, train.arrival_run_order) == ("000001", "000014")
     assert (train.arrival_time, train.seat_attribute_code) == ("084300", "015")
+
+
+def test_search_gives_a_coupled_unit_the_class_code_of_the_unit_it_runs_with():
+    from korail_mobile_api import TrainSummary
+    from korail_mobile_api.errors import KorailProtocolError
+    from korail_mobile_api.payloads import validate_seat_inventory_inputs
+
+    service = service_with_modern_client()
+    # What pit5 logged for 서울→부산 19:35 on 2026-09-22: 069 carries "07",
+    # its coupled second unit 9069 has no h_trn_clsf_cd at all.
+    row = {
+        "h_trn_gp_cd": "100",
+        "h_trn_clsf_nm": "KTX-산천",
+        "h_dpt_rs_stn_cd": "0001",
+        "h_arv_rs_stn_cd": "0020",
+        "h_dpt_dt": "20260922",
+        "h_run_dt": "20260922",
+        "h_dpt_tm": "193500",
+        "h_arv_tm": "221000",
+        "h_dpt_stn_run_ordr": "000001",
+        "h_arv_stn_run_ordr": "000014",
+    }
+    first = TrainSummary.from_raw({**row, "h_trn_no": "069", "h_trn_clsf_cd": "07"})
+    second = TrainSummary.from_raw({**row, "h_trn_no": "9069"})
+    with pytest.raises(KorailProtocolError, match="train_class_code"):
+        validate_seat_inventory_inputs(second, 1)
+    service._modern_client.search_trains.return_value = SimpleNamespace(trains=(first, second))
+
+    trains = service.search_waitlist_trains(
+        dep_date="20260922",
+        src_locate="0001",
+        dst_locate="0020",
+        dep_time="183000",
+        max_dep_time="2400",
+        train_type=TrainType.ALL,
+        passenger_count=1,
+    )
+
+    assert [train.train_class_code for train in trains] == ["07", "07"]
+    validate_seat_inventory_inputs(trains[1], 1)

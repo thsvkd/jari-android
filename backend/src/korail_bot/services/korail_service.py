@@ -351,7 +351,7 @@ class KorailService(RailService):
                 passengers=passenger_count,
             )
         )
-        trains = [self._padded_train(train) for train in result.trains]
+        trains = self._normalized_trains(result.trains)
         if train_type == TrainType.KTX:
             trains = [train for train in trains if train.train_group_name == "KTX"]
         if max_dep_time != "2400":
@@ -363,17 +363,58 @@ class KorailService(RailService):
             ]
         return trains
 
+    @classmethod
+    def _normalized_trains(cls, trains) -> list:
+        """Search rows made safe for the seat-map and reservation forms.
+
+        Beyond the padding, the second unit of a coupled KTX-산천 (9069 listed
+        next to 069, same times and stations) arrives without h_trn_clsf_cd,
+        and the form check refuses the row before any request is sent. The
+        unit it runs coupled with names the class, so it is borrowed from
+        there; a row with no such sibling is left as it came.
+        """
+        trains = [cls._padded_train(train) for train in trains]
+        class_codes: dict[tuple, str] = {}
+        for train in trains:
+            if isinstance(train, TrainSummary) and train.train_class_code:
+                class_codes.setdefault(cls._service_key(train), train.train_class_code)
+        return [
+            replace(train, train_class_code=class_codes[key])
+            if isinstance(train, TrainSummary)
+            and not train.train_class_code
+            and (key := cls._service_key(train)) in class_codes
+            else train
+            for train in trains
+        ]
+
+    @staticmethod
+    def _service_key(train) -> tuple:
+        return tuple(
+            getattr(train, name, None) or ""
+            for name in (
+                "departure_date",
+                "departure_time",
+                "arrival_time",
+                "departure_station_code",
+                "arrival_station_code",
+                "train_class_name",
+            )
+        )
+
     @staticmethod
     def _padded_train(train):
         if not isinstance(train, TrainSummary):
             return train
-        padded = {
-            name: value.zfill(width)
-            for name, width in _TRAIN_FIELD_WIDTHS.items()
-            if (value := getattr(train, name, None)) is not None
-            and value.isdigit()
-            and len(value) < width
-        }
+        padded = {}
+        for name, width in _TRAIN_FIELD_WIDTHS.items():
+            value = getattr(train, name, None)
+            if value is None:
+                continue
+            clean = value.strip()
+            if clean.isdigit() and len(clean) < width:
+                clean = clean.zfill(width)
+            if clean != value:
+                padded[name] = clean
         return replace(train, **padded) if padded else train
 
     def search_selectable_trains(self, **kwargs) -> list:
