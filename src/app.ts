@@ -1651,6 +1651,20 @@ export class JariApp {
     });
   }
 
+  // 열차 목록의 "바로 예약"과 "코레일 예약 대기"는 누르는 순간 실제 예약이 시작돼요. 어떤 열차인지 보여 주고 시작해요.
+  private async startTrainAction(trainNo: string, conditions: Conditions, title: string, confirmLabel: string): Promise<void> {
+    const label = this.trainOptions.find((train) => train.no === trainNo)?.label || `열차 ${trainNo}`;
+    const confirmed = await this.confirmSheet({
+      title,
+      body: `${label} · ${SEAT_OPTIONS[conditions.seat_option]} · ${conditions.passenger_count}명`,
+      confirmLabel,
+    });
+    if (!confirmed) return;
+    this.selectedTrains = [trainNo];
+    this.conditions = conditions;
+    await this.startNow();
+  }
+
   private async cancelPending(): Promise<void> {
     const confirmed = await this.confirmSheet({ title: "결제를 기다리는 예약을 모두 취소할까요?", confirmLabel: "예약 취소", danger: true });
     if (!confirmed) return;
@@ -1759,18 +1773,24 @@ export class JariApp {
       return;
     }
     if (button.dataset.immediateAny) {
-      this.selectedTrains = [button.dataset.immediateAny];
-      this.conditions = { ...(this.conditions ?? buildConditions(this.draft)), waitlist: false, seat_plan: undefined };
-      void this.startNow();
+      void this.startTrainAction(
+        button.dataset.immediateAny,
+        { ...(this.conditions ?? buildConditions(this.draft)), waitlist: false, seat_plan: undefined },
+        "바로 예약할까요?",
+        "예약하기",
+      );
       return;
     }
     if (button.dataset.officialWaitlist) {
-      this.selectedTrains = [button.dataset.officialWaitlist];
-      this.conditions = {
-        ...(this.conditions ?? buildConditions(this.draft)), waitlist: true,
-        seat_option: "2", seat_preference: "", seat_plan: undefined,
-      };
-      void this.startNow();
+      void this.startTrainAction(
+        button.dataset.officialWaitlist,
+        {
+          ...(this.conditions ?? buildConditions(this.draft)), waitlist: true,
+          seat_option: "2", seat_preference: "", seat_plan: undefined,
+        },
+        "코레일 예약 대기를 신청할까요?",
+        "신청하기",
+      );
       return;
     }
     if (button.dataset.seatCar) {
