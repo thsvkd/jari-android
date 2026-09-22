@@ -4,6 +4,9 @@
   background: #edf0f4;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  /* 하단 탭바 높이와 그 위에 남길 여백. .screen 의 아래 패딩이 여기서 나와 둘이 어긋날 수 없어요. */
+  --nav-height: calc(72px + env(safe-area-inset-bottom));
+  --nav-clearance: 40px;
   --bg: #f6f7f9;
   --surface: #ffffff;
   --surface-raised: #ffffff;
@@ -64,7 +67,7 @@ small { color: var(--muted); }
 #app { min-height: 100vh; }
 /* clip, not hidden: hidden makes the shell a scroll container, and .sticky-action then sticks to a box that never scrolls. */
 .app-shell { width: min(100%, 520px); min-height: 100vh; margin: 0 auto; position: relative; overflow: clip; background: var(--bg); box-shadow: 0 0 0 1px rgb(20 30 45 / 4%), 0 20px 80px rgb(27 36 51 / 12%); }
-.screen { min-height: calc(100vh - 148px); padding: 22px 22px calc(112px + env(safe-area-inset-bottom)); }
+.screen { min-height: calc(100vh - 148px); padding: 22px 22px calc(var(--nav-height) + var(--nav-clearance)); }
 .topbar { display: flex; align-items: center; justify-content: space-between; height: calc(72px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 22px 0; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(18px); position: sticky; top: 0; z-index: 20; }
 .brand { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0; background: transparent; text-align: left; }
 .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 13px; background: var(--text); color: var(--bg); }
@@ -208,7 +211,7 @@ small { color: var(--muted); }
 .favourite-main small { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .route-symbol { display: grid; place-items: center; flex: 0 0 auto; width: 34px; height: 34px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); }
 
-.bottom-nav { position: fixed; bottom: 0; z-index: 30; width: min(100%, 520px); height: calc(72px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: repeat(4, 1fr); padding: 8px 10px env(safe-area-inset-bottom); border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent); background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(22px); }
+.bottom-nav { position: fixed; bottom: 0; z-index: 30; width: min(100%, 520px); height: var(--nav-height); display: grid; grid-template-columns: repeat(4, 1fr); padding: 8px 10px env(safe-area-inset-bottom); border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent); background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(22px); }
 .bottom-nav button { display: grid; place-items: center; align-content: center; gap: 3px; background: transparent; color: var(--muted); font-size: 9px; }
 .bottom-nav b { font-size: 19px; font-weight: 400; line-height: 1; }
 .bottom-nav button.active { color: var(--accent); font-weight: 760; }
@@ -609,6 +612,7 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
 .toast, .blocker b, .launch p, .fatal p { font-size: 14px; }
 
 @media (orientation: portrait) {
+  :root { --nav-height: calc(58px + env(safe-area-inset-bottom)); --nav-clearance: 32px; }
   /* Same trap as .screen below: hidden here made body and #app scroll containers, and the sticky train-list footer
      stuck to #app's own (never-scrolling) box instead of the viewport. clip with the hidden fallback, as below. */
   html, body, #app { width: 100%; min-height: 100%; overflow-x: hidden; overflow-x: clip; }
@@ -629,7 +633,7 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
   .brand-mark { width: 42px; height: 42px; }
   .brand small { font-size: 12px; letter-spacing: 0; }
   .screen {
-    min-height: calc(100dvh - 68px); padding: 18px 20px calc(78px + env(safe-area-inset-bottom));
+    min-height: calc(100dvh - 68px); padding: 18px 20px calc(var(--nav-height) + var(--nav-clearance));
     /* overflow-x: hidden here also sets overflow-y: auto per spec, turning .screen into an unwanted scroll container that
        breaks position: sticky footers (they stick to .screen's scrollport, not the viewport); clip avoids that coupling,
        but is unsupported on WebView < Chromium 90 (possible on minSdk 23), so keep hidden as the fallback for those. */
@@ -638,7 +642,7 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
   }
   .bottom-nav {
     right: auto; left: 50%; transform: translateX(-50%);
-    width: min(100%, 520px); height: calc(58px + env(safe-area-inset-bottom));
+    width: min(100%, 520px); height: var(--nav-height);
     padding: 5px 8px env(safe-area-inset-bottom);
   }
   .bottom-nav button {
