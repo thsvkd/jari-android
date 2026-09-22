@@ -27,6 +27,7 @@ import type {
   Favourite,
   MobileApi,
   NotificationItem,
+  RunningSearch,
   SearchDescription,
   SeatCarOption,
   SeatClass,
@@ -1208,7 +1209,7 @@ export class JariApp {
       : `<div class="notice ${radar.kind === "error" || radar.kind === "stale" ? "warning" : "calm"}"><b>${escapeHtml(radar.title)}</b><p>${escapeHtml(radar.description)}</p></div>`;
     return `${this.renderSubhead("내 예약", "검색과 결제 상태")}
       ${this.renderPendingCard(false)}
-      ${running ? `<section class="card activity-card"><div class="row-between"><span class="status-pill status-${radar.kind}"><i></i>${escapeHtml(radar.eyebrow)}</span><small>${radar.lastCheckedLabel ? `${escapeHtml(radar.lastCheckedLabel)} 확인` : "최근 조회 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(running.srcLocate)}</span><i>→</i><span>${escapeHtml(running.dstLocate)}</span></div><p class="center muted">${escapeHtml(formatWindow(running))} · ${running.passengerCount}명</p>${detail}<button class="button ghost danger" data-action="cancel-search">검색 중지</button></section>` : ""}
+      ${running ? `<section class="card activity-card"><div class="row-between"><span class="status-pill status-${radar.kind}"><i></i>${escapeHtml(radar.eyebrow)}</span><small>${radar.lastCheckedLabel ? `${escapeHtml(radar.lastCheckedLabel)} 확인` : "최근 조회 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(running.srcLocate)}</span><i>→</i><span>${escapeHtml(running.dstLocate)}</span></div>${this.renderRunningConditions(running)}${detail}<button class="button ghost danger" data-action="cancel-search">검색 중지</button></section>` : ""}
       ${state.scheduled ? this.renderScheduledCard() : ""}
       ${!state.running && !state.scheduled && !state.pending.length ? `<div class="empty">${activityEmptyMark()}<h2>진행 중인 검색이 없어요</h2><p>새 여정을 등록하고 빈자리를 찾아보세요.</p><button class="button primary" data-action="new-journey">새 여정 찾기</button></div>` : ""}
       <section class="timeline status-guide-card"><h2>상태 안내</h2><div><i></i><p><b>${escapeHtml(radar.title)}</b><span>${escapeHtml(radar.description)}</span></p></div>${state.running?.startedAt ? `<div><i></i><p><b>검색 시작</b><span>${escapeHtml(formatStamp(state.running.startedAt))}</span></p></div>` : ""}</section>`;
@@ -1345,6 +1346,29 @@ export class JariApp {
   private radarRunning(state: BootstrapState): BootstrapState["running"] {
     if (!state.running || state.capabilities.lastChecked) return state.running;
     return { ...state.running, health: "unknown", lastCheckedAt: null };
+  }
+
+  /** What the worker is actually waiting for: date window, trains (with their seats), class, party. */
+  private renderRunningConditions(running: RunningSearch): string {
+    const seatLabels: Record<string, string> = { GENERAL_FIRST: "일반실 우선", GENERAL_ONLY: "일반실만", SPECIAL_FIRST: "특실 우선", SPECIAL_ONLY: "특실만" };
+    const planned = running.seatPlan?.trains ?? [];
+    const trainRows = planned.length
+      ? planned.map((train) => {
+          const seats = train.targets.length
+            ? train.targets.map((car) => `${car.carNo}호차 ${car.labels.join("·")}`).join(", ")
+            : "좌석 무관";
+          const cabin = train.seatClass === "any" ? "" : `${train.seatClass === "special" ? "특실" : "일반실"} `;
+          return `<li><b>${escapeHtml(train.label)}</b><span>${escapeHtml(cabin + seats)}</span></li>`;
+        })
+      : running.selectedTrains.map((no) => `<li><b>${escapeHtml(no)}</b><span>좌석 무관</span></li>`);
+    const trainCount = planned.length || running.selectedTrains.length;
+    return `<dl class="activity-conditions">
+      <dt>출발</dt><dd>${escapeHtml(formatWindow(running))}</dd>
+      <dt>열차</dt><dd>${escapeHtml(running.trainTypeShow)} · ${trainCount ? `${trainCount}편 선택` : "시간대 전체"}</dd>
+      ${trainRows.length ? `<dd class="activity-trains"><ul>${trainRows.join("")}</ul></dd>` : ""}
+      <dt>좌석</dt><dd>${escapeHtml(seatLabels[running.specialInfoShow] ?? running.specialInfoShow)} · ${running.passengerCount}명${running.passengerCount > 1 ? ` · ${running.seatStrategy === "consecutive" ? "연속 좌석" : "랜덤 배치"}` : ""}</dd>
+      ${running.seatPreference ? `<dt>좌석 지정</dt><dd>${escapeHtml(this.describeSeatPreference(running.seatPreference))}</dd>` : ""}
+    </dl>`;
   }
 
   private describeSeatPreference(encoded: string): string {

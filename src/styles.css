@@ -396,6 +396,14 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .activity-card > .muted { font-size: 10px; }
 .activity-check { margin: 14px 0; }
+/* 검색 상세: what the worker is waiting for, one label/value per row; the trains list sits full width under its row. */
+.activity-conditions { display: grid; grid-template-columns: 60px 1fr; gap: 10px 12px; margin: 18px 0 4px; font-size: 12px; }
+.activity-conditions dt { color: var(--muted); font-weight: 700; }
+.activity-conditions dd { margin: 0; font-weight: 650; overflow-wrap: anywhere; }
+.activity-conditions .activity-trains { grid-column: 1 / -1; }
+.activity-trains ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.activity-trains li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; border-radius: 12px; background: var(--bg); }
+.activity-trains li span { color: var(--muted); font-weight: 600; text-align: right; }
 .center { text-align: center; }
 .muted { color: var(--muted); }
 .timeline { margin: 26px 0 0; }

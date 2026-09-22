@@ -1357,3 +1357,14 @@ it("leaves the cars at each end out of a bulk apply when asked", async () => {
   expect(root.querySelector("[data-seat-car='5'] em")).toBeNull(); // the last car was left out
   expect(root.textContent).not.toContain("5호차 좌석표를 불러오지 못해"); // and its failure is not reported either
 });
+
+it("lists the running search's trains and seats on the activity screen", async () => {
+  const { app, root } = await mountLive();
+  root.querySelector<HTMLButtonElement>("nav [data-view='activity']")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".activity-conditions")).not.toBeNull());
+  const rows = [...root.querySelectorAll(".activity-trains li")].map((row) => row.textContent);
+  expect(rows).toEqual(["07:27→10:12 KTX일반실 3호차 5A·5B", "08:03→10:48 KTX좌석 무관"]);
+  expect(root.querySelector(".activity-conditions")?.textContent).toContain("KTX 계열만 · 2편 선택");
+  expect(root.querySelector(".activity-card .notice")).toBeNull();
+  expect(app).toBeTruthy();
+});

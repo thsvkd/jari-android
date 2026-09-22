@@ -125,6 +125,18 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     seatStrategy: conditions.seat_strategy === "1" ? "consecutive" : "random",
     seatPreference: conditions.seat_preference,
     selectedTrains: trains,
+    // What the real server reads back from the worker's plan: seats picked on the first train, the rest taken whole.
+    seatPlan: trains.length
+      ? {
+          trains: trains.map((no, index) => ({
+            trainNo: no,
+            label: trainFixtures.find((train) => train.no === no)?.label ?? no,
+            seatClass: index === 0 ? "general" : "any",
+            targets: index === 0 ? [{ carNo: 3, labels: ["5A", "5B"] }] : [],
+          })),
+        }
+      : null,
+    seatPlanSummary: trains.length ? `${trains[0]} 일반실 3호차 5A·5B${trains.slice(1).map((no) => ` · ${no} 좌석 무관`).join("")}` : "",
     startedAt: clock().toISOString(),
     lastCheckedAt: clock().toISOString(),
     health: "healthy",
