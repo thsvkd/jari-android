@@ -772,8 +772,19 @@ class MiniAppGateway:
         if beat is None:
             # Alive, but the first pass of the loop has not finished yet, or
             # this build's stamp is not there to read. Saying it is running
-            # without inventing a time it last checked.
-            return {"health": "healthy", "lastCheckedAt": None, "attemptCount": None}
+            # without inventing a time it last checked - unless it has been
+            # silent long enough that "running" would be the lie: a process
+            # blocked on one socket is alive and searches nothing.
+            silent = (
+                started is not None
+                and (utc_now() - as_utc(started)).total_seconds()
+                > settings.SEARCH_SILENT_AFTER_SECONDS
+            )
+            return {
+                "health": "stale" if silent else "healthy",
+                "lastCheckedAt": None,
+                "attemptCount": None,
+            }
 
         # A single failed request is normal and says nothing; the run of them
         # that makes the bot warn the user is the same run that makes this a

@@ -138,8 +138,9 @@ describe("honest radar state", () => {
     expect(view.lastCheckedLabel).toBeNull();
   });
 
-  it("trusts a healthy report that has no check time yet", () => {
-    const view = deriveRadarView({ running: { ...running, health: "healthy" }, connection: "online" });
+  it("trusts a healthy report that has no check time yet, while the first pass can still be running", () => {
+    const now = Date.parse(running.startedAt!) + 30_000;
+    const view = deriveRadarView({ running: { ...running, health: "healthy" }, connection: "online", now });
 
     expect(view.kind).toBe("healthy");
     expect(view.animate).toBe(true);
@@ -188,4 +189,14 @@ describe("relative check time", () => {
     expect(relativeTime("", base)).toBe("");
     expect(relativeTime("어제쯤", base)).toBe("");
   });
+});
+
+it("treats a healthy worker with no check time as stale once the first pass is overdue", () => {
+  const now = Date.parse("2026-09-22T17:00:00Z");
+  const base = { depDate: "20260924", srcLocate: "서울", dstLocate: "부산", depTime: "1300", maxDepTime: "1500", trainTypeShow: "KTX 계열만", specialInfoShow: "GENERAL_FIRST", passengerCount: 1, seatStrategy: "consecutive", seatPreference: "", selectedTrains: [], health: "healthy" as const, lastCheckedAt: null };
+  const fresh = deriveRadarView({ running: { ...base, startedAt: "2026-09-22T16:59:30Z" }, connection: "online", now });
+  const overdue = deriveRadarView({ running: { ...base, startedAt: "2026-09-22T16:50:00Z" }, connection: "online", now });
+  expect(fresh.kind).toBe("healthy");
+  expect(overdue.kind).toBe("stale");
+  expect(overdue.description).toContain("그만 찾기");
 });

@@ -239,6 +239,11 @@ class Settings:
     # it has to expire on its own; generous enough that a search backing off
     # from a run of failures still counts as having reported in.
     SEARCH_HEARTBEAT_TTL_SECONDS: int = int(os.environ.get("SEARCH_HEARTBEAT_TTL_SECONDS", "600"))
+    # Legacy korail2 requests carried no timeout at all; these bound one poll.
+    KORAIL_CONNECT_TIMEOUT: float = float(os.environ.get("KORAIL_CONNECT_TIMEOUT", "10"))
+    KORAIL_READ_TIMEOUT: float = float(os.environ.get("KORAIL_READ_TIMEOUT", "30"))
+    # A live worker that has not stamped a pass for this long is stuck, not searching.
+    SEARCH_SILENT_AFTER_SECONDS: int = int(os.environ.get("SEARCH_SILENT_AFTER_SECONDS", "180"))
 
     # Favourite searches
     #

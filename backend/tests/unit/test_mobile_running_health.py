@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import fakeredis
 from freezegun import freeze_time
@@ -210,3 +210,36 @@ def test_a_record_left_by_an_earlier_run_counts_as_gone():
     assert not service.is_search_alive(theirs)
     # The PID was never even looked at for the stale one.
     assert service._owns_process.call_count == 1
+
+
+def test_a_worker_alive_but_silent_for_minutes_is_stale_not_healthy():
+    # pit5 2026-09-22: a worker blocked on one Korail socket for half an hour
+    # was "healthy" because its process existed. A live process that has not
+    # stamped a pass since the search began is stuck, and the app must say so.
+    client = fakeredis.FakeRedis(decode_responses=True)
+    storage, gateway = _gateway(client)
+    _start_running(storage, minutes_ago=5)
+
+    running = gateway._running(-100)
+
+    assert running["health"] == "stale"
+    assert running["lastCheckedAt"] is None
+    storage.close()
+
+
+def test_the_legacy_korail_session_never_waits_forever():
+    from korail_bot.services.korail_service import KorailService
+
+    service = KorailService()
+    client = service._build_client("010-0000-0000", "pw")
+    seen = {}
+
+    def fake_request(self, method, url, **kwargs):
+        seen.update(kwargs)
+        return MagicMock()
+
+    with patch("requests.Session.request", fake_request):
+        client._session.get("https://smart.letskorail.com/x")
+        assert seen["timeout"] == (settings.KORAIL_CONNECT_TIMEOUT, settings.KORAIL_READ_TIMEOUT)
+        client._session.get("https://smart.letskorail.com/x", timeout=3)
+        assert seen["timeout"] == 3

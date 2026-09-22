@@ -185,6 +185,20 @@ export function deriveRadarView(input: {
     };
   }
   // 서버가 상태를 "정상"이라고 말했으면 조회 시각이 아직 없어도 정상으로 봐요. 시각은 그 뒤에 따라와요.
+  // "Healthy" with no check time is only believable while the first pass can still be under way. A worker that has
+  // been up for minutes and never stamped a check is stuck on a socket, not searching (pit5, 2026-09-22).
+  const startedAt = running.startedAt ? Date.parse(running.startedAt) : Number.NaN;
+  const silent = !Number.isFinite(checkedAt) && Number.isFinite(startedAt) && now - startedAt > STALE_AFTER_MS;
+  if ((running.health === "healthy" || running.health === "running") && silent) {
+    return {
+      kind: "stale",
+      animate: false,
+      eyebrow: "확인 지연",
+      title: "한동안 확인이 안 됐어요",
+      description: "자리 찾기가 멈춘 것 같아요. 그만 찾기 후 다시 시작해 주세요.",
+      lastCheckedLabel: null,
+    };
+  }
   if (running.health === "healthy" || running.health === "running") {
     return {
       kind: "healthy",

@@ -149,6 +149,21 @@ def location_seat_att_cd(preference: SeatPreference | None) -> str:
     return "000"
 
 
+class _TimedSession(requests.Session):
+    """
+    korail2 never passes a timeout, so a search loop that hits a Korail
+    server that stops answering hangs forever on one socket while looking
+    perfectly alive. pit5 2026-09-22: a worker sat 30 minutes in recv() after
+    a failed reserve. Every request gets a timeout unless the caller set one.
+    """
+
+    def request(self, method, url, **kwargs):
+        kwargs.setdefault(
+            "timeout", (settings.KORAIL_CONNECT_TIMEOUT, settings.KORAIL_READ_TIMEOUT)
+        )
+        return super().request(method, url, **kwargs)
+
+
 @contextmanager
 def _ticket_reservation_seat_att(session, att_cd: str):
     """
@@ -248,7 +263,7 @@ class KorailService(RailService):
         client = K2MKorail(username, password, auto_login=False)
 
         user_agent = client._session.headers.get("User-Agent")
-        client._session = requests.Session()
+        client._session = _TimedSession()
         if user_agent:
             client._session.headers.update({"User-Agent": user_agent})
 
