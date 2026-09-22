@@ -56,6 +56,7 @@ interface AppOptions {
   onLogout?: () => Promise<void>;
   onBootstrap?: (state: BootstrapState) => Promise<void> | void;
   onRequestPush?: () => Promise<void>;
+  onTheme?: (theme: "light" | "dark") => Promise<void> | void;
 }
 
 interface SeatDialogState {
@@ -73,10 +74,18 @@ interface SeatDialogState {
   error: string;
   bulkApplying: boolean;
   trimCars: number;
+  // Set by "모든 호차에 적용": from then on a condition change re-picks every kept car from the cached inventories,
+  // instead of only the car on screen and leaving the others - and the count on the confirm button - as they were.
+  appliedToAll: boolean;
 }
 
 // Leave at least one car in the middle: a 3-car train allows 1, a 2-car train 0.
 const maxTrimCars = (cars: number): number => Math.max(0, Math.floor((cars - 1) / 2));
+// The cars "호차 앞뒤 제외" keeps: the formation minus that many cars at each end.
+const keptCarNos = (dialog: SeatDialogState): Set<number> => {
+  const ordered = [...dialog.cars].sort((a, b) => a.carNo - b.carNo);
+  return new Set(ordered.slice(dialog.trimCars, ordered.length - dialog.trimCars).map((car) => car.carNo));
+};
 
 const SEAT_OPTIONS: Record<string, string> = {
   "1": "일반실 우선",
@@ -353,6 +362,7 @@ export class JariApp {
         if (field instanceof HTMLInputElement) field.checked = old.checked;
       }
     };
+    if (document.documentElement.dataset.theme !== this.theme) void this.options.onTheme?.(this.theme);
     document.documentElement.dataset.theme = this.theme;
     document.documentElement.style.colorScheme = this.theme;
     if (this.view === "auth") {
@@ -588,9 +598,12 @@ export class JariApp {
       selectedKeys.add(`${seat.carNo}:${seat.seatNo}`);
     }
     const locked = dialog.bulkApplying;
+    // The cars "호차 앞뒤 제외" will leave out, shown as such the moment the count changes rather than only after "모든 호차에 적용".
+    const kept = keptCarNos(dialog);
     const cars = dialog.cars.map((car) => {
       const count = selectedByCar.get(car.carNo) ?? 0;
-      return `<button type="button" class="car-tab ${dialog.carNo === car.carNo ? "selected" : ""}" data-seat-car="${escapeHtml(car.carNo)}" ${locked ? "disabled" : ""}><b>${escapeHtml(car.carNo)}호차</b><small>${dialog.layoutReference ? "좌석표" : `${escapeHtml(car.remainingSeatCount)}석 가능`}</small>${count ? `<em>${escapeHtml(count)}</em>` : ""}</button>`;
+      const trimmed = !kept.has(car.carNo);
+      return `<button type="button" class="car-tab ${dialog.carNo === car.carNo ? "selected" : ""} ${count ? "picked" : ""} ${trimmed ? "trimmed" : ""}" data-seat-car="${escapeHtml(car.carNo)}" ${locked ? "disabled" : ""}><b>${escapeHtml(car.carNo)}호차</b><small>${trimmed ? "제외" : dialog.layoutReference ? "좌석표" : `${escapeHtml(car.remainingSeatCount)}석 가능`}</small>${count ? `<em>${escapeHtml(count)}</em>` : ""}</button>`;
     }).join("");
     const selectable = (seat: SeatMapSeat) => this.seatSelectable(dialog, seat);
     const layout = dialog.inventory ? groupSeatsByLayout(dialog.inventory.seats) : [];
@@ -649,18 +662,23 @@ export class JariApp {
       `<button type="button" class="seat-chip ${on ? "selected" : ""}" data-seat-filter="${escapeHtml(action)}" aria-pressed="${on}" ${locked ? "disabled" : ""}>${escapeHtml(label)}</button>`;
     const allOn = (columns: string[]) => columns.length > 0 && columns.every((column) => filter.columns.includes(column));
     const columnChips = numericLabels ? "" : sets.columns.map((column) => chip(`col:${column}`, column, filter.columns.includes(column))).join("");
-    const trimLabel = filter.trimRows ? `${filter.trimRows}줄 제외` : "제외 안 함";
+    const trimLabel = filter.trimRows ? `${filter.trimRows}줄` : "없음";
     const family = seats.some((seat) => seat.familyLabel)
       ? `<button type="button" role="switch" class="seat-switch" data-seat-filter="family" aria-checked="${filter.excludeFamily}" ${locked ? "disabled" : ""}><span aria-hidden="true"></span>가족석 제외</button>`
       : "";
-    const carTrimLabel = dialog.trimCars ? `앞뒤 ${dialog.trimCars}개 제외` : "제외 안 함";
-    const applyAll = dialog.mode === "wait" && dialog.cars.length > 1
-      ? `<div class="seat-filter-row"><span>호차</span><div class="seat-stepper"><button type="button" data-seat-filter="cars:-" aria-label="앞뒤 제외 호차 수 줄이기" ${dialog.trimCars <= 0 || locked ? "disabled" : ""}>−</button><output>${carTrimLabel}</output><button type="button" data-seat-filter="cars:+" aria-label="앞뒤 제외 호차 수 늘리기" ${dialog.trimCars >= maxTrimCars(dialog.cars.length) || locked ? "disabled" : ""}>+</button></div></div>
-      <button type="button" class="button ghost seat-apply-all" data-action="apply-all-cars" ${locked ? "disabled" : ""}>${locked ? "모든 호차 확인 중…" : "모든 호차에 적용"}</button>`
+    // Both steppers on one row, each captioned underneath, so "좌석 앞뒤 제외 1줄" and "호차 앞뒤 제외 1개" read the same way.
+    const stepper = (key: string, caption: string, value: string, atMin: boolean, atMax: boolean) =>
+      `<div class="seat-stepper-block"><div class="seat-stepper"><button type="button" data-seat-filter="${key}:-" aria-label="${caption} 줄이기" ${atMin || locked ? "disabled" : ""}>−</button><output>${value}</output><button type="button" data-seat-filter="${key}:+" aria-label="${caption} 늘리기" ${atMax || locked ? "disabled" : ""}>+</button></div><small>${caption}</small></div>`;
+    const multiCar = dialog.mode === "wait" && dialog.cars.length > 1;
+    const carStepper = multiCar
+      ? stepper("cars", "호차 앞뒤 제외", dialog.trimCars ? `${dialog.trimCars}개` : "없음", dialog.trimCars <= 0, dialog.trimCars >= maxTrimCars(dialog.cars.length))
+      : "";
+    const applyAll = multiCar
+      ? `<button type="button" class="button ghost seat-apply-all" data-action="apply-all-cars" ${locked ? "disabled" : ""}>${locked ? "모든 호차 확인 중…" : "모든 호차에 적용"}</button>`
       : "";
     return `<div class="seat-filter">
       <div class="seat-filter-row"><span>열</span><div class="seat-chips">${columnChips}<i aria-hidden="true"></i>${chip("pair:window", "창가", allOn(sets.window))}${sets.aisle.length ? chip("pair:aisle", "복도", allOn(sets.aisle)) : ""}</div></div>
-      <div class="seat-filter-row"><span>앞뒤</span><div class="seat-stepper"><button type="button" data-seat-filter="trim:-" aria-label="앞뒤 제외 줄 수 줄이기" ${filter.trimRows <= 0 || locked ? "disabled" : ""}>−</button><output>${trimLabel}</output><button type="button" data-seat-filter="trim:+" aria-label="앞뒤 제외 줄 수 늘리기" ${filter.trimRows >= maxTrimRows(seats) || locked ? "disabled" : ""}>+</button></div>${family}</div>
+      <div class="seat-filter-row seat-steppers">${stepper("trim", "좌석 앞뒤 제외", trimLabel, filter.trimRows <= 0, filter.trimRows >= maxTrimRows(seats))}${carStepper}${family}</div>
       ${applyAll}
     </div>`;
   }
@@ -670,7 +688,7 @@ export class JariApp {
     if (!train || !trainKey) return;
     const dialog: SeatDialogState = {
       train, seatClass, mode, cars: [], inventory: null, inventories: new Map(), carNo: null,
-      selected: [], filter: emptySeatFilter(), layoutReference: false, loading: true, error: "", bulkApplying: false, trimCars: 0,
+      selected: [], filter: emptySeatFilter(), layoutReference: false, loading: true, error: "", bulkApplying: false, trimCars: 0, appliedToAll: false,
     };
     this.seatDialog = dialog;
     this.render();
@@ -686,6 +704,7 @@ export class JariApp {
     dialog.inventories = new Map();
     dialog.carNo = null;
     dialog.filter = emptySeatFilter();
+    dialog.appliedToAll = false;
     this.refreshSeatDialog();
     try {
       const trainKey = dialog.train.trainKey!;
@@ -745,7 +764,8 @@ export class JariApp {
     const generation = this.generation;
     dialog.carNo = carNo;
     // Conditions describe the car they were applied to; chips left on over another car would read as applied when they are not.
-    dialog.filter = emptySeatFilter();
+    // After "모든 호차에 적용" they describe every car, so they stay on.
+    if (!dialog.appliedToAll) dialog.filter = emptySeatFilter();
     dialog.error = "";
     const cached = dialog.inventories.get(carNo);
     if (cached) {
@@ -807,14 +827,16 @@ export class JariApp {
       } catch (error) {
         // The request itself failed (429 included): leave the selection untouched and just report it.
         if (stale()) return;
-        dialog.error = error instanceof ApiError ? error.message : "모든 호차 좌석표를 불러오지 못했어요. 다시 시도해 주세요.";
+        // 410 is the train key outliving the sheet; "다시 조회" alone read as "tap again", which cannot help.
+        dialog.error = error instanceof ApiError && error.status === 410
+          ? "열차 정보가 만료됐어요. 좌석표를 닫고 열차를 다시 조회한 뒤 골라 주세요."
+          : error instanceof ApiError ? error.message : "모든 호차 좌석표를 불러오지 못했어요. 다시 시도해 주세요.";
         return;
       }
       if (stale()) return;
       const returnedCarNos = new Set(result.inventories.map((inventory) => inventory.carNo));
       // The cars at each end the user asked to leave out; the car on screen is never left out.
-      const ordered = [...dialog.cars].sort((a, b) => a.carNo - b.carNo);
-      const kept = new Set(ordered.slice(dialog.trimCars, ordered.length - dialog.trimCars).map((car) => car.carNo));
+      const kept = keptCarNos(dialog);
       // A car missing from both the response and failedCars is still a car we couldn't apply to; count it as failed too.
       const failedCars = [...new Set([
         ...result.failedCars.filter((carNo) => kept.has(carNo)),
@@ -832,6 +854,7 @@ export class JariApp {
       }
       dialog.layoutReference ||= result.layoutReference;
       dialog.selected = nextSelected;
+      dialog.appliedToAll = true;
       dialog.error = failedCars.length ? `${failedCars.join("·")}호차 좌석표를 불러오지 못해 빼고 적용했어요.` : "";
     } finally {
       if (!stale()) {
@@ -874,6 +897,7 @@ export class JariApp {
     if (kind === "clear") {
       dialog.filter = emptySeatFilter();
       dialog.selected = [];
+      dialog.appliedToAll = false;
       this.refreshSeatDialog(true);
       return;
     }
@@ -899,10 +923,16 @@ export class JariApp {
     // The conditions pick seats in the car on screen; seats already chosen in other cars stay chosen.
     // Turning the last condition off clears the car rather than selecting every seat in it.
     const empty = !filter.columns.length && !filter.trimRows && !filter.excludeFamily;
-    const matched = empty ? [] : filterSeats(inventory.seats, filter);
-    dialog.selected = dialog.mode === "immediate"
-      ? matched.filter((seat) => seat.salePossible).slice(0, this.draft.passengerCount)
-      : [...dialog.selected.filter((seat) => seat.carNo !== inventory.carNo), ...matched];
+    const perCar = (seats: SeatMapSeat[]) => empty ? [] : filterSeats(seats, { ...filter, trimRows: Math.min(filter.trimRows, maxTrimRows(seats)) });
+    if (dialog.mode === "immediate") {
+      dialog.selected = perCar(inventory.seats).filter((seat) => seat.salePossible).slice(0, this.draft.passengerCount);
+    } else if (dialog.appliedToAll) {
+      // Every kept car follows the new condition, from the inventories the bulk apply cached; no request needed.
+      const kept = keptCarNos(dialog);
+      dialog.selected = [...dialog.inventories.values()].filter((cached) => kept.has(cached.carNo)).flatMap((cached) => perCar(cached.seats));
+    } else {
+      dialog.selected = [...dialog.selected.filter((seat) => seat.carNo !== inventory.carNo), ...perCar(inventory.seats)];
+    }
     this.refreshSeatDialog(true);
   }
 

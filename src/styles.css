@@ -237,10 +237,11 @@ small { color: var(--muted); }
 .train-actions .button { min-height: 46px; padding: 10px; font-size: 13px; }
 .train-actions .button + .button { margin-top: 0; }
 .train-actions .text-button { grid-column: 1 / -1; min-height: 44px; }
-.seat-action { border: 1px solid transparent; background: var(--accent-soft); color: var(--accent-ink); }
+.seat-action { position: relative; border: 1px solid transparent; background: var(--accent-soft); color: var(--accent-ink); }
 .seat-action:hover { background: color-mix(in srgb, var(--accent-soft) 76%, var(--accent)); }
 .seat-action.selected { background: var(--accent); color: #fff; box-shadow: 0 7px 18px color-mix(in srgb, var(--accent) 24%, transparent); }
-.seat-action em { display: inline-flex; margin-left: 5px; padding: 4px 7px; border-radius: 999px; background: var(--success-soft); color: var(--success); font-size: 10px; font-style: normal; font-weight: 800; white-space: nowrap; }
+/* A corner badge that hangs off the button's top-right, the way the car-tab count does, so the label never wraps the button text. */
+.seat-action em { position: absolute; top: -9px; right: -4px; display: inline-flex; padding: 3px 7px; border-radius: 999px; border: 1.5px solid var(--surface); background: var(--success-soft); color: var(--success); font-size: 10px; font-style: normal; font-weight: 800; line-height: 1.2; white-space: nowrap; }
 .sticky-action { position: sticky; bottom: calc(82px + env(safe-area-inset-bottom)); z-index: 5; }
 
 .grade-picker { display: grid; gap: 9px; margin: 0; padding: 0; border: 0; }
@@ -268,7 +269,11 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .car-tab { position: relative; min-width: 84px; min-height: 52px; display: grid; place-items: center; gap: 2px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
 .car-tab b { font-size: 14px; }
 .car-tab small { font-size: 11px; }
-.car-tab.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+/* A car holding picked seats looks like a selected column chip; the car on screen is told apart by a heavier outline. */
+.car-tab.picked { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+.car-tab.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-ink); }
+.car-tab.trimmed { opacity: .38; border-style: dashed; }
+.car-tab.trimmed b { text-decoration: line-through; }
 .car-tab em { position: absolute; top: -6px; right: -6px; display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; background: var(--accent-strong); color: #fff; font-size: 10px; font-style: normal; font-weight: 800; }
 .seat-filter { display: grid; gap: 8px; padding: 10px; border-radius: 14px; background: var(--bg); }
 .seat-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
@@ -280,6 +285,10 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .seat-stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); overflow: hidden; }
 .seat-stepper button { width: 40px; height: 40px; padding: 0; background: transparent; color: var(--accent-ink); font-size: 18px; }
 .seat-stepper output { min-width: 66px; text-align: center; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.seat-steppers { align-items: flex-start; }
+.seat-stepper-block { display: grid; justify-items: center; gap: 3px; }
+.seat-stepper-block > small { color: var(--muted); font-size: 11px; font-weight: 700; }
+.seat-steppers .seat-switch { min-height: 40px; }
 .seat-switch { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0; background: transparent; font-size: 13px; font-weight: 700; }
 .seat-switch > span { position: relative; width: 36px; height: 22px; border-radius: 11px; background: var(--line); transition: background .15s; }
 .seat-switch > span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px rgb(0 0 0 / 22%); transition: transform .15s; }

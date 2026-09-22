@@ -804,6 +804,34 @@ it("applies the current filter to every other car with a single batch request", 
   expect(seatInventory).toHaveBeenCalledTimes(1);
 });
 
+it("re-picks every car when the condition changes after a bulk apply", async () => {
+  const seatInventories = vi.fn(async () => ({
+    inventories: [3, 4, 5].map((carNo) => makeCarInventory(carNo)),
+    failedCars: [] as number[],
+    layoutReference: false,
+  }));
+  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory: seatInventoryFake, seatInventories });
+  await openThreeCarWaitDialog(root, app);
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='apply-all-cars']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-action='confirm-seat-dialog']")!.textContent).toBe("6석 범위로 취소표 대기"));
+
+  // Widening the condition grows every car, not only the one on screen - and without another request.
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='col:B']")!.click();
+  expect(root.querySelector("[data-action='confirm-seat-dialog']")!.textContent).toBe("12석 범위로 취소표 대기");
+  expect(root.querySelector("[data-seat-car='5'] em")?.textContent).toBe("4");
+  // Leaving out a car at each end drops its seats at once.
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='cars:+']")!.click();
+  expect(root.querySelector("[data-action='confirm-seat-dialog']")!.textContent).toBe("4석 범위로 취소표 대기");
+  expect(seatInventories).toHaveBeenCalledTimes(1);
+
+  // The condition now belongs to every car, so moving to another car keeps its chips on.
+  root.querySelector<HTMLButtonElement>("[data-seat-car='4']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-car='4']")!.classList.contains("selected")).toBe(true));
+  expect(root.querySelector("[data-seat-filter='col:A']")!.getAttribute("aria-pressed")).toBe("true");
+  expect(root.querySelector("[data-seat-filter='col:B']")!.getAttribute("aria-pressed")).toBe("true");
+});
+
 it("matches by seat label across cars when no filter is set", async () => {
   const seatInventories = vi.fn(async () => ({
     inventories: [3, 4, 5].map((carNo) => makeCarInventory(carNo)),
@@ -1111,7 +1139,9 @@ it("leaves the cars at each end out of a bulk apply when asked", async () => {
 
   root.querySelector<HTMLButtonElement>("[data-seat-filter='cars:+']")!.click();
   expect(root.querySelector("[data-seat-filter='cars:+']")!.hasAttribute("disabled")).toBe(true); // 3 cars allow at most 1
-  expect(root.textContent).toContain("앞뒤 1개 제외");
+  expect(root.querySelector("[data-seat-filter='cars:+']")!.parentElement!.querySelector("output")!.textContent).toBe("1개");
+  // The cars that count leaves out are marked at once, not only after "모든 호차에 적용".
+  expect([...root.querySelectorAll(".car-tab.trimmed b")].map((tab) => tab.textContent)).toEqual(["3호차", "5호차"]);
   root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
   root.querySelector<HTMLButtonElement>("[data-action='apply-all-cars']")!.click();
 

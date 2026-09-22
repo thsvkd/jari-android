@@ -6,6 +6,7 @@ import { ApiError, createHttpApi, createSessionStorage, resolveApiBase } from ".
 import { JariApp } from "./app";
 import { createDemoApi } from "./demo";
 import {
+  applyStatusBarStyle,
   clearToken,
   initializePlatform,
   readToken,
@@ -61,6 +62,7 @@ async function launch(): Promise<void> {
       onRequestPush: async () => {
         await initialize(true);
       },
+      onTheme: applyStatusBarStyle,
     });
 
     const authenticated = demoMode || Boolean(await session.read());

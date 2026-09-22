@@ -80,6 +80,19 @@ export async function clearToken(): Promise<void> {
   }
 }
 
+// The app's theme is its own toggle, not the system's, so the status bar icons follow it here:
+// left to the OS they stay light and vanish against the light header. Edge-to-edge on Android 15
+// ignores background colours, so only the icon style is set.
+export async function applyStatusBarStyle(theme: "light" | "dark"): Promise<void> {
+  if (!isNative()) return;
+  try {
+    const { StatusBar, Style } = await import("@capacitor/status-bar");
+    await StatusBar.setStyle({ style: theme === "dark" ? Style.Dark : Style.Light });
+  } catch {
+    // Cosmetic; a missing plugin must not take the app down.
+  }
+}
+
 export async function disposePlatform(): Promise<void> {
   await removeBackListener?.();
   removeBackListener = undefined;
