@@ -9,6 +9,7 @@ import {
   normalizeCapabilities,
   type BookingDraft,
   type ConnectionState,
+  type RadarKind,
 } from "./model";
 import {
   consecutiveGroups,
@@ -490,22 +491,27 @@ export class JariApp {
           ? { kind: "scheduled", title: "예약한 시각에 검색을 시작해요", description: `${formatStamp(state.scheduled.startAt)} 시작 예정` }
           : radar
       : radar;
-    // A healthy search says all it needs to in its title and route; the sentence and the last-check time belong in 검색 상세, not here.
-    const quiet = status.kind === "healthy";
+    // 찾는 중인 검색은 배지·구간·조건 한 줄이면 충분해요. 설명과 마지막 조회 시각은 검색 상세의 몫이에요.
+    const busy = Boolean(state.running || state.scheduled || state.pending.length);
     const statusCard = status.kind === "idle"
       ? this.renderIdleCard()
-      : `<section class="card search-status-card" data-search-status data-state="${status.kind}" aria-label="검색 상태 요약">
+      : (status.kind === "healthy" || status.kind === "running-unverified") && journey
+        ? this.renderRunningCard(status.kind, journey)
+        : `<section class="card search-status-card" data-search-status data-state="${status.kind}" aria-label="검색 상태 요약">
         <div class="search-status-title"><span class="search-status-icon">${status.kind === "reserved" ? "예약" : ["error", "stale", "offline"].includes(status.kind) ? "확인" : "대기"}</span><h2>${escapeHtml(status.title)}</h2></div>
         ${route}
         ${journey ? `<p class="search-conditions">${escapeHtml(journey.trainTypeShow)} · ${escapeHtml(seatLabels[journey.specialInfoShow] ?? journey.specialInfoShow)} · ${journey.passengerCount}명</p>` : ""}
-        ${quiet ? '<div class="card-action-row"><button class="text-button danger" data-action="stop-search">그만 찾기</button></div>' : `<p class="search-status-description">${escapeHtml(status.description)}</p>`}
-        ${!paymentFirst && !quiet && state.running && radar.lastCheckedLabel ? `<p class="search-last-check">마지막 조회 ${escapeHtml(radar.lastCheckedLabel)}</p>` : ""}
-        ${state.running || state.scheduled || state.pending.length ? `<button class="button secondary" data-view="activity">${paymentFirst ? "예약 확인하기" : "검색 상세 보기"}<span>→</span></button>` : ""}
+        ${status.kind === "reserved" || status.kind === "scheduled" ? `<p class="search-status-description">${escapeHtml(status.description)}</p>` : ""}
+        ${!paymentFirst && state.running && radar.lastCheckedLabel ? `<p class="search-last-check">마지막 조회 ${escapeHtml(radar.lastCheckedLabel)}</p>` : ""}
+        ${busy ? `<button class="button secondary" data-view="activity">${paymentFirst ? "예약 확인하기" : "검색 상세 보기"}<span>→</span></button>` : ""}
       </section>`;
+    // 검색이 도는 동안에도 다른 구간은 바로 다시 찾을 수 있어야 해서, 상태 카드 위에 칩만 따로 올려요.
+    const chips = busy ? this.homeChips() : [];
     return `<div class="home-layout"><div class="home-primary">
       <section class="status-heading">
         <div><p class="eyebrow">검색 현황</p><h1>내 검색 현황</h1></div>
       </section>
+      ${chips.length ? `<section class="chip-shelf">${this.renderChipShelf(chips)}</section>` : ""}
       ${statusCard}
       ${this.renderPendingCard(true)}
       ${state.scheduled ? this.renderScheduledCard() : ""}
@@ -542,12 +548,27 @@ export class JariApp {
     return chips;
   }
 
+  // 찾는 중 카드: 배지·구간·조건 한 줄과 두 개의 글자 버튼만. 나머지는 검색 상세에서 봐요.
+  private renderRunningCard(kind: RadarKind, journey: SearchDescription): string {
+    return `<section class="card search-status-card running-compact" data-search-status data-state="${kind}" aria-label="검색 상태 요약">
+      <p class="idle-badge"><span class="idle-dot" aria-hidden="true"></span>찾는 중</p>
+      <div class="route-title"><strong>${escapeHtml(journey.srcLocate)}</strong><span>→</span><strong>${escapeHtml(journey.dstLocate)}</strong></div>
+      <p class="route-meta">${escapeHtml(formatWindow(journey))} · ${journey.passengerCount}명</p>
+      <div class="card-action-row split"><button class="text-button" data-view="activity">검색 상세 보기 →</button><button class="text-button danger" data-action="stop-search">그만 찾기</button></div>
+    </section>`;
+  }
+
+  // 대기 중 카드 안에서도, 검색 중 상태 카드 위에서도 같은 칩 줄을 써요.
+  private renderChipShelf(chips: RouteChip[]): string {
+    return `<p class="idle-shelf-label" id="idle-shelf-label">최근 구간 바로가기</p>
+      <ul class="idle-shelf" aria-labelledby="idle-shelf-label">${chips.map((chip) => `<li><button type="button" class="idle-chip" data-route-chip="${escapeHtml(chip.key)}" aria-label="${escapeHtml(`${chip.route} ${chip.when} 구간으로 날짜 고르기`)}"><span class="idle-chip-route">${escapeHtml(chip.conditions.src_station)}<i aria-hidden="true">→</i>${escapeHtml(chip.conditions.dst_station)}</span><span class="idle-chip-when">${escapeHtml(chip.when)}</span></button></li>`).join("")}</ul>`;
+  }
+
   private renderIdleCard(): string {
     const chips = this.homeChips();
     const steps = ["여정 정하기", "지켜보기", "알림 받기"];
     const shelf = chips.length
-      ? `<p class="idle-shelf-label" id="idle-shelf-label">최근 구간 바로가기</p>
-        <ul class="idle-shelf" aria-labelledby="idle-shelf-label">${chips.map((chip) => `<li><button type="button" class="idle-chip" data-route-chip="${escapeHtml(chip.key)}" aria-label="${escapeHtml(`${chip.route} ${chip.when} 구간으로 날짜 고르기`)}"><span class="idle-chip-route">${escapeHtml(chip.conditions.src_station)}<i aria-hidden="true">→</i>${escapeHtml(chip.conditions.dst_station)}</span><span class="idle-chip-when">${escapeHtml(chip.when)}</span></button></li>`).join("")}</ul>`
+      ? this.renderChipShelf(chips)
       : `<ol class="idle-steps">${steps.map((label, index) => `<li ${index ? "" : 'aria-current="step"'}><span class="idle-step-num">${index + 1}</span><span class="idle-step-label">${label}</span></li>`).join("")}</ol>`;
     return `<section class="card search-status-card" data-search-status data-state="idle" aria-label="검색 상태 요약">
       <p class="idle-badge"><span class="idle-dot" aria-hidden="true"></span>대기 중</p>

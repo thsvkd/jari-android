@@ -150,6 +150,16 @@ small { color: var(--muted); }
 
 /* 홈의 "그만 찾기"처럼 카드 안에서 오른쪽에 붙는 글자 버튼. */
 .card-action-row { display: flex; justify-content: flex-end; margin-top: 6px; }
+.card-action-row.split { justify-content: space-between; margin-top: 0; }
+
+/* 찾는 중 홈 카드: 배지·구간·조건 한 줄·바로가기만 남겨 한 화면에서 자리를 적게 써요. */
+.search-status-card.running-compact { margin: 16px 0 20px; padding: 14px 18px 4px; }
+.running-compact .route-title { margin-top: 8px; }
+.running-compact .route-title strong { font-size: 20px; }
+.running-compact .route-meta { margin-top: 3px; line-height: 1.5; }
+/* 검색 중에는 카드 위에 칩만 따로 올려요. 칩 줄의 좌우 여백은 화면 안쪽 여백과 같아요. */
+.chip-shelf { margin: 16px 0 -2px; }
+.chip-shelf .idle-shelf-label { margin-top: 0; }
 
 .center-copy { margin-top: -2px; text-align: center; }
 .center-copy p { max-width: 310px; margin: 9px auto 0; color: var(--muted); font-size: 12px; line-height: 1.65; }

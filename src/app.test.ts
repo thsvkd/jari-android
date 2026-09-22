@@ -61,12 +61,11 @@ describe("concept C application shell", () => {
     expect(card?.textContent).not.toContain("광명");
   });
 
-  it("groups route, readable seat conditions and details navigation in the chosen status card", async () => {
+  it("groups route, window and details navigation in the chosen status card", async () => {
     const { root } = await mountLive();
     const card = root.querySelector<HTMLElement>("[data-search-status]");
     expect(card?.textContent).toContain("서울");
     expect(card?.textContent).toContain("부산");
-    expect(card?.textContent).toContain("일반실 우선");
     expect(card?.textContent).toContain("1명");
     card?.querySelector<HTMLButtonElement>("[data-view='activity']")?.click();
     expect(root.querySelector("[data-action='cancel-search']")).not.toBeNull();
@@ -115,7 +114,8 @@ describe("concept C application shell", () => {
     await app.start(true);
 
     expect(root.querySelector<HTMLElement>("[data-search-status]")?.dataset.state).toBe("running-unverified");
-    expect(root.textContent).toContain("검색은 서버에 등록돼 있어요");
+    expect(root.querySelector("[data-search-status]")?.textContent).toContain("찾는 중");
+    expect(root.textContent).not.toContain("검색은 서버에 등록돼 있어요");
     expect(root.textContent).not.toContain("방금 확인");
   });
 
@@ -434,7 +434,7 @@ describe("concept C application shell", () => {
     await app.start(true);
 
     expect(root.querySelector<HTMLElement>("[data-search-status]")?.dataset.state).toBe("running-unverified");
-    expect(root.textContent).toContain("최근 조회 상태는 알 수 없어요");
+    expect(root.textContent).not.toContain("최근 조회 상태는 알 수 없어요");
   });
 
   it("matches the server app-account credential bounds", async () => {
@@ -1160,20 +1160,42 @@ it("reaches the confirm screen from the train list by clicks alone and saves a f
   await vi.waitFor(() => expect(saveFavourite).toHaveBeenCalledOnce());
 });
 
-it("keeps the running home card to its title and route, and offers 그만 찾기 there", async () => {
+it("keeps the running home card to a badge, the route and its two shortcuts", async () => {
   const cancelSearch = vi.fn(async () => ({ stopped: true, unscheduled: false }));
   const { root } = await mountLive({ cancelSearch });
   const card = root.querySelector<HTMLElement>("[data-search-status]")!;
 
   expect(card.dataset.state).toBe("healthy");
-  expect(card.textContent).toContain("빈자리를 찾고 있어요");
+  expect(card.textContent).toContain("찾는 중");
+  expect(card.textContent).toContain("1명");
+  expect(card.textContent).toContain("검색 상세 보기");
+  expect(card.textContent).toContain("그만 찾기");
+  expect(card.textContent).not.toContain("빈자리를 찾고 있어요");
   expect(card.textContent).not.toContain("앱을 닫아도 서버에서 계속 검색해요.");
-  expect(card.querySelector(".search-last-check")).toBeNull();
+  expect(card.textContent).not.toContain("마지막 조회");
+  expect(card.querySelector(".search-last-check, .search-status-description")).toBeNull();
 
   card.querySelector<HTMLButtonElement>("[data-action='stop-search']")!.click();
   expect(root.querySelector(".action-sheet")?.textContent).toContain("자리 찾기를 그만할까요?");
   root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
   await vi.waitFor(() => expect(cancelSearch).toHaveBeenCalledOnce());
+});
+
+it("shelves the route chips above the running status card, and drops the shelf when there is none", async () => {
+  const { root } = await mountLive();
+  const shelf = root.querySelector<HTMLElement>(".chip-shelf")!;
+
+  expect(shelf.textContent).toContain("최근 구간 바로가기");
+  expect([...shelf.querySelectorAll<HTMLButtonElement>(".idle-chip")].map((chip) => chip.dataset.routeChip)).toEqual(["recent", "demo-home"]);
+  expect(shelf.compareDocumentPosition(root.querySelector("[data-search-status]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.draft = null;
+  state.favourites = [];
+  const bare = await mountLive({ bootstrap: async () => state });
+  expect(bare.root.querySelector(".chip-shelf")).toBeNull();
+  expect(bare.root.querySelector("[data-search-status]")?.textContent).toContain("찾는 중");
 });
 
 it("replaces the running notice in 검색 상세 with the check count, keeping the timestamp", async () => {
