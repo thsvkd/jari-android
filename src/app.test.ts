@@ -298,7 +298,7 @@ describe("concept C application shell", () => {
     root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
     await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
     expect(root.querySelector("[data-train-no='015'][data-seat-class='general'] em")?.textContent).toBe("선택 완료 · 1석");
-    expect(root.querySelector("[data-action='start-cancellation-wait']")).not.toBeNull();
+    expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("1편 선택");
   });
 
   it("drops a restored cancellation-wait target once a re-search no longer lists its train", async () => {
@@ -328,14 +328,14 @@ describe("concept C application shell", () => {
     app.navigate("journey");
     root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
     await vi.waitFor(() => expect(root.querySelector("[data-train-no='015']")).not.toBeNull());
-    expect(root.querySelector("[data-action='start-cancellation-wait']")).not.toBeNull();
+    expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("1편 선택");
 
     // A different route/date drops 015 from the results, so the stale target (and its start button) must go too.
     app.navigate("journey");
     root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
     await vi.waitFor(() => expect(root.querySelector("[data-train-no='019']")).not.toBeNull());
     expect(root.querySelector("[data-train-no='015']")).toBeNull();
-    expect(root.querySelector("[data-action='start-cancellation-wait']")).toBeNull();
+    expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("시간대 전체");
   });
 
   it("fills in v/action when a restored server draft predates those fields", async () => {
@@ -356,8 +356,9 @@ describe("concept C application shell", () => {
 
     app.navigate("journey");
     root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
-    await vi.waitFor(() => expect(root.querySelector("[data-action='start-cancellation-wait']")).not.toBeNull());
-    root.querySelector<HTMLButtonElement>("[data-action='start-cancellation-wait']")!.click();
+    await vi.waitFor(() => expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("1편 선택"));
+    root.querySelector<HTMLButtonElement>("[data-action='trains-next']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-action='start-now']")!.click();
 
     await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
     expect(search.mock.calls[0]![0].conditions).toMatchObject({ v: 1, action: "prepare_search" });
@@ -729,7 +730,8 @@ it("starts cancellation waiting with the selected physical-seat range", async ()
   }
   expect(root.querySelector("[data-seat-filter='pair:window']")!.getAttribute("aria-pressed")).toBe("true");
   root.querySelector<HTMLButtonElement>("[data-action='confirm-seat-dialog']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='start-cancellation-wait']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='trains-next']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='start-now']")!.click();
 
   await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
   expect(search.mock.calls[0]![0]).toMatchObject({
@@ -830,6 +832,30 @@ it("re-picks every car when the condition changes after a bulk apply", async () 
   await vi.waitFor(() => expect(root.querySelector("[data-seat-car='4']")!.classList.contains("selected")).toBe(true));
   expect(root.querySelector("[data-seat-filter='col:A']")!.getAttribute("aria-pressed")).toBe("true");
   expect(root.querySelector("[data-seat-filter='col:B']")!.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("takes a train as a whole when its card is pressed, and searches it without a seat plan", async () => {
+  const search = vi.fn().mockResolvedValue({ started: true, running: null });
+  const { app, root } = await mountLive({ search });
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-toggle='015']")).not.toBeNull());
+
+  root.querySelector<HTMLButtonElement>("[data-train-toggle='015']")!.click();
+  expect(root.querySelector("[data-train-toggle='015']")!.closest(".train-card")!.classList.contains("selected")).toBe(true);
+  expect(root.querySelector("[data-train-toggle='015']")!.getAttribute("aria-pressed")).toBe("true");
+  expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("1편 선택");
+  // Pressing again lets it go.
+  root.querySelector<HTMLButtonElement>("[data-train-toggle='015']")!.click();
+  expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("시간대 전체");
+  root.querySelector<HTMLButtonElement>("[data-train-toggle='015']")!.click();
+
+  root.querySelector<HTMLButtonElement>("[data-action='trains-next']")!.click();
+  expect(root.textContent).toContain("1편 선택");
+  root.querySelector<HTMLButtonElement>("[data-action='start-now']")!.click();
+  await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
+  expect(search.mock.calls[0]![0]).toMatchObject({ trains: ["015"] });
+  expect(search.mock.calls[0]![0].conditions.seat_plan).toBeUndefined();
 });
 
 it("matches by seat label across cars when no filter is set", async () => {
@@ -1125,7 +1151,7 @@ it("offers the access request on the train list, where the error message points 
   root.querySelector<HTMLButtonElement>("[data-immediate-any]")!.click();
 
   await vi.waitFor(() => expect(root.querySelector("[data-action='request-access']")).not.toBeNull());
-  expect(root.querySelector("[data-action='start-cancellation-wait'], .train-list")).not.toBeNull();
+  expect(root.querySelector("[data-action='trains-next'], .train-list")).not.toBeNull();
 });
 
 it("leaves the cars at each end out of a bulk apply when asked", async () => {

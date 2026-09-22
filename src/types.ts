@@ -199,7 +199,8 @@ export interface SeatTarget {
 export interface TrainSeatTargets {
   trainNo: string;
   trainKey?: string;
-  seatClass: SeatClass;
+  // "any" only with no targets: the train was chosen as a whole, in either class.
+  seatClass: SeatClass | "any";
   targets: SeatTarget[];
 }
 

@@ -222,10 +222,10 @@ small { color: var(--muted); }
 .intro { color: var(--muted); font-size: 11px; line-height: 1.65; }
 .train-list { display: grid; gap: 9px; margin: 18px 0; }
 .train-card { min-height: 84px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 17px; background: var(--surface); text-align: left; }
-.train-card.selected { border-color: var(--accent); background: var(--surface); box-shadow: inset 4px 0 0 var(--accent); }
-.train-check { width: 21px; height: 21px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: var(--accent); font-size: 11px; }
-.train-card.selected .train-check { border-color: var(--accent); background: var(--accent); color: #fff; }
-.train-main { min-width: 0; display: grid; gap: 3px; }
+/* Chosen as a whole or with seats picked: the same look a selected column chip has. */
+.train-card.selected { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 4px 0 0 var(--accent); }
+/* The card's text is the button that takes the train as a whole; it keeps the card's typography. */
+.train-main { min-width: 0; display: grid; gap: 3px; padding: 0; background: transparent; color: inherit; text-align: left; font: inherit; }
 .train-main > small { font-size: 9px; }
 .train-main > b { font-size: 17px; white-space: nowrap; }
 .train-main b i { margin: 0 5px; color: var(--hint); font-size: 11px; font-style: normal; }
@@ -233,6 +233,7 @@ small { color: var(--muted); }
 .seat-badge { padding: 5px 7px; border-radius: 7px; font-size: 8px; font-weight: 760; }
 .seat-badge.soldout { background: var(--danger-soft); color: var(--danger); }
 .seat-badge.available { background: var(--success-soft); color: var(--success); }
+.seat-badge.chosen { background: var(--accent); color: #fff; }
 .train-actions { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .train-actions .button { min-height: 46px; padding: 10px; font-size: 13px; }
 .train-actions .button + .button { margin-top: 0; }

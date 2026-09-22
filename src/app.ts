@@ -542,33 +542,30 @@ export class JariApp {
             const configuredClasses = conditions.seat_classes?.length
               ? conditions.seat_classes
               : (["general", "special"] as SeatClass[]);
-            const classButtons = configuredClasses.map((seatClass) => {
-              const available = seatClass === "general" ? train.generalAvailable : train.specialAvailable;
+            // "좌석 지정": pick seats on the map. Pressing the card itself takes the train as a whole - any seat will do.
+            const seatButton = (seatClass: SeatClass, available: boolean | undefined) => {
               const label = seatClass === "general" ? "일반실" : "특실";
               const selectedCount = this.cancellationTargets
                 .find((target) => target.trainNo === train.no && target.seatClass === seatClass)
                 ?.targets.length ?? 0;
-              return `<button class="button seat-action ${selectedCount ? "selected" : ""}" type="button" data-seat-map="${escapeHtml(train.trainKey || "")}" data-train-no="${escapeHtml(train.no)}" data-seat-class="${seatClass}" data-seat-mode="${available ? "immediate" : "wait"}" ${train.trainKey ? "" : "disabled"}><span>${available ? `${label} 좌석 선택` : `${label} 취소표 대기`}</span>${selectedCount ? `<em>선택 완료 · ${selectedCount}석</em>` : ""}</button>`;
-            }).join("");
+              return `<button class="button seat-action ${selectedCount ? "selected" : ""}" type="button" data-seat-map="${escapeHtml(train.trainKey || "")}" data-train-no="${escapeHtml(train.no)}" data-seat-class="${seatClass}" data-seat-mode="${available ? "immediate" : "wait"}" ${train.trainKey ? "" : "disabled"}><span>${available ? `${label} 좌석 선택` : `${label} 좌석 지정`}</span>${selectedCount ? `<em>선택 완료 · ${selectedCount}석</em>` : ""}</button>`;
+            };
+            const classButtons = configuredClasses.map((seatClass) =>
+              seatButton(seatClass, seatClass === "general" ? train.generalAvailable : train.specialAvailable),
+            ).join("");
             const anyAvailable = train.generalAvailable || train.specialAvailable;
             const anyAction = this.draft.seatGradeMode === "specific"
               ? classButtons
               : anyAvailable
                 ? `<button class="button seat-action" type="button" data-immediate-any="${escapeHtml(train.no)}">바로 예약</button>`
-                : (["general", "special"] as SeatClass[]).map((seatClass) => {
-                    const label = seatClass === "general" ? "일반실" : "특실";
-                    const selectedCount = this.cancellationTargets
-                      .find((target) => target.trainNo === train.no && target.seatClass === seatClass)
-                      ?.targets.length ?? 0;
-                    return `<button class="button seat-action ${selectedCount ? "selected" : ""}" type="button" data-seat-map="${escapeHtml(train.trainKey || "")}" data-train-no="${escapeHtml(train.no)}" data-seat-class="${seatClass}" data-seat-mode="wait" ${train.trainKey ? "" : "disabled"}><span>${label} 취소표 대기</span>${selectedCount ? `<em>선택 완료 · ${selectedCount}석</em>` : ""}</button>`;
-                  }).join("");
+                : (["general", "special"] as SeatClass[]).map((seatClass) => seatButton(seatClass, false)).join("");
             const official = train.waitlistEligible
               ? `<button class="text-button" type="button" data-official-waitlist="${escapeHtml(train.no)}">코레일 예약 대기</button>`
               : "";
-            const selectedCount = this.cancellationTargets
-              .filter((target) => target.trainNo === train.no)
-              .reduce((sum, target) => sum + target.targets.length, 0);
-            return `<article class="train-card ${selectedCount ? "selected" : ""}"><span class="train-main"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b><em>${escapeHtml(train.label)}</em></span><span class="seat-badge ${anyAvailable ? "available" : "soldout"}">${anyAvailable ? "좌석 있음" : "매진"}</span><div class="train-actions">${anyAction}${official}</div></article>`;
+            const targets = this.cancellationTargets.filter((target) => target.trainNo === train.no);
+            const selectedCount = targets.reduce((sum, target) => sum + target.targets.length, 0);
+            const wholeTrain = targets.some((target) => !target.targets.length);
+            return `<article class="train-card ${targets.length ? "selected" : ""}"><button type="button" class="train-main" data-train-toggle="${escapeHtml(train.no)}" aria-pressed="${wholeTrain}"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b><em>${escapeHtml(train.label)}</em></button><span class="seat-badge ${wholeTrain ? "chosen" : anyAvailable ? "available" : "soldout"}">${wholeTrain ? "좌석 무관 선택" : selectedCount ? `${selectedCount}석 지정` : anyAvailable ? "좌석 있음" : "매진"}</span><div class="train-actions">${anyAction}${official}</div></article>`;
           })
           .join("")
       : '<div class="empty"><span>⌁</span><h2>조회된 열차가 없어요</h2><p>시간이나 구간을 바꿔 다시 조회해 주세요.</p></div>';
@@ -579,8 +576,7 @@ export class JariApp {
       <div class="train-list">${list}</div>
       ${this.renderError()}
       ${this.renderAccessRequest()}
-      ${this.cancellationTargets.length ? `<button class="button primary sticky-action" data-action="start-cancellation-wait">취소표 대기 시작 <span>→</span></button>` : ""}
-      <button class="button secondary" data-action="trains-next">시간대 전체 검색 · 조건 확인 <span>→</span></button>`;
+      <button class="button primary sticky-action" data-action="trains-next">${this.cancellationTargets.length ? `${new Set(this.cancellationTargets.map((target) => target.trainNo)).size}편 선택 · 조건 확인` : "시간대 전체 · 조건 확인"} <span>→</span></button>`;
   }
 
   private renderSeatDialog(): string {
@@ -999,7 +995,9 @@ export class JariApp {
       this.refreshSeatDialog(true);
       return;
     }
-    const next = this.cancellationTargets.filter((target) => !(target.trainNo === dialog.train.no && target.seatClass === dialog.seatClass));
+    // Picked seats replace this class's earlier picks and any whole-train pick of the same train.
+    const next = this.cancellationTargets.filter((target) =>
+      !(target.trainNo === dialog.train.no && (target.seatClass === dialog.seatClass || !target.targets.length)));
     // Only the fields the server reads; a full SeatMapSeat per seat bloats large multi-car plans.
     const targets: SeatTarget[] = dialog.selected.map(({ carNo, seatNo, label, row, column, direction, floor, adjacencyGroup, position, rowPosition }) => (
       { carNo, seatNo, label, row, column, direction, floor, adjacencyGroup, position, rowPosition }
@@ -1012,19 +1010,47 @@ export class JariApp {
     this.render();
   }
 
-  private async startCancellationWait(): Promise<void> {
+  // " (1편 좌석 지정 · 2편 좌석 무관)" after the train count, or nothing when every train is one kind.
+  private describePlannedTrains(plan: CancellationWaitPlan | undefined): string {
+    if (!plan) return "";
+    const planned = new Set(plan.trains.filter((train) => train.targets.length).map((train) => train.trainNo)).size;
+    const whole = new Set(plan.trains.filter((train) => !train.targets.length).map((train) => train.trainNo)).size;
+    return planned && whole ? ` (${planned}편 좌석 지정 · ${whole}편 좌석 무관)` : planned ? " · 좌석 지정" : "";
+  }
+
+  // The class a train pressed as a whole is taken in: the one the conditions name, or either.
+  private wholeTrainSeatClass(): SeatClass | "any" {
+    const classes = this.draft.seatGradeMode === "specific" ? this.conditions?.seat_classes ?? [] : [];
+    return classes.length === 1 ? classes[0]! : "any";
+  }
+
+  private toggleWholeTrain(trainNo: string): void {
+    const rest = this.cancellationTargets.filter((target) => target.trainNo !== trainNo);
+    // Pressing a card that already carries picked seats, or a whole-train pick, clears it; otherwise it takes the whole train.
+    this.cancellationTargets = rest.length === this.cancellationTargets.length
+      ? [...rest, { trainNo, seatClass: this.wholeTrainSeatClass(), targets: [] }]
+      : rest;
+    this.error = "";
+    this.render();
+  }
+
+  // What the train list chose, folded into the conditions the confirm screen starts with.
+  private applyTrainSelection(): void {
     // A draft restored from the server may predate v/action; buildConditions always fills them, this.conditions overrides the rest.
     const conditions = { ...buildConditions(this.draft), ...this.conditions };
     const selectedTrains = [...new Set(this.cancellationTargets.map((target) => target.trainNo))];
-    const seatPlan: CancellationWaitPlan = {
-      strategy: this.draft.passengerCount > 1 && this.draft.seatStrategy === "1" ? "consecutive" : "independent",
-      passengerCount: this.draft.passengerCount,
-      // The server never reads trainKey; drop it so the payload doesn't carry it.
-      trains: this.cancellationTargets.map(({ trainNo, seatClass, targets }) => ({ trainNo, seatClass, targets })),
-    };
+    // Only picked seats need a plan; trains taken whole are just the train list of a plain search.
+    // With both kinds, every entry goes in the plan and the server seats the whole-train ones itself.
+    const seatPlan: CancellationWaitPlan | undefined = this.cancellationTargets.some((target) => target.targets.length)
+      ? {
+          strategy: this.draft.passengerCount > 1 && this.draft.seatStrategy === "1" ? "consecutive" : "independent",
+          passengerCount: this.draft.passengerCount,
+          // The server never reads trainKey; drop it so the payload doesn't carry it.
+          trains: this.cancellationTargets.map(({ trainNo, seatClass, targets }) => ({ trainNo, seatClass, targets })),
+        }
+      : undefined;
     this.conditions = { ...conditions, waitlist: false, trains: selectedTrains, seat_plan: seatPlan };
     this.selectedTrains = selectedTrains;
-    await this.startNow();
   }
 
   private renderConfirm(): string {
@@ -1036,7 +1062,7 @@ export class JariApp {
         <div class="route-hero"><span>${escapeHtml(conditions.src_station)}</span><i>→</i><span>${escapeHtml(conditions.dst_station)}</span></div>
         <dl>
           <dt>출발</dt><dd>${escapeHtml(formatWindow(conditions))}</dd>
-          <dt>열차</dt><dd>${conditions.train_type === "1" ? "KTX 계열만" : "모든 열차"} · ${this.selectedTrains.length ? `${this.selectedTrains.length}편 선택` : "시간대 전체"}</dd>
+          <dt>열차</dt><dd>${conditions.train_type === "1" ? "KTX 계열만" : "모든 열차"} · ${this.selectedTrains.length ? `${this.selectedTrains.length}편 선택${this.describePlannedTrains(conditions.seat_plan)}` : "시간대 전체"}</dd>
           <dt>좌석</dt><dd>${escapeHtml(SEAT_OPTIONS[conditions.seat_option])} · ${conditions.passenger_count}명</dd>
           ${conditions.passenger_count > 1 ? `<dt>배치</dt><dd>${conditions.seat_strategy === "1" ? "연속 좌석" : "랜덤 배치"}</dd>` : ""}
           <dt>좌석 지정</dt><dd>${escapeHtml(this.describeSeatPreference(conditions.seat_preference))}</dd>
@@ -1433,6 +1459,10 @@ export class JariApp {
   private onClick(event: Event): void {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button");
     if (!button) return;
+    if (button.dataset.trainToggle) {
+      this.toggleWholeTrain(button.dataset.trainToggle);
+      return;
+    }
     if (button.dataset.seatMap !== undefined) {
       const seatClass = button.dataset.seatClass === "special" ? "special" : "general";
       const mode = button.dataset.seatMode === "wait" ? "wait" : "immediate";
@@ -1548,6 +1578,7 @@ export class JariApp {
         this.render(false);
         break;
       case "trains-next":
+        this.applyTrainSelection();
         this.navigate("confirm");
         break;
       case "close-seat-dialog":
@@ -1563,9 +1594,6 @@ export class JariApp {
         break;
       case "apply-all-cars":
         void this.applyAllCars();
-        break;
-      case "start-cancellation-wait":
-        void this.startCancellationWait();
         break;
       case "start-now":
         void this.startNow();
