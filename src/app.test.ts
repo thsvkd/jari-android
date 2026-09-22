@@ -1435,3 +1435,13 @@ it("labels a chip with the favourite's name when it matches the restored search"
   expect(chips[0]!.getAttribute("data-route-chip")).toBe("fav-same");
   expect(chips[0]!.textContent).toContain("저녁에 부산");
 });
+
+it("sums a whole-formation seat plan instead of listing every label", async () => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running!.seatPlan = { trains: [{ trainNo: "063", label: "063", seatClass: "general", targets: Array.from({ length: 13 }, (_, i) => ({ carNo: i + 1, labels: ["1A", "1D", "2A", "2D"] })) }] };
+  const { root } = await mountLive({ bootstrap: async () => state });
+  root.querySelector<HTMLButtonElement>("nav [data-view='activity']")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".activity-trains li")).not.toBeNull());
+  expect(root.querySelector(".activity-trains li")?.textContent).toBe("열차 063일반실 13개 호차 · 52석");
+});

@@ -66,7 +66,7 @@ small { color: var(--muted); }
 .app-shell { width: min(100%, 520px); min-height: 100vh; margin: 0 auto; position: relative; overflow: clip; background: var(--bg); box-shadow: 0 0 0 1px rgb(20 30 45 / 4%), 0 20px 80px rgb(27 36 51 / 12%); }
 .screen { min-height: calc(100vh - 148px); padding: 22px 22px calc(112px + env(safe-area-inset-bottom)); }
 .topbar { display: flex; align-items: center; justify-content: space-between; height: calc(72px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 22px 0; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(18px); position: sticky; top: 0; z-index: 20; }
-.brand { display: flex; align-items: center; gap: 10px; padding: 0; background: transparent; text-align: left; }
+.brand { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0; background: transparent; text-align: left; }
 .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 13px; background: var(--text); color: var(--bg); }
 .brand-mark svg { width: 25px; height: 25px; fill: currentColor; }
 .brand-mark path { fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; }
@@ -386,6 +386,8 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .action-sheet p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .action-sheet .sheet-note { color: var(--accent-ink); }
 .action-sheet-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 5px; }
+/* The stacked-button rule below would push the second button down and stretch the first; side by side they share one height. */
+.action-sheet-actions .button { margin-top: 0; }
 
 .summary-card { overflow: hidden; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 21px; background: var(--surface); box-shadow: var(--shadow); }
 .route-hero { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; padding: 25px 20px; background: var(--accent-soft); text-align: center; }
@@ -416,8 +418,8 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .activity-conditions dd { margin: 0; font-weight: 650; overflow-wrap: anywhere; }
 .activity-conditions .activity-trains { grid-column: 1 / -1; }
 .activity-trains ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.activity-trains li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; border-radius: 12px; background: var(--bg); }
-.activity-trains li span { color: var(--muted); font-weight: 600; text-align: right; }
+.activity-trains li { display: grid; gap: 2px; padding: 9px 12px; border-radius: 12px; background: var(--bg); }
+.activity-trains li span { color: var(--muted); font-weight: 600; overflow-wrap: anywhere; }
 .center { text-align: center; }
 .muted { color: var(--muted); }
 .timeline { margin: 26px 0 0; }
@@ -510,7 +512,7 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .inline-spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid color-mix(in srgb, var(--accent) 24%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: spin .75s linear infinite; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; margin: -1px; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.toast { position: fixed; right: 20px; bottom: calc(88px + env(safe-area-inset-bottom)); left: 20px; z-index: 90; max-width: 470px; margin: auto; padding: 13px 16px; border-radius: 13px; background: #202735; color: #fff; box-shadow: 0 12px 34px #0004; font-size: 11px; text-align: center; }
+.toast { position: fixed; right: 20px; bottom: calc(88px + env(safe-area-inset-bottom)); left: 20px; z-index: 90; max-width: 470px; margin: auto; padding: 13px 16px; border-radius: 13px; background: var(--text); color: var(--bg); box-shadow: 0 12px 34px rgb(0 0 0 / 25%); font-size: 11px; text-align: center; }
 .toast:empty { display: none; }
 .launch, .fatal { min-height: 100vh; display: grid; place-items: center; align-content: center; gap: 13px; padding: 30px; text-align: center; }
 .launch span, .fatal > span { display: grid; place-items: center; width: 68px; height: 68px; border-radius: 22px; background: var(--accent); color: #fff; font-size: 29px; font-weight: 900; letter-spacing: -3px; }

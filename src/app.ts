@@ -777,7 +777,7 @@ export class JariApp {
       <h2 id="action-sheet-title">${escapeHtml(sheet.title)}</h2>
       ${sheet.body ? `<p>${escapeHtml(sheet.body)}</p>` : ""}
       ${sheet.content}
-      <div class="action-sheet-actions"><button type="button" class="button ghost" data-action="sheet-cancel">취소</button><button type="button" class="button ${sheet.danger ? "ghost danger" : "primary"}" data-action="sheet-confirm">${escapeHtml(sheet.confirmLabel)}</button></div>
+      <div class="action-sheet-actions"><button type="button" class="button ghost" data-action="sheet-cancel">취소</button><button type="button" class="button ${sheet.danger ? "danger" : "primary"}" data-action="sheet-confirm">${escapeHtml(sheet.confirmLabel)}</button></div>
     </section></div>`;
   }
 
@@ -1402,11 +1402,17 @@ export class JariApp {
     const planned = running.seatPlan?.trains ?? [];
     const trainRows = planned.length
       ? planned.map((train) => {
-          const seats = train.targets.length
-            ? train.targets.map((car) => `${car.carNo}호차 ${car.labels.join("·")}`).join(", ")
-            : "좌석 무관";
+          // "창가 · 모든 호차" is hundreds of labels; past a handful, the count says more than the list.
+          const seatCount = train.targets.reduce((total, car) => total + car.labels.length, 0);
+          const seats = !train.targets.length
+            ? "좌석 무관"
+            : seatCount > 8
+              ? `${train.targets.length}개 호차 · ${seatCount}석`
+              : train.targets.map((car) => `${car.carNo}호차 ${car.labels.join("·")}`).join(", ");
           const cabin = train.seatClass === "any" ? "" : `${train.seatClass === "special" ? "특실" : "일반실"} `;
-          return `<li><b>${escapeHtml(train.label)}</b><span>${escapeHtml(cabin + seats)}</span></li>`;
+          // The server can only name the train while the picker session is alive; a bare number reads better with a word.
+          const label = train.label === train.trainNo ? `열차 ${train.trainNo}` : train.label;
+          return `<li><b>${escapeHtml(label)}</b><span>${escapeHtml(cabin + seats)}</span></li>`;
         })
       : running.selectedTrains.map((no) => `<li><b>${escapeHtml(no)}</b><span>좌석 무관</span></li>`);
     const trainCount = planned.length || running.selectedTrains.length;
