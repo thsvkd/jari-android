@@ -132,6 +132,29 @@ def test_sold_out_train_uses_nearby_matching_formation_for_seat_selection():
     )
 
 
+def test_booking_reads_no_nearby_formation_for_a_sold_out_train():
+    # The cancellation-wait worker books, it does not draw a map: another
+    # date's formation would cost up to seven searches and seat nobody.
+    service = service_with_modern_client()
+    train = SimpleNamespace(
+        train_no="009",
+        train_class_code="00",
+        departure_date="20260914",
+        departure_time="063300",
+        departure_station_name="서울",
+        arrival_station_name="부산",
+    )
+    service._modern_client.get_seat_cars.side_effect = KorailAppError(
+        "ERI411321", "잔여석이 없습니다."
+    )
+
+    response = service.seat_cars(train, "general", 1, allow_layout_reference=False)
+
+    assert response.cars == ()
+    service._modern_client.search_trains.assert_not_called()
+    assert not service.seat_layout_is_reference(train, "general", 1)
+
+
 def test_nearby_layout_uses_one_passenger_for_a_larger_party():
     service = service_with_modern_client()
     train = SimpleNamespace(
@@ -387,6 +410,7 @@ def test_seat_map_serializes_real_layout_without_inventing_family_seats():
         "column": "A",
         "adjacencyGroup": "5:left",
         "position": 1,
+        "rowPosition": 1,
         "familyLabel": "",
     }
     assert described["seats"][1]["adjacencyGroup"] == "5:left"
@@ -418,6 +442,28 @@ def test_numeric_seat_labels_get_a_grid_so_the_app_can_show_them():
     assert seats["4"]["adjacencyGroup"] == "1:right"
     assert seats["5"]["adjacencyGroup"] == "2:left"
     assert (seats["1"]["position"], seats["2"]["position"]) == (1, 2)
+    # Numbered seats are counted across the row exactly as A·B·C·D are, over
+    # the seats the car actually reports: "3" is missing here, so "4" is third.
+    assert [seats[n]["rowPosition"] for n in ("1", "2", "4", "5")] == [1, 2, 3, 1]
+
+
+def test_row_position_numbers_a_row_across_the_aisle():
+    # Three people can only sit together by crossing the aisle, so the app
+    # needs each seat's place in the whole row, not just in its pair.
+    service = SeatMapService()
+    described = service.describe_inventory(
+        inventory(
+            physical_seat(seat_no="000044", label="5D"),
+            physical_seat(seat_no="000041", label="5A"),
+            physical_seat(seat_no="000043", label="5C"),
+            physical_seat(seat_no="000042", label="5B"),
+            physical_seat(seat_no="000051", label="6A"),
+        )
+    )
+    seats = {seat["label"]: seat for seat in described["seats"]}
+
+    assert [seats[label]["rowPosition"] for label in ("5A", "5B", "5C", "5D")] == [1, 2, 3, 4]
+    assert seats["6A"]["rowPosition"] == 1
 
 
 def test_unreadable_seat_label_still_has_no_row():
@@ -427,6 +473,7 @@ def test_unreadable_seat_label_still_has_no_row():
     assert described["seats"][0]["row"] is None
     assert described["seats"][0]["column"] == ""
     assert described["seats"][0]["adjacencyGroup"] == ""
+    assert described["seats"][0]["rowPosition"] == 0
     assert described["seats"][0]["label"] == "창측"
 
 

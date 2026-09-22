@@ -26,6 +26,7 @@ from korail_mobile_api import (
     KorailSeatAssignment,
     KorailSeatClass,
     MutationConsent,
+    SeatCarListResponse,
     SeatInventoryResponse,
     TrainSearchQuery,
 )
@@ -331,7 +332,14 @@ class KorailService(RailService):
         except KeyError as exc:
             raise ValueError("좌석 등급은 일반실 또는 특실이어야 합니다.") from exc
 
-    def seat_cars(self, train, seat_class: str, passenger_count: int = 1):
+    def seat_cars(
+        self,
+        train,
+        seat_class: str,
+        passenger_count: int = 1,
+        *,
+        allow_layout_reference: bool = True,
+    ):
         """Read cars for a current train result and cabin class."""
         client = self._modern_client
         if not self._logged_in or client is None:
@@ -349,6 +357,11 @@ class KorailService(RailService):
         except KorailAppError as exc:
             if not self._is_no_remaining_seats(exc):
                 raise
+            if not allow_layout_reference:
+                # A caller that books rather than draws wants "no car has a
+                # seat", not another date's formation, and not the search it
+                # costs. Same answer seat_inventory gives in this case.
+                return SeatCarListResponse(train_no=str(getattr(train, "train_no", "") or ""))
             layout_train, response = self._nearby_layout_reference(
                 train, cabin.value, passenger_count
             )

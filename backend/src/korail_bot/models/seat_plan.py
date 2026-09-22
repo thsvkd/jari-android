@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 MAX_PLAN_TRAINS = 30
 # A trust boundary, not a budget for the user: the longest real formation is
 # under 1000 seats, so "every seat in the train" has to fit comfortably. What
-# actually bounds a plan's size is the API body limit in mobile/api.py.
+# actually bounds a plan's size is MAX_REQUEST_BYTES in mobile/config.py,
+# read both by the HTTP body limit and by MobileSubmission.MAX_DATA_BYTES.
 MAX_TARGETS_PER_TRAIN = 2000
 MAX_TEXT_LENGTH = 64
 SEAT_CLASSES = ("general", "special")
@@ -41,6 +43,23 @@ def _bounded_int(value: object, label: str, low: int, high: int) -> int:
     return value
 
 
+def _contiguous_blocks(
+    targets: list[SeatTarget],
+    position_of: Callable[[SeatTarget], int],
+    wanted: int,
+) -> list[tuple[SeatTarget, ...]]:
+    """Every run of ``wanted`` seats whose positions follow one another."""
+
+    ordered = sorted(targets, key=position_of)
+    blocks: list[tuple[SeatTarget, ...]] = []
+    for index in range(len(ordered) - wanted + 1):
+        block = ordered[index : index + wanted]
+        positions = [position_of(target) for target in block]
+        if positions == list(range(positions[0], positions[0] + wanted)):
+            blocks.append(tuple(block))
+    return blocks
+
+
 @dataclass(frozen=True)
 class SeatTarget:
     """One physical seat the user is willing to take."""
@@ -54,6 +73,7 @@ class SeatTarget:
     floor: str = ""
     adjacency_group: str = ""
     position: int = 0
+    row_position: int = 0
 
     @classmethod
     def from_payload(cls, raw: object) -> SeatTarget:
@@ -72,6 +92,7 @@ class SeatTarget:
                 item.get("adjacencyGroup", ""), "좌석 인접 그룹", required=False
             ),
             position=_bounded_int(item.get("position", 0), "좌석 위치", 0, 99),
+            row_position=_bounded_int(item.get("rowPosition", 0), "좌석 줄 위치", 0, 99),
         )
 
     def as_payload(self) -> dict[str, object]:
@@ -85,6 +106,7 @@ class SeatTarget:
             "floor": self.floor,
             "adjacencyGroup": self.adjacency_group,
             "position": self.position,
+            "rowPosition": self.row_position,
         }
 
 
@@ -150,6 +172,8 @@ class CancellationWaitPlan:
             raise SeatPlanError("같은 열차와 좌석 등급이 중복됐어요.")
         plan = cls(strategy=strategy, passenger_count=passenger_count, trains=trains)
         if strategy == "consecutive" and not plan.consecutive_groups():
+            if passenger_count >= 3:
+                raise SeatPlanError("선택한 좌석 안에 인원수만큼 같은 줄에 나란히 붙은 좌석이 없어요.")
             raise SeatPlanError("선택한 좌석 안에 인원수만큼 붙어 있는 좌석이 없어요.")
         return plan
 
@@ -163,10 +187,19 @@ class CancellationWaitPlan:
     def to_json(self) -> str:
         return json.dumps(self.as_payload(), ensure_ascii=False, separators=(",", ":"))
 
-    def consecutive_groups(self) -> tuple[tuple[SeatTarget, ...], ...]:
-        """Return candidate blocks that stay inside one known adjacency group."""
+    def consecutive_groups(
+        self,
+    ) -> tuple[tuple[TrainSeatTargets, tuple[SeatTarget, ...]], ...]:
+        """
+        Candidate blocks of seats sitting next to each other, each with the
+        train it was chosen from.
 
-        groups: list[tuple[SeatTarget, ...]] = []
+        The train comes back with the block because a seat cannot identify it:
+        the same physical seat of the same car may be chosen on two different
+        trains, and matching by value alone would book the wrong one.
+        """
+
+        groups: list[tuple[TrainSeatTargets, tuple[SeatTarget, ...]]] = []
         wanted = self.passenger_count
         for train in self.trains:
             by_group: dict[tuple[int, str], list[SeatTarget]] = {}
@@ -175,12 +208,20 @@ class CancellationWaitPlan:
                     continue
                 by_group.setdefault((target.car_no, target.adjacency_group), []).append(target)
             for targets in by_group.values():
-                ordered = sorted(targets, key=lambda target: target.position)
-                for index in range(len(ordered) - wanted + 1):
-                    block = ordered[index : index + wanted]
-                    positions = [target.position for target in block]
-                    if positions == list(range(positions[0], positions[0] + wanted)):
-                        groups.append(tuple(block))
+                for block in _contiguous_blocks(targets, lambda t: t.position, wanted):
+                    groups.append((train, block))
+            if wanted < 3:
+                continue
+            # A KTX row seats two and two, so three people can only sit
+            # together by taking the aisle: the whole row, not one side.
+            by_row: dict[tuple[int, int], list[SeatTarget]] = {}
+            for target in train.targets:
+                if target.row is None or target.row_position <= 0:
+                    continue
+                by_row.setdefault((target.car_no, target.row), []).append(target)
+            for targets in by_row.values():
+                for block in _contiguous_blocks(targets, lambda t: t.row_position, wanted):
+                    groups.append((train, block))
         return tuple(groups)
 
 

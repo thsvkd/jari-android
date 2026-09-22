@@ -27,17 +27,22 @@ def target(
     car_no: int = 3,
     group: str = "5-left",
     position: int = 1,
+    row: int = 5,
+    row_position: int | None = None,
 ) -> dict:
-    return {
+    payload = {
         "carNo": car_no,
         "seatNo": seat_no,
         "label": label,
-        "row": 5,
+        "row": row,
         "column": label[-1],
         "direction": "forward",
         "adjacencyGroup": group,
         "position": position,
     }
+    if row_position is not None:
+        payload["rowPosition"] = row_position
+    return payload
 
 
 def test_independent_plan_accepts_more_candidates_than_passengers():
@@ -90,8 +95,98 @@ def test_consecutive_groups_do_not_cross_an_aisle_car_or_class():
         }
     )
 
-    labels = [[seat.label for seat in group] for group in plan.consecutive_groups()]
+    labels = [[seat.label for seat in block] for _, block in plan.consecutive_groups()]
     assert labels == [["5A", "5B"], ["5C", "5D"]]
+
+
+def three_seat_plan(*targets: dict) -> CancellationWaitPlan:
+    return CancellationWaitPlan.from_payload(
+        {
+            "strategy": "consecutive",
+            "passengerCount": 3,
+            "trains": [{"trainNo": "015", "seatClass": "general", "targets": list(targets)}],
+        }
+    )
+
+
+def test_three_passengers_may_take_a_whole_row_across_the_aisle():
+    # A KTX row seats two and two, so three together always crosses the aisle.
+    plan = three_seat_plan(
+        target("S1", "5A", group="5-left", position=1, row_position=1),
+        target("S2", "5B", group="5-left", position=2, row_position=2),
+        target("S3", "5C", group="5-right", position=1, row_position=3),
+    )
+
+    labels = [[seat.label for seat in block] for _, block in plan.consecutive_groups()]
+    assert labels == [["5A", "5B", "5C"]]
+
+
+def test_the_same_seats_on_two_trains_stay_with_their_own_train():
+    # The seat is described identically on both, so a block only knows which
+    # train it belongs to because the plan says so.
+    seats = [
+        target("S1", "5A", group="5-left", position=1),
+        target("S2", "5B", group="5-left", position=2),
+    ]
+    plan = CancellationWaitPlan.from_payload(
+        {
+            "strategy": "consecutive",
+            "passengerCount": 2,
+            "trains": [
+                {"trainNo": "015", "seatClass": "general", "targets": seats},
+                {"trainNo": "017", "seatClass": "general", "targets": seats},
+            ],
+        }
+    )
+
+    assert [
+        (train.train_no, [seat.label for seat in block])
+        for train, block in plan.consecutive_groups()
+    ] == [("015", ["5A", "5B"]), ("017", ["5A", "5B"])]
+
+
+def test_three_passengers_cannot_be_split_over_two_rows():
+    with pytest.raises(SeatPlanError, match="같은 줄"):
+        three_seat_plan(
+            target("S1", "5A", group="5-left", position=1, row_position=1),
+            target("S2", "5B", group="5-left", position=2, row_position=2),
+            target("S3", "6A", group="6-left", position=1, row=6, row_position=1),
+        )
+
+
+def test_two_passengers_still_may_not_sit_across_the_aisle():
+    with pytest.raises(SeatPlanError, match="붙어 있는"):
+        CancellationWaitPlan.from_payload(
+            {
+                "strategy": "consecutive",
+                "passengerCount": 2,
+                "trains": [
+                    {
+                        "trainNo": "015",
+                        "seatClass": "general",
+                        "targets": [
+                            target("S2", "5B", group="5-left", position=2, row_position=2),
+                            target("S3", "5C", group="5-right", position=1, row_position=3),
+                        ],
+                    }
+                ],
+            }
+        )
+
+
+def test_a_plan_stored_before_row_positions_existed_still_parses():
+    plan = CancellationWaitPlan.from_payload(
+        {
+            "strategy": "independent",
+            "passengerCount": 1,
+            "trains": [
+                {"trainNo": "015", "seatClass": "general", "targets": [target("S1", "5A")]}
+            ],
+        }
+    )
+
+    assert plan.trains[0].targets[0].row_position == 0
+    assert parse_seat_plan(plan.to_json()) == plan
 
 
 @pytest.mark.parametrize(

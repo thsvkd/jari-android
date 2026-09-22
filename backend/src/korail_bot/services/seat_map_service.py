@@ -84,6 +84,9 @@ class SeatMapService:
     def describe_inventory(self, response) -> dict:
         car_no = response.car_no
         seats: list[dict] = []
+        # Seats of one row, keyed by row, as (side rank, column, entry). The
+        # row-wide position can only be numbered once the whole row is known.
+        rows: dict[int, list[tuple[int, str, dict]]] = {}
         for seat in response.seats:
             parsed = parse_seat_label(seat.specification)
             row, column = parsed if parsed else self._numeric_grid(seat.specification)
@@ -94,21 +97,27 @@ class SeatMapService:
             # too. Korail's seat-specific message is the reliable marker.
             if "4인 동반석" in message:
                 family_label = "4인 동반석"
-            seats.append(
-                {
-                    "carNo": car_no,
-                    "seatNo": seat.seat_no,
-                    "label": seat.specification,
-                    "salePossible": seat.sale_possible == "Y",
-                    "direction": seat.direction_code,
-                    "floor": seat.floor or "",
-                    "row": row,
-                    "column": column,
-                    "adjacencyGroup": f"{row}:{side}" if row is not None and side else "",
-                    "position": position,
-                    "familyLabel": family_label,
-                }
-            )
+            entry = {
+                "carNo": car_no,
+                "seatNo": seat.seat_no,
+                "label": seat.specification,
+                "salePossible": seat.sale_possible == "Y",
+                "direction": seat.direction_code,
+                "floor": seat.floor or "",
+                "row": row,
+                "column": column,
+                "adjacencyGroup": f"{row}:{side}" if row is not None and side else "",
+                "position": position,
+                "rowPosition": 0,
+                "familyLabel": family_label,
+            }
+            seats.append(entry)
+            if row is not None and side:
+                rows.setdefault(row, []).append((0 if side == "left" else 1, column, entry))
+        for members in rows.values():
+            # Left side first, then right, so a 2+2 row reads A,B,C,D.
+            for index, (_, _, entry) in enumerate(sorted(members, key=lambda item: item[:2]), 1):
+                entry["rowPosition"] = index
         return {
             "carNo": car_no,
             "layoutType": response.layout_type,
