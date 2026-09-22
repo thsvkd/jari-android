@@ -1275,7 +1275,7 @@ export class JariApp {
   }
 
   private renderFavouriteRow(favourite: Favourite, compact: boolean): string {
-    return `<article class="favourite-row ${compact ? "compact" : ""}"><button class="favourite-main" data-use-favourite="${escapeHtml(favourite.id)}"><span class="route-symbol">구간</span><span><b>${escapeHtml(favourite.name)}</b><small>${escapeHtml(favourite.route)} · ${escapeHtml(favourite.window)}</small></span></button>${compact ? "" : `<button class="icon-button danger" data-delete-favourite="${escapeHtml(favourite.id)}" aria-label="${escapeHtml(favourite.name)} 삭제">삭제</button>`}</article>`;
+    return `<article class="favourite-row ${compact ? "compact" : ""}"><button class="favourite-main" data-use-favourite="${escapeHtml(favourite.id)}"><span class="route-symbol">구간</span><span><b>${escapeHtml(favourite.name)}</b><small>${escapeHtml(favourite.route)} · ${escapeHtml(favourite.window)}</small></span></button>${compact ? "" : `<button class="text-button" data-edit-favourite="${escapeHtml(favourite.id)}">조건 수정</button><button class="icon-button danger" data-delete-favourite="${escapeHtml(favourite.id)}" aria-label="${escapeHtml(favourite.name)} 삭제">삭제</button>`}</article>`;
   }
 
   private renderNotifications(): string {
@@ -1594,8 +1594,8 @@ export class JariApp {
     return isoDate(new Date(now.getTime() + (passed ? 86_400_000 : 0)));
   }
 
-  // A chip carries the whole trip but not its day: ask for the date, then run the same search the journey form would.
-  private async searchFromChip(key: string): Promise<void> {
+  // A chip or a favourite row carries the whole trip but not its day: ask for the date, then run the same search the journey form would.
+  private async searchFromSaved(key: string): Promise<void> {
     const source = key === "recent"
       ? this.state?.draft
       : this.state?.favourites.find((favourite) => favourite.id === key)?.conditions;
@@ -1804,12 +1804,17 @@ export class JariApp {
     }
     const routeChip = button.dataset.routeChip;
     if (routeChip) {
-      void this.searchFromChip(routeChip);
+      void this.searchFromSaved(routeChip);
       return;
     }
     const favouriteId = button.dataset.useFavourite;
     if (favouriteId) {
-      const favourite = this.state?.favourites.find((item) => item.id === favouriteId);
+      void this.searchFromSaved(favouriteId);
+      return;
+    }
+    const editId = button.dataset.editFavourite;
+    if (editId) {
+      const favourite = this.state?.favourites.find((item) => item.id === editId);
       if (favourite) {
         this.draft = conditionsToDraft(favourite.conditions);
         this.conditions = null;

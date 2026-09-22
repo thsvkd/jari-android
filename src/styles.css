@@ -203,7 +203,8 @@ small { color: var(--muted); }
 .route-line span { color: var(--muted); font-size: 11px; }
 
 .route-list { display: grid; }
-.favourite-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.favourite-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.favourite-row .text-button { padding-inline: 8px; }
 .favourite-row.compact { display: block; }
 .favourite-main { width: 100%; display: flex; align-items: center; gap: 12px; padding: 0; background: transparent; text-align: left; }
 .favourite-main > span:last-child { min-width: 0; display: grid; gap: 4px; }

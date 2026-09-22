@@ -238,7 +238,7 @@ describe("concept C application shell", () => {
     expect(root.querySelector<HTMLButtonElement>("[data-action='notify-plus']")?.disabled).toBe(true);
   });
 
-  it("loads a favourite as a fresh journey without a stale train selection", async () => {
+  it("loads a favourite into the journey form from 조건 수정, without a stale train selection", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-14T03:00:00+09:00"));
     const demo = createDemoApi();
@@ -251,7 +251,7 @@ describe("concept C application shell", () => {
     const { app, root } = await mountLive({ bootstrap: async () => state });
 
     app.navigate("favourites");
-    root.querySelector<HTMLButtonElement>("[data-use-favourite='demo-home']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-edit-favourite='demo-home']")!.click();
 
     expect(root.querySelector<HTMLInputElement>("[name='dep_date']")!.value).toBe("2026-09-14");
     expect(root.querySelector<HTMLInputElement>("[name='src_station']")!.value).toBe("서울");
@@ -1307,6 +1307,22 @@ it("keeps the date sheet dismissable without starting a search", async () => {
   expect(root.querySelector(".action-sheet")).toBeNull();
   expect(trains).not.toHaveBeenCalled();
   expect(root.querySelector(".screen-home")).not.toBeNull();
+});
+
+it.each(["home", "favourites"] as const)("opens the date sheet from a favourite row on %s and searches that date", async (view) => {
+  const trains = vi.fn(createDemoApi().trains);
+  const { app, root } = await mountLive({ trains });
+  if (view === "favourites") app.navigate("favourites");
+
+  root.querySelector<HTMLButtonElement>("[data-use-favourite='demo-home']")!.click();
+  expect(root.querySelector(".action-sheet")?.textContent).toContain("언제 떠나세요?");
+  root.querySelector<HTMLInputElement>("#sheet-date")!.value = "2026-10-03";
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector(".train-list")).not.toBeNull());
+  expect(trains.mock.calls[0]![0].conditions).toMatchObject({ dep_date: "20261003", dep_time: "1400", max_dep_time: "1800" });
+  // 즐겨찾기를 눌러 여정 입력 폼으로 돌아가는 길은 더 이상 없어요.
+  expect(root.querySelector("#conditions-form")).toBeNull();
 });
 
 it("asks in an in-app sheet instead of window.confirm, and only acts when it is confirmed", async () => {
