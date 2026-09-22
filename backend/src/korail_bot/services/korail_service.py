@@ -5,6 +5,7 @@ trains, and reserving one. The search loop that drives those calls is in
 :mod:`korail_bot.services.rail_service`, shared with SR.
 """
 
+import re
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -32,6 +33,8 @@ from korail_mobile_api import (
     TrainSearchQuery,
     TrainSummary,
 )
+from korail_mobile_api import mutation_payloads as _mutation_payloads
+from korail_mobile_api import payloads as _read_payloads
 from korail_mobile_api.constants import KORAIL_STANDBY_WAIT_FLAG
 from korail_mobile_api.errors import KorailAppError
 
@@ -78,6 +81,44 @@ _TRAIN_FIELD_WIDTHS = {
 }
 
 _NO_REMAINING_SEATS_CODE = "ERI411321"
+
+# The second unit of a coupled train carries a class code like "0A" (pit5,
+# 2026-09-22: KTX-산천 9069 beside 069's "07"). The pinned korail_mobile_api
+# accepts only two decimal digits there and refuses the row before any
+# request is sent, in the seat-map form check and in the reservation one; the
+# Korail app forwards the value verbatim, so both are widened to [0-9A-Z]{2}.
+# ponytail: patches the pinned library's private validators; drop when
+# upstream accepts alphanumeric class codes.
+_CLASS_CODE_RE = re.compile(r"[0-9A-Z]{2}")
+
+
+def _accept_alphanumeric_class_codes() -> None:
+    digits = _read_payloads._required_ascii_digits
+    decimal = _mutation_payloads._required_digits
+
+    def ascii_digits(value, name, *, lengths):
+        if (
+            name == "train_class_code"
+            and isinstance(value, str)
+            and _CLASS_CODE_RE.fullmatch(value)
+        ):
+            return value
+        return digits(value, name, lengths=lengths)
+
+    def decimal_digits(value, *, field):
+        if (
+            field == "train_class_code"
+            and isinstance(value, str)
+            and _CLASS_CODE_RE.fullmatch(value)
+        ):
+            return value
+        return decimal(value, field=field)
+
+    _read_payloads._required_ascii_digits = ascii_digits
+    _mutation_payloads._required_digits = decimal_digits
+
+
+_accept_alphanumeric_class_codes()
 
 # Re-exported: these used to be defined here, and half the codebase imports
 # them from this module. Moving them to rail_service.py is not a reason to
@@ -351,7 +392,7 @@ class KorailService(RailService):
                 passengers=passenger_count,
             )
         )
-        trains = self._normalized_trains(result.trains)
+        trains = [self._padded_train(train) for train in result.trains]
         if train_type == TrainType.KTX:
             trains = [train for train in trains if train.train_group_name == "KTX"]
         if max_dep_time != "2400":
@@ -362,31 +403,6 @@ class KorailService(RailService):
                 and int(str(train.departure_time)[:4]) < int(max_dep_time)
             ]
         return trains
-
-    @classmethod
-    def _normalized_trains(cls, trains) -> list:
-        """Search rows made safe for the seat-map and reservation forms.
-
-        Beyond the padding, the second unit of a coupled KTX-산천 (9069 listed
-        next to 069) arrives without h_trn_clsf_cd, and the form check
-        refuses the row before any request is sent. The code is the class
-        (07 is KTX-산천 on every row), so any row of the same class name in
-        the result supplies it; a row with no such neighbour is left as it
-        came, and the seat-read log then shows the row.
-        """
-        trains = [cls._padded_train(train) for train in trains]
-        class_codes: dict[str, str] = {}
-        for train in trains:
-            if isinstance(train, TrainSummary) and train.train_class_code:
-                class_codes.setdefault(train.train_class_name or "", train.train_class_code)
-        return [
-            replace(train, train_class_code=class_codes[key])
-            if isinstance(train, TrainSummary)
-            and not train.train_class_code
-            and (key := train.train_class_name or "") in class_codes
-            else train
-            for train in trains
-        ]
 
     @staticmethod
     def describe_train_row(train) -> str:
