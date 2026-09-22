@@ -1387,9 +1387,7 @@ class ConversationHandler:
         timezone_name = self.storage.get_user_timezone(chat_id)
         options = []
         for train in trains:
-            option = (
-                rail.describe_waitlist_train(train) if waitlist else rail.describe_train(train)
-            )
+            option = rail.describe_waitlist_train(train) if waitlist else rail.describe_train(train)
             journey = format_railway_journey(
                 info["depDate"],
                 option.get("dep_time", ""),

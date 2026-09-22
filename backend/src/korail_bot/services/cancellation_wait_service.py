@@ -54,9 +54,7 @@ class CancellationWaitService:
         trains = self.rail.search_selectable_trains(
             **self.search_kwargs, passenger_count=passenger_count
         )
-        trains_by_number = {
-            str(getattr(train, "train_no", "") or ""): train for train in trains
-        }
+        trains_by_number = {str(getattr(train, "train_no", "") or ""): train for train in trains}
         consecutive = self.plan.strategy == "consecutive"
         blocks_by_train = self._blocks_by_train() if consecutive else {}
 
@@ -110,9 +108,7 @@ class CancellationWaitService:
         cars = self.rail.seat_cars(
             train, wanted.seat_class, passenger_count, allow_layout_reference=False
         )
-        return {
-            car.car_no for car in cars.cars if car.remaining_seat_count > 0
-        } & candidates
+        return {car.car_no for car in cars.cars if car.remaining_seat_count > 0} & candidates
 
     def _independent_capture(self, train, wanted, excluded) -> DesignatedCapture | None:
         by_car = self._by_car(wanted.targets)
@@ -122,11 +118,18 @@ class CancellationWaitService:
                 continue
             inventory = self.rail.seat_inventory(train, car_no, wanted.seat_class, 1)
             sellable = self._sellable(inventory)
-            target = next((item for item in candidates if (
-                (item.seat_no, item.label) in sellable
-                and (wanted.train_no, wanted.seat_class, item.car_no, item.seat_no)
-                not in excluded
-            )), None)
+            target = next(
+                (
+                    item
+                    for item in candidates
+                    if (
+                        (item.seat_no, item.label) in sellable
+                        and (wanted.train_no, wanted.seat_class, item.car_no, item.seat_no)
+                        not in excluded
+                    )
+                ),
+                None,
+            )
             if target is None:
                 continue
             hold = self.rail.reserve_designated(

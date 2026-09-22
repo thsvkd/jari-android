@@ -74,8 +74,7 @@ class SeatMapService:
                 "roomClassName": car.room_class_name,
                 "remainingSeatCount": car.remaining_seat_count,
                 "attributes": [
-                    {"name": attribute.name, "code": attribute.code}
-                    for attribute in car.attributes
+                    {"name": attribute.name, "code": attribute.code} for attribute in car.attributes
                 ],
             }
             for car in response.cars

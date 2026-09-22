@@ -113,19 +113,14 @@ def test_sold_out_train_uses_nearby_matching_formation_for_seat_selection():
         KorailAppError("ERI411321", "잔여석이 없습니다."),
         cars,
     ]
-    service._modern_client.search_trains.return_value = SimpleNamespace(
-        trains=[reference]
-    )
+    service._modern_client.search_trains.return_value = SimpleNamespace(trains=[reference])
     service._modern_client.get_seat_inventory.return_value = inventory(
         physical_seat(sale_possible="N")
     )
 
     assert service.seat_cars(train, "general", 1) is cars
     assert service.seat_layout_is_reference(train, "general", 1)
-    assert (
-        service._modern_client.search_trains.call_args.args[0].departure_date
-        == "20260921"
-    )
+    assert service._modern_client.search_trains.call_args.args[0].departure_date == "20260921"
     assert service.seat_inventory(train, 3, "general", 1).car_no == 3
     service._modern_client.get_seat_inventory.assert_called_once_with(
         reference, 3, passenger_count=1, room_class_code="1"
@@ -286,16 +281,12 @@ def test_selection_inventory_can_use_nearby_matching_formation():
         KorailAppError("ERI411321", "잔여석이 없습니다."),
         cars,
     ]
-    service._modern_client.search_trains.return_value = SimpleNamespace(
-        trains=[reference]
-    )
+    service._modern_client.search_trains.return_value = SimpleNamespace(trains=[reference])
     service._modern_client.get_seat_inventory.return_value = inventory(
         physical_seat(sale_possible="N")
     )
 
-    response = service.seat_inventory(
-        train, 3, "general", 1, allow_layout_reference=True
-    )
+    response = service.seat_inventory(train, 3, "general", 1, allow_layout_reference=True)
 
     assert response.car_no == 3
     assert service.seat_layout_is_reference(train, "general", 1)
@@ -313,9 +304,12 @@ def test_reserve_designated_uses_wire_seat_number_not_label():
     hold = SimpleNamespace(pnr_no="PRIVATE")
     service._modern_client.reserve.return_value = hold
 
-    assert service.reserve_designated(
-        train, current_inventory, [target], passenger_count=1, seat_class="general"
-    ) is hold
+    assert (
+        service.reserve_designated(
+            train, current_inventory, [target], passenger_count=1, seat_class="general"
+        )
+        is hold
+    )
 
     kwargs = service._modern_client.reserve.call_args.kwargs
     assert kwargs["job_type"] is KorailReservationJobType.SEAT_DESIGNATED
@@ -504,9 +498,7 @@ def test_numeric_grid_places_only_plain_ascii_seat_numbers(label, expected):
 
 def test_attribute_code_alone_does_not_invent_family_seat():
     seat = physical_seat()
-    seat = PhysicalSeat(
-        **{**seat.__dict__, "requested_attribute_code": "015", "message": ""}
-    )
+    seat = PhysicalSeat(**{**seat.__dict__, "requested_attribute_code": "015", "message": ""})
     service = SeatMapService()
 
     assert service.describe_inventory(inventory(seat))["seats"][0]["familyLabel"] == ""

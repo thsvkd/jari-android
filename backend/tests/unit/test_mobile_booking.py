@@ -383,9 +383,7 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
         "soldout": False,
         "waitlistEligible": True,
     }
-    rail.seat_cars.return_value = SeatCarListResponse(
-        cars=(SeatCar(3, "일반실", 1, ()),)
-    )
+    rail.seat_cars.return_value = SeatCarListResponse(cars=(SeatCar(3, "일반실", 1, ()),))
     seat = PhysicalSeat(
         seat_no="000041",
         sale_possible="Y",
@@ -463,10 +461,13 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
     bob = runtime.identity.register(
         "bobby", "a long secure passphrase", runtime.identity.create_invite()
     )
-    assert http.get(
-        f"/api/mobile/trains/{train_key}/cars?seatClass=general&passengerCount=1",
-        headers={"Authorization": "Bearer " + bob["token"]},
-    ).status_code == 404
+    assert (
+        http.get(
+            f"/api/mobile/trains/{train_key}/cars?seatClass=general&passengerCount=1",
+            headers={"Authorization": "Bearer " + bob["token"]},
+        ).status_code
+        == 404
+    )
 
     reserved = http.post(
         "/api/mobile/reservations/designated",

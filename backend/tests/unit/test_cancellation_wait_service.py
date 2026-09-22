@@ -80,9 +80,7 @@ def test_independent_capture_reserves_one_matching_seat_and_honours_exclusion():
 
 
 def test_consecutive_capture_requires_the_whole_block_to_be_sellable():
-    wait, rail = service(
-        payload("consecutive"), [target("1A", 1), target("1B", 2, possible="N")]
-    )
+    wait, rail = service(payload("consecutive"), [target("1A", 1), target("1B", 2, possible="N")])
     assert wait.poll_once() is None
     rail.reserve_designated.assert_not_called()
 

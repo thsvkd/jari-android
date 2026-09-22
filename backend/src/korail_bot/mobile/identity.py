@@ -59,9 +59,7 @@ class IdentityStore:
             """)
             columns = {row[1] for row in db.execute("PRAGMA table_info(users)")}
             if "role" not in columns:
-                db.execute(
-                    "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'"
-                )
+                db.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'")
 
     @contextmanager
     def connect(self):

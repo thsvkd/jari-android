@@ -186,7 +186,9 @@ class KorailService(RailService):
             config_options["version"] = settings.KORAIL_APP_VERSION
         return KorailClient(KorailConfig(**config_options))
 
-    def _activate_legacy_session(self, modern: KorailClient, session, username: str, password: str) -> None:
+    def _activate_legacy_session(
+        self, modern: KorailClient, session, username: str, password: str
+    ) -> None:
         """Give the existing search/reservation adapter a freshly authenticated session."""
         legacy = self._build_client(username, password)
         legacy._session.cookies.set("JSESSIONID", session.jsessionid)
@@ -370,9 +372,7 @@ class KorailService(RailService):
         self._modern_seat_context = (id(layout_train), cabin.value, layout_passenger_count)
         return response
 
-    def seat_layout_is_reference(
-        self, train, seat_class: str, passenger_count: int = 1
-    ) -> bool:
+    def seat_layout_is_reference(self, train, seat_class: str, passenger_count: int = 1) -> bool:
         """Whether selection uses the same train number on a nearby date."""
         cabin = self._seat_class(seat_class)
         return (id(train), cabin.value, passenger_count) in self._seat_layout_references
@@ -427,14 +427,11 @@ class KorailService(RailService):
 
     @staticmethod
     def _is_no_remaining_seats(exc: KorailAppError) -> bool:
-        return (
-            getattr(exc, "code", None) == _NO_REMAINING_SEATS_CODE
-            or "잔여석이 없습니다" in str(getattr(exc, "message", "") or "")
+        return getattr(exc, "code", None) == _NO_REMAINING_SEATS_CODE or "잔여석이 없습니다" in str(
+            getattr(exc, "message", "") or ""
         )
 
-    def _nearby_layout_reference(
-        self, train, room_class_code: str, passenger_count: int
-    ):
+    def _nearby_layout_reference(self, train, room_class_code: str, passenger_count: int):
         """Read the same scheduled train's formation from a nearby service date."""
         client = self._modern_client
         if client is None:

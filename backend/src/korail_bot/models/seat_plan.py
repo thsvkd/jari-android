@@ -131,7 +131,9 @@ class TrainSeatTargets:
         if not isinstance(raw_targets, list) or not raw_targets:
             raise SeatPlanError("예약할 좌석 후보를 한 자리 이상 골라 주세요.")
         if len(raw_targets) > MAX_TARGETS_PER_TRAIN:
-            raise SeatPlanError(f"한 열차의 좌석 후보는 {MAX_TARGETS_PER_TRAIN}개까지 고를 수 있어요.")
+            raise SeatPlanError(
+                f"한 열차의 좌석 후보는 {MAX_TARGETS_PER_TRAIN}개까지 고를 수 있어요."
+            )
         targets = tuple(SeatTarget.from_payload(target) for target in raw_targets)
         keys = [(target.car_no, target.seat_no) for target in targets]
         if len(set(keys)) != len(keys):
@@ -173,7 +175,9 @@ class CancellationWaitPlan:
         plan = cls(strategy=strategy, passenger_count=passenger_count, trains=trains)
         if strategy == "consecutive" and not plan.consecutive_groups():
             if passenger_count >= 3:
-                raise SeatPlanError("선택한 좌석 안에 인원수만큼 같은 줄에 나란히 붙은 좌석이 없어요.")
+                raise SeatPlanError(
+                    "선택한 좌석 안에 인원수만큼 같은 줄에 나란히 붙은 좌석이 없어요."
+                )
             raise SeatPlanError("선택한 좌석 안에 인원수만큼 붙어 있는 좌석이 없어요.")
         return plan
 

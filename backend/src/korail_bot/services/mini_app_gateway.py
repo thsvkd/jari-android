@@ -477,9 +477,7 @@ class MiniAppGateway:
         if not self.pending_payments.cancel(chat_id):
             # The service has already said in the chat which of the several
             # reasons it was - mid-booking, login refused, railway refused.
-            raise MiniAppError(
-                "예약을 취소하지 못했어요. 앱 알림을 확인해 주세요.", status=502
-            )
+            raise MiniAppError("예약을 취소하지 못했어요. 앱 알림을 확인해 주세요.", status=502)
 
         return {"cancelled": True, "pending": self._pending(chat_id)}
 
@@ -544,7 +542,9 @@ class MiniAppGateway:
         low = settings.PROGRESS_REPORT_MIN_MINUTES
         high = settings.PROGRESS_REPORT_MAX_MINUTES
         if value != 0 and not low <= value <= high:
-            raise MiniAppError(f"알림 간격은 {low}분에서 {high}분 사이여야 해요. 0을 입력하면 꺼져요.")
+            raise MiniAppError(
+                f"알림 간격은 {low}분에서 {high}분 사이여야 해요. 0을 입력하면 꺼져요."
+            )
 
         self.storage.set_progress_report_minutes(chat_id, value)
         return {"notifyMinutes": value}

@@ -179,9 +179,7 @@ def test_a_plan_stored_before_row_positions_existed_still_parses():
         {
             "strategy": "independent",
             "passengerCount": 1,
-            "trains": [
-                {"trainNo": "015", "seatClass": "general", "targets": [target("S1", "5A")]}
-            ],
+            "trains": [{"trainNo": "015", "seatClass": "general", "targets": [target("S1", "5A")]}],
         }
     )
 
@@ -292,9 +290,7 @@ PLAN_JSON = CancellationWaitPlan.from_payload(
     {
         "strategy": "independent",
         "passengerCount": 1,
-        "trains": [
-            {"trainNo": "015", "seatClass": "general", "targets": [target("S1", "5A")]}
-        ],
+        "trains": [{"trainNo": "015", "seatClass": "general", "targets": [target("S1", "5A")]}],
     }
 ).to_json()
 
@@ -378,9 +374,7 @@ def test_worker_reads_the_credentials_line_with_or_without_a_plan(monkeypatch):
 
     monkeypatch.setattr(
         "sys.stdin",
-        io.StringIO(
-            json.dumps({"username": "u", "password": "p", "seat_plan": PLAN_JSON}) + "\n"
-        ),
+        io.StringIO(json.dumps({"username": "u", "password": "p", "seat_plan": PLAN_JSON}) + "\n"),
     )
     assert read() == ("u", "p", PLAN_JSON)
 

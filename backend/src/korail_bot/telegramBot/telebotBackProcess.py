@@ -695,9 +695,7 @@ class BackgroundReservationProcess:
             attempts += 1
             changed = False
             if time.monotonic() >= next_outcome_check:
-                next_outcome_check = (
-                    time.monotonic() + settings.PAYMENT_VERIFY_INTERVAL_SECONDS
-                )
+                next_outcome_check = time.monotonic() + settings.PAYMENT_VERIFY_INTERVAL_SECONDS
                 for item in captured:
                     if item.status != ReservationPaymentStatus.PENDING:
                         continue
@@ -723,8 +721,7 @@ class BackgroundReservationProcess:
             active = [
                 item
                 for item in captured
-                if item.status
-                in (ReservationPaymentStatus.PENDING, ReservationPaymentStatus.PAID)
+                if item.status in (ReservationPaymentStatus.PENDING, ReservationPaymentStatus.PAID)
             ]
             if len(active) >= plan.passenger_count:
                 return

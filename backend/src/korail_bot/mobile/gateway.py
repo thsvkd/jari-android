@@ -99,8 +99,14 @@ class MobileGateway(MiniAppGateway):
                 passenger_count=submission.passenger_count,
             )
         except Exception as exc:
-            logger.error("Could not list current Korail trains for chat_id=%s (%s)", chat_id, type(exc).__name__)
-            raise MiniAppError("열차 목록을 불러오지 못했어요. 잠시 후 다시 조회해 주세요.", 502) from exc
+            logger.error(
+                "Could not list current Korail trains for chat_id=%s (%s)",
+                chat_id,
+                type(exc).__name__,
+            )
+            raise MiniAppError(
+                "열차 목록을 불러오지 못했어요. 잠시 후 다시 조회해 주세요.", 502
+            ) from exc
 
         truncated = len(trains) > self.conversation.MAX_TRAIN_OPTIONS
         trains = trains[: self.conversation.MAX_TRAIN_OPTIONS]
@@ -132,15 +138,17 @@ class MobileGateway(MiniAppGateway):
             response = rail.seat_cars(train, seat_class, count)
             return {
                 "cars": self.seat_maps.describe_cars(response),
-                "layoutReference": bool(
-                    rail.seat_layout_is_reference(train, seat_class, count)
-                ),
+                "layoutReference": bool(rail.seat_layout_is_reference(train, seat_class, count)),
             }
         except ValueError as exc:
             raise MiniAppError(str(exc), 422) from exc
         except Exception as exc:
-            logger.error("Could not read Korail cars for chat_id=%s (%s)", chat_id, type(exc).__name__)
-            raise MiniAppError("호차 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502) from exc
+            logger.error(
+                "Could not read Korail cars for chat_id=%s (%s)", chat_id, type(exc).__name__
+            )
+            raise MiniAppError(
+                "호차 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502
+            ) from exc
 
     def _described_inventory(self, rail, train, car_no, seat_class, count):
         """One car's seats, shaped the way the app caches them per car."""
@@ -165,8 +173,12 @@ class MobileGateway(MiniAppGateway):
         except ValueError as exc:
             raise MiniAppError(str(exc), 422) from exc
         except Exception as exc:
-            logger.error("Could not read Korail seats for chat_id=%s (%s)", chat_id, type(exc).__name__)
-            raise MiniAppError("좌석표를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502) from exc
+            logger.error(
+                "Could not read Korail seats for chat_id=%s (%s)", chat_id, type(exc).__name__
+            )
+            raise MiniAppError(
+                "좌석표를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502
+            ) from exc
 
     @serialized_operation
     def seat_inventories(self, chat_id, train_key, seat_class, passenger_count):
@@ -187,8 +199,12 @@ class MobileGateway(MiniAppGateway):
         except ValueError as exc:
             raise MiniAppError(str(exc), 422) from exc
         except Exception as exc:
-            logger.error("Could not read Korail cars for chat_id=%s (%s)", chat_id, type(exc).__name__)
-            raise MiniAppError("호차 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502) from exc
+            logger.error(
+                "Could not read Korail cars for chat_id=%s (%s)", chat_id, type(exc).__name__
+            )
+            raise MiniAppError(
+                "호차 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502
+            ) from exc
 
         inventories = []
         failed = []
@@ -233,7 +249,9 @@ class MobileGateway(MiniAppGateway):
     @serialized_operation
     def reserve_designated(self, chat_id, payload):
         if self.pending_payments.pending(chat_id):
-            raise MiniAppError("결제를 기다리는 예약이 있어요. 먼저 결제하거나 예약을 취소해 주세요.", 409)
+            raise MiniAppError(
+                "결제를 기다리는 예약이 있어요. 먼저 결제하거나 예약을 취소해 주세요.", 409
+            )
         train_key = payload.get("trainKey")
         seat_class = payload.get("seatClass")
         car_no = payload.get("carNo")
@@ -263,13 +281,21 @@ class MobileGateway(MiniAppGateway):
         except ValueError as exc:
             raise MiniAppError(str(exc), 409) from exc
         except Exception as exc:
-            logger.error("Could not reserve designated seats for chat_id=%s (%s)", chat_id, type(exc).__name__)
-            raise MiniAppError("선택한 좌석을 예약하지 못했어요. 좌석표를 새로 불러와 주세요.", 502) from exc
+            logger.error(
+                "Could not reserve designated seats for chat_id=%s (%s)",
+                chat_id,
+                type(exc).__name__,
+            )
+            raise MiniAppError(
+                "선택한 좌석을 예약하지 못했어요. 좌석표를 새로 불러와 주세요.", 502
+            ) from exc
 
         reservation_id = rail.reservation_id(hold)
         if not reservation_id:
             self._release_failed_hold(rail, hold, chat_id)
-            raise MiniAppError("예약 번호를 확인하지 못했어요. 코레일 예약 목록을 확인해 주세요.", 502)
+            raise MiniAppError(
+                "예약 번호를 확인하지 못했어요. 코레일 예약 목록을 확인해 주세요.", 502
+            )
         expires_at = self._payment_deadline(rail, hold)
         train_info = train_label(train)
         labels = [target.label for target in targets]
@@ -290,7 +316,9 @@ class MobileGateway(MiniAppGateway):
             self.storage.save_payment_status(status)
         except Exception as exc:
             self._release_failed_hold(rail, hold, chat_id)
-            raise MiniAppError("예약 정보를 안전하게 저장하지 못해 좌석을 다시 돌려보냈어요.", 503) from exc
+            raise MiniAppError(
+                "예약 정보를 안전하게 저장하지 못해 좌석을 다시 돌려보냈어요.", 503
+            ) from exc
         try:
             self.telegram.publish(
                 chat_id,
@@ -299,7 +327,11 @@ class MobileGateway(MiniAppGateway):
                 dedupe=f"designated:{chat_id}:{reservation_id}",
             )
         except Exception as exc:
-            logger.error("Could not publish designated-seat notification for chat_id=%s (%s)", chat_id, type(exc).__name__)
+            logger.error(
+                "Could not publish designated-seat notification for chat_id=%s (%s)",
+                chat_id,
+                type(exc).__name__,
+            )
         session = self.storage.get_user_session(chat_id)
         if session:
             session.reset()
@@ -345,7 +377,10 @@ class MobileGateway(MiniAppGateway):
             raise MiniAppError("코레일 계정을 연결해 주세요.", 428)
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(account.korail_id, account.korail_pw):
-            raise MiniAppError("코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요.", 428)
+            raise MiniAppError(
+                "코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요.",
+                428,
+            )
         return rail
 
     @staticmethod
@@ -378,7 +413,10 @@ class MobileGateway(MiniAppGateway):
 
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(credentials.korail_id, credentials.korail_pw):
-            raise MiniAppError("코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요.", 428)
+            raise MiniAppError(
+                "코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요.",
+                428,
+            )
         try:
             registered = rail.request_waitlist(
                 dep_date=submission.dep_date,
