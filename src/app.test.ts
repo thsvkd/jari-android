@@ -82,9 +82,9 @@ describe("concept C application shell", () => {
     const { root } = await mountLive({ bootstrap: async () => state, ...(scenario === "offline" ? { status: async () => { throw new Error("network unavailable"); } } : {}) });
     // A miss is confirmed by a second poll five seconds later before the card calls it offline.
     if (scenario === "offline") await vi.advanceTimersByTimeAsync(35_000);
-    const wanted = { unavailable: "철도 조회를 완료하지 못했어요", stale: "한동안 조회 결과가 없어요", idle: "떠날 채비는 끝났어요", scheduled: "예약한 시각에 검색을 시작해요", pending: "빈자리를 찾았어요", offline: "현재 상태를 확인할 수 없어요" };
+    const wanted = { unavailable: "철도 조회를 완료하지 못했어요", stale: "한동안 조회 결과가 없어요", idle: "대기 중인 항목이 없어요", scheduled: "예약한 시각에 검색을 시작해요", pending: "빈자리를 찾았어요", offline: "현재 상태를 확인할 수 없어요" };
     expect(root.querySelector("[data-search-status]")?.textContent).toContain(wanted[scenario]);
-    if (scenario !== "idle") expect(root.querySelector("[data-search-status]")?.textContent).not.toContain("떠날 채비는 끝났어요");
+    if (scenario !== "idle") expect(root.querySelector("[data-search-status]")?.textContent).not.toContain("대기 중인 항목이 없어요");
   });
 
   it("keeps an unverified running search visible in the static status card", async () => {
@@ -1181,7 +1181,7 @@ it("keeps the running home card to a badge, the route and its two shortcuts", as
   await vi.waitFor(() => expect(cancelSearch).toHaveBeenCalledOnce());
 });
 
-it("shelves the route chips above the running status card, and drops the shelf when there is none", async () => {
+it("keeps the route chips under the heading in every state, and drops the shelf when there is none", async () => {
   const { root } = await mountLive();
   const shelf = root.querySelector<HTMLElement>(".chip-shelf")!;
 
@@ -1227,20 +1227,24 @@ async function mountIdle(overrides: Partial<ReturnType<typeof createDemoApi>> = 
   return mountLive({ bootstrap: async () => state, ...overrides });
 }
 
-it("offers the restored search and the favourites as dated shortcuts on the idle card", async () => {
+it("offers the restored search and the favourites as dated shortcuts above the quiet idle card", async () => {
   const { root } = await mountIdle();
-  const chips = [...root.querySelectorAll<HTMLButtonElement>(".idle-chip")];
+  const shelf = root.querySelector<HTMLElement>(".chip-shelf")!;
+  const chips = [...shelf.querySelectorAll<HTMLButtonElement>(".idle-chip")];
 
-  expect(root.querySelector("[data-search-status]")?.textContent).toContain("최근 구간 바로가기");
   expect(chips.map((chip) => chip.dataset.routeChip)).toEqual(["recent", "demo-home"]);
   expect(chips[0]!.textContent).toContain("최근 · 07:00–12:00");
   expect(chips[1]!.textContent).toContain("주말에 집으로 · 14:00–18:00");
-  expect(root.querySelector(".idle-steps")).toBeNull();
+  const card = root.querySelector("[data-search-status]")!;
+  expect(shelf.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(card.textContent?.trim()).toBe("대기 중인 항목이 없어요");
+  expect(card.querySelector(".empty-mark")).not.toBeNull();
+  expect(card.querySelector(".idle-badge")).toBeNull();
   // The card never repeats the full-width button below it.
   expect(root.querySelectorAll("[data-action='new-journey']")).toHaveLength(1);
 });
 
-it("falls back to the three steps when there is no route to shortcut", async () => {
+it("shows only the quiet card when there is no route to shortcut", async () => {
   const demo = createDemoApi();
   const state = await demo.bootstrap();
   state.running = null;
@@ -1248,8 +1252,8 @@ it("falls back to the three steps when there is no route to shortcut", async () 
   state.favourites = [];
   const { root } = await mountLive({ bootstrap: async () => state });
 
-  expect(root.querySelector(".idle-shelf")).toBeNull();
-  expect([...root.querySelectorAll(".idle-step-label")].map((step) => step.textContent)).toEqual(["여정 정하기", "지켜보기", "알림 받기"]);
+  expect(root.querySelector(".chip-shelf")).toBeNull();
+  expect(root.querySelector("[data-search-status]")?.textContent?.trim()).toBe("대기 중인 항목이 없어요");
 });
 
 it.each([

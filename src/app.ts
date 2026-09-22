@@ -505,8 +505,8 @@ export class JariApp {
         ${!paymentFirst && state.running && radar.lastCheckedLabel ? `<p class="search-last-check">마지막 조회 ${escapeHtml(radar.lastCheckedLabel)}</p>` : ""}
         ${busy ? `<button class="button secondary" data-view="activity">${paymentFirst ? "예약 확인하기" : "검색 상세 보기"}<span>→</span></button>` : ""}
       </section>`;
-    // 검색이 도는 동안에도 다른 구간은 바로 다시 찾을 수 있어야 해서, 상태 카드 위에 칩만 따로 올려요.
-    const chips = busy ? this.homeChips() : [];
+    // 바로가기는 대기 여부와 상관없이 제목 바로 밑 한 자리에만 둬요. 대기 카드는 그 아래에서 조용히 비어 있어요.
+    const chips = this.homeChips();
     return `<div class="home-layout"><div class="home-primary">
       <section class="status-heading">
         <div><p class="eyebrow">검색 현황</p><h1>내 검색 현황</h1></div>
@@ -558,23 +558,16 @@ export class JariApp {
     </section>`;
   }
 
-  // 대기 중 카드 안에서도, 검색 중 상태 카드 위에서도 같은 칩 줄을 써요.
+  // 제목 바로 밑의 바로가기 줄: 최근 검색과 즐겨찾기.
   private renderChipShelf(chips: RouteChip[]): string {
     return `<p class="idle-shelf-label" id="idle-shelf-label">최근 구간 바로가기</p>
       <ul class="idle-shelf" aria-labelledby="idle-shelf-label">${chips.map((chip) => `<li><button type="button" class="idle-chip" data-route-chip="${escapeHtml(chip.key)}" aria-label="${escapeHtml(`${chip.route} ${chip.when} 구간으로 날짜 고르기`)}"><span class="idle-chip-route">${escapeHtml(chip.conditions.src_station)}<i aria-hidden="true">→</i>${escapeHtml(chip.conditions.dst_station)}</span><span class="idle-chip-when">${escapeHtml(chip.when)}</span></button></li>`).join("")}</ul>`;
   }
 
   private renderIdleCard(): string {
-    const chips = this.homeChips();
-    const steps = ["여정 정하기", "지켜보기", "알림 받기"];
-    const shelf = chips.length
-      ? this.renderChipShelf(chips)
-      : `<ol class="idle-steps">${steps.map((label, index) => `<li ${index ? "" : 'aria-current="step"'}><span class="idle-step-num">${index + 1}</span><span class="idle-step-label">${label}</span></li>`).join("")}</ol>`;
-    return `<section class="card search-status-card" data-search-status data-state="idle" aria-label="검색 상태 요약">
-      <p class="idle-badge"><span class="idle-dot" aria-hidden="true"></span>대기 중</p>
-      <h2 class="idle-title">떠날 채비는 끝났어요</h2>
-      <p class="idle-body">구간만 정하면 빈자리가 나는 순간 알려드릴게요.</p>
-      ${shelf}
+    return `<section class="card search-status-card idle-quiet" data-search-status data-state="idle" aria-label="검색 상태 요약">
+      ${activityEmptyMark()}
+      <p class="idle-quiet-text">대기 중인 항목이 없어요</p>
     </section>`;
   }
 
