@@ -1449,3 +1449,19 @@ it("sums a whole-formation seat plan instead of listing every label", async () =
   await vi.waitFor(() => expect(root.querySelector(".activity-trains li")).not.toBeNull());
   expect(root.querySelector(".activity-trains li")?.textContent).toBe("열차 063일반실 13개 호차 · 52석");
 });
+
+it("prints the server's worded seat preference as it is, and hides '지정 없음'", async () => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running!.seatPreference = "창측 3–10번";
+  const { root } = await mountLive({ bootstrap: async () => state });
+  root.querySelector<HTMLButtonElement>("nav [data-view='activity']")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".activity-conditions")).not.toBeNull());
+  expect(root.querySelector(".activity-conditions")?.textContent).toContain("좌석 지정창측 3–10번");
+
+  state.running!.seatPreference = "지정 없음";
+  const plain = await mountLive({ bootstrap: async () => state });
+  plain.root.querySelector<HTMLButtonElement>("nav [data-view='activity']")!.click();
+  await vi.waitFor(() => expect(plain.root.querySelector(".activity-conditions")).not.toBeNull());
+  expect(plain.root.querySelector(".activity-conditions")?.textContent).not.toContain("좌석 지정");
+});

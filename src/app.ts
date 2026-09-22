@@ -1409,12 +1409,16 @@ export class JariApp {
         })
       : running.selectedTrains.map((no) => `<li><b>${escapeHtml(no)}</b><span>좌석 무관</span></li>`);
     const trainCount = planned.length || running.selectedTrains.length;
+    // The server already words the preference ("창측 3–10번"); only the demo's raw "A,D:3-10" still needs describing.
+    const rawPreference = running.seatPreference ?? "";
+    const worded = /^[A-D,]*(:\d*-?\d*)?$/.test(rawPreference) ? this.describeSeatPreference(rawPreference) : rawPreference;
+    const seatPreference = worded === "지정 없음" ? "" : worded;
     return `<dl class="activity-conditions">
       <dt>출발</dt><dd>${escapeHtml(formatWindow(running))}</dd>
       <dt>열차</dt><dd>${escapeHtml(running.trainTypeShow)} · ${trainCount ? `${trainCount}편 선택` : "시간대 전체"}</dd>
       ${trainRows.length ? `<dd class="activity-trains"><ul>${trainRows.join("")}</ul></dd>` : ""}
       <dt>좌석</dt><dd>${escapeHtml(seatLabels[running.specialInfoShow] ?? running.specialInfoShow)} · ${running.passengerCount}명${running.passengerCount > 1 ? ` · ${running.seatStrategy === "consecutive" ? "연속 좌석" : "랜덤 배치"}` : ""}</dd>
-      ${running.seatPreference ? `<dt>좌석 지정</dt><dd>${escapeHtml(this.describeSeatPreference(running.seatPreference))}</dd>` : ""}
+      ${seatPreference ? `<dt>좌석 지정</dt><dd>${escapeHtml(seatPreference)}</dd>` : ""}
     </dl>`;
   }
 
