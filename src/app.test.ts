@@ -1218,16 +1218,6 @@ it("offers the restored search and the favourites as dated shortcuts on the idle
   expect(root.querySelectorAll("[data-action='new-journey']")).toHaveLength(1);
 });
 
-it("drops a favourite that repeats the restored route and window", async () => {
-  const demo = createDemoApi();
-  const state = await demo.bootstrap();
-  state.running = null;
-  state.favourites[0]!.conditions = { ...state.draft!, dep_date: "" };
-  const { root } = await mountLive({ bootstrap: async () => state });
-
-  expect([...root.querySelectorAll<HTMLButtonElement>(".idle-chip")].map((chip) => chip.dataset.routeChip)).toEqual(["recent"]);
-});
-
 it("falls back to the three steps when there is no route to shortcut", async () => {
   const demo = createDemoApi();
   const state = await demo.bootstrap();
@@ -1385,4 +1375,17 @@ it("lists the running search's trains and seats on the activity screen", async (
   expect(root.querySelector(".activity-conditions")?.textContent).toContain("KTX 계열만 · 2편 선택");
   expect(root.querySelector(".activity-card .notice")).toBeNull();
   expect(app).toBeTruthy();
+});
+
+it("labels a chip with the favourite's name when it matches the restored search", async () => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running = null;
+  state.favourites = [{ id: "fav-same", name: "저녁에 부산", route: "서울 → 부산", window: "07:00–12:00", conditions: { ...state.draft!, dep_date: "" } }];
+  const { root } = await mountLive({ bootstrap: async () => state });
+
+  const chips = [...root.querySelectorAll("[data-route-chip]")];
+  expect(chips).toHaveLength(1);
+  expect(chips[0]!.getAttribute("data-route-chip")).toBe("fav-same");
+  expect(chips[0]!.textContent).toContain("저녁에 부산");
 });

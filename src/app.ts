@@ -520,13 +520,20 @@ export class JariApp {
   private homeChips(): RouteChip[] {
     const state = this.state!;
     const chips: RouteChip[] = [];
-    const seen = new Set<string>();
+    const seen = new Map<string, RouteChip>();
     const add = (key: string, when: string, conditions: Conditions) => {
       const route = `${conditions.src_station} → ${conditions.dst_station}`;
       const mark = `${route}|${formatTimeWindow(conditions)}`;
-      if (!conditions.src_station || !conditions.dst_station || seen.has(mark)) return;
-      seen.add(mark);
-      chips.push({ key, route, when, conditions });
+      if (!conditions.src_station || !conditions.dst_station) return;
+      const twin = seen.get(mark);
+      if (twin) {
+        // The favourite's own name says more than "최근"; keep the earlier chip's place, take the later label.
+        if (twin.key === "recent") Object.assign(twin, { key, when });
+        return;
+      }
+      const chip = { key, route, when, conditions };
+      seen.set(mark, chip);
+      chips.push(chip);
     };
     if (state.draft) add("recent", `최근 · ${formatTimeWindow(state.draft)}`, state.draft);
     for (const favourite of state.favourites.slice(0, 3)) {
