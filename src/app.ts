@@ -1213,6 +1213,7 @@ export class JariApp {
     const conditions = this.conditions ?? buildConditions(this.draft);
     const capabilities = this.state!.capabilities;
     const waitlist = conditions.waitlist;
+    const seatSummary = this.describeConfirmSeats(conditions);
     return `${this.renderSubhead("마지막 확인", waitlist ? "이 열차의 예약 대기를 신청할게요" : "이 조건으로 찾아드릴게요")}
       <section class="summary-card">
         <div class="route-hero"><span>${escapeHtml(conditions.src_station)}</span><i>→</i><span>${escapeHtml(conditions.dst_station)}</span></div>
@@ -1221,7 +1222,7 @@ export class JariApp {
           <dt>열차</dt><dd>${conditions.train_type === "1" ? "KTX 계열만" : "모든 열차"} · ${this.selectedTrains.length ? `${this.selectedTrains.length}편 선택${this.describePlannedTrains(conditions.seat_plan)}` : "시간대 전체"}</dd>
           <dt>좌석</dt><dd>${escapeHtml(SEAT_OPTIONS[conditions.seat_option])} · ${conditions.passenger_count}명</dd>
           ${conditions.passenger_count > 1 ? `<dt>배치</dt><dd>${conditions.seat_strategy === "1" ? "연속 좌석" : "랜덤 배치"}</dd>` : ""}
-          <dt>좌석 지정</dt><dd>${escapeHtml(this.describeSeatPreference(conditions.seat_preference))}</dd>
+          ${seatSummary ? `<dt>좌석 지정</dt><dd>${escapeHtml(seatSummary)}</dd>` : ""}
           ${waitlist ? "<dt>신청 방식</dt><dd>코레일 예약 대기</dd>" : ""}
         </dl>
       </section>
@@ -1420,6 +1421,27 @@ export class JariApp {
       <dt>좌석</dt><dd>${escapeHtml(seatLabels[running.specialInfoShow] ?? running.specialInfoShow)} · ${running.passengerCount}명${running.passengerCount > 1 ? ` · ${running.seatStrategy === "consecutive" ? "연속 좌석" : "랜덤 배치"}` : ""}</dd>
       ${seatPreference ? `<dt>좌석 지정</dt><dd>${escapeHtml(seatPreference)}</dd>` : ""}
     </dl>`;
+  }
+
+  /**
+   * 확인 화면의 "좌석 지정" 한 줄. 좌석표에서 고른 계획이 있으면 그 계획을 말하고, 계획이 열차만 담고 있으면 "좌석 무관",
+   * 둘 다 아니면 조건의 선호를 말해요. 선호도 없으면 빈 문자열이라 줄 자체가 사라져요.
+   */
+  private describeConfirmSeats(conditions: Conditions): string {
+    const planned = conditions.seat_plan?.trains.filter((train) => train.targets.length) ?? [];
+    if (planned.length) {
+      const seats = planned.flatMap((train) => train.targets);
+      // renderRunningConditions와 같은 규칙: 여덟 자리를 넘으면 목록 대신 석수로 요약해요.
+      if (seats.length > 8) {
+        return `${planned.length}편 · ${new Set(seats.map((seat) => seat.carNo)).size}개 호차 · ${seats.length}석`;
+      }
+      const byCar = new Map<number, string[]>();
+      for (const seat of seats) byCar.set(seat.carNo, [...(byCar.get(seat.carNo) ?? []), seat.label]);
+      return [...byCar].map(([carNo, labels]) => `${carNo}호차 ${labels.join("·")}`).join(", ");
+    }
+    if (conditions.seat_plan) return "좌석 무관";
+    const preference = this.describeSeatPreference(conditions.seat_preference);
+    return preference === "지정 없음" ? "" : preference;
   }
 
   private describeSeatPreference(encoded: string): string {

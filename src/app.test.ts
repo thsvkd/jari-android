@@ -1469,6 +1469,11 @@ it("prints the server's worded seat preference as it is, and hides '지정 없�
   expect(plain.root.querySelector(".activity-conditions")?.textContent).not.toContain("좌석 지정");
 });
 
+const seatTarget = (carNo: number, label: string): SeatTarget => ({
+  carNo, seatNo: `${carNo}-${label}`, label, row: Number(label.slice(0, -1)), column: label.slice(-1),
+  direction: "", floor: "", adjacencyGroup: "", position: 0, rowPosition: 0,
+});
+
 it("asks before 바로 예약 starts a real reservation, and does nothing when dismissed", async () => {
   const search = vi.fn().mockResolvedValue({ started: true });
   const { app, root } = await mountLive({ search });
@@ -1517,4 +1522,35 @@ it("asks before deleting a favourite, naming it, and keeps it when dismissed", a
   root.querySelector<HTMLButtonElement>("[data-delete-favourite]")!.click();
   root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
   await vi.waitFor(() => expect(deleteFavourite).toHaveBeenCalledOnce());
+});
+
+describe("확인 화면의 좌석 지정", () => {
+  const withPlan = async (trains: { trainNo: string; seatClass: "general"; targets: SeatTarget[] }[] | null) => {
+    const demo = createDemoApi();
+    const state = await demo.bootstrap();
+    state.draft!.seat_preference = "";
+    state.draft!.seat_plan = trains ? { strategy: "independent", passengerCount: 1, trains } : undefined;
+    const { app, root } = await mountLive({ bootstrap: async () => state });
+    app.navigate("confirm");
+    return root.querySelector<HTMLElement>(".summary-card")!;
+  };
+
+  it("names the picked seats rather than the unset preference", async () => {
+    const summary = await withPlan([{ trainNo: "015", seatClass: "general", targets: [seatTarget(3, "5A"), seatTarget(3, "5B")] }]);
+    expect(summary.textContent).toContain("좌석 지정3호차 5A·5B");
+    expect(summary.textContent).not.toContain("지정 없음");
+  });
+
+  it("sums a whole-formation plan instead of listing every label", async () => {
+    const summary = await withPlan([{
+      trainNo: "015", seatClass: "general",
+      targets: Array.from({ length: 13 }, (_, car) => ["1A", "1D", "2A", "2D"].map((label) => seatTarget(car + 1, label))).flat(),
+    }]);
+    expect(summary.textContent).toContain("좌석 지정1편 · 13개 호차 · 52석");
+  });
+
+  it("says 좌석 무관 for a plan of whole trains, and drops the row with no plan at all", async () => {
+    expect((await withPlan([{ trainNo: "015", seatClass: "general", targets: [] }])).textContent).toContain("좌석 지정좌석 무관");
+    expect((await withPlan(null)).textContent).not.toContain("좌석 지정");
+  });
 });
