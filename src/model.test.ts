@@ -137,6 +137,14 @@ describe("honest radar state", () => {
     expect(view.lastCheckedLabel).toBeNull();
   });
 
+  it("trusts a healthy report that has no check time yet", () => {
+    const view = deriveRadarView({ running: { ...running, health: "healthy" }, connection: "online" });
+
+    expect(view.kind).toBe("healthy");
+    expect(view.animate).toBe(true);
+    expect(view.lastCheckedLabel).toBeNull();
+  });
+
   it("animates only a fresh server-reported successful check", () => {
     const view = deriveRadarView({
       running: { ...running, health: "healthy", lastCheckedAt: "2026-09-12T00:01:30Z" },

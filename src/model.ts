@@ -173,10 +173,8 @@ export function deriveRadarView(input: {
       lastCheckedLabel: checkedLabel,
     };
   }
-  if (
-    Number.isFinite(checkedAt) &&
-    (running.health === "healthy" || running.health === "running")
-  ) {
+  // 서버가 상태를 "정상"이라고 말했으면 조회 시각이 아직 없어도 정상으로 봐요. 시각은 그 뒤에 따라와요.
+  if (running.health === "healthy" || running.health === "running") {
     return {
       kind: "healthy",
       animate: true,
