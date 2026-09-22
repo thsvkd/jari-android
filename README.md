@@ -86,6 +86,26 @@ uv run --frozen python ../scripts/smoke-backend.py
 원본 텔레그램 UI와 배포 스크립트 전용 테스트는 이 저장소에 포함하지 않습니다.
 실제 예약/푸시 검증과 Docker 실행 검증은 별도이며, 미검증 항목을 완료로 취급하지 않습니다.
 
+### 원격 배포
+
+`scripts/deploy-backend.sh`는 SSH로 접근 가능한 아무 Docker 호스트에 `backend/`를
+배포합니다. 호스트별 정보는 하드코딩하지 않고 플래그 또는 환경 변수로 받습니다.
+
+```bash
+./scripts/deploy-backend.sh \
+  --host pi@example --root /srv/app \
+  --compose-file compose.yaml --compose-file compose.overlay.example.yaml \
+  --after "docker compose -f compose.overlay.example.yaml up -d proxy" \
+  --dry-run   # 실제 호스트 없이 계획만 출력. 실행 전 항상 먼저 확인합니다.
+```
+
+환경 변수로도 동일하게 지정할 수 있습니다(`DEPLOY_HOST`, `DEPLOY_ROOT`,
+`DEPLOY_REF`, `DEPLOY_COMPOSE_FILES`(쉼표 구분), `DEPLOY_SERVICE`, `DEPLOY_WORKER_PATTERN`).
+게이트웨이·프록시 등록처럼 호스트별 후속 작업은 `--after "<원격 명령>"`으로 넘깁니다.
+공백이 든 값(`--after`, `--root` 등)도 원격에서 그대로 한 인자로 전달됩니다.
+`scripts/test-deploy-backend.sh`가 문법과 `--dry-run` 출력 계획을 회귀 검증합니다
+(가짜 `ssh`로 실제 접속이 일어나지 않는지도 확인).
+
 ## Android packaging details
 
 The release WebView only serves the Vite bundle copied from `dist`. It has no

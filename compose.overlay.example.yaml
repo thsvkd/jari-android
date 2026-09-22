@@ -1,0 +1,21 @@
+# 호스트별 오버레이 예시. 컨테이너 이름·호스트 포트·외부 프록시 네트워크·
+# 허용 오리진(origin)을 여기서 덮어쓴다.
+# 실제 호스트에서는 자기 오버레이 파일을 만들어 --compose-file 로 넘긴다.
+# 아래 https://app.example.com 은 자리표시자다. 실제 앱 오리진으로 바꾼다.
+services:
+  api:
+    container_name: jari-mobile-api
+    ports: !override
+      - "127.0.0.1:8082:8081"
+    environment:
+      MOBILE_ORIGINS: https://localhost,capacitor://localhost,https://app.example.com,https://app.example.com:4443
+    networks:
+      - default
+      - edge
+  redis:
+    container_name: jari-mobile-redis
+
+networks:
+  edge:
+    external: true
+    name: edge
