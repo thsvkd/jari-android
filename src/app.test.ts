@@ -1241,9 +1241,10 @@ it("falls back to the three steps when there is no route to shortcut", async () 
 });
 
 it.each([
-  ["1000", "2026-09-14"],
+  ["1100", "2026-09-14"],
+  ["1000", "2026-09-15"],
   ["0900", "2026-09-15"],
-])("preselects the chip's date as today, or tomorrow once its window has passed (%s)", async (maxDepTime, expected) => {
+])("preselects the chip's date as today, or tomorrow once its window has (nearly) passed (%s)", async (maxDepTime, expected) => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-14T09:30:00+09:00"));
   const demo = createDemoApi();

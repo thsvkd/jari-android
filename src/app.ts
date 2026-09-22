@@ -1558,10 +1558,11 @@ export class JariApp {
     });
   }
 
-  // Today, or tomorrow when the chip's window has already gone by - the date the user would pick anyway.
+  // Today, or tomorrow when the chip's window has (nearly) gone by - the date the user would pick anyway. "Nearly":
+  // at 23:47 a window ending "마지막 열차" (2400) is still open on paper, but no train is left to find.
   private chipDefaultDate(conditions: Conditions, now = new Date()): string {
     const endMinutes = Number(conditions.max_dep_time.slice(0, 2)) * 60 + Number(conditions.max_dep_time.slice(2, 4));
-    const passed = now.getHours() * 60 + now.getMinutes() >= endMinutes;
+    const passed = now.getHours() * 60 + now.getMinutes() >= endMinutes - 60;
     return isoDate(new Date(now.getTime() + (passed ? 86_400_000 : 0)));
   }
 
