@@ -508,7 +508,10 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .inline-spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid color-mix(in srgb, var(--accent) 24%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: spin .75s linear infinite; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; margin: -1px; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.toast { position: fixed; right: 20px; bottom: calc(88px + env(safe-area-inset-bottom)); left: 20px; z-index: 90; max-width: 470px; margin: auto; padding: 13px 16px; border-radius: 13px; background: var(--text); color: var(--bg); box-shadow: 0 12px 34px rgb(0 0 0 / 25%); font-size: 11px; text-align: center; }
+/* 상단바 바로 밑에 떠요. 화면 아래는 주요 버튼의 자리라 토스트가 덮으면 안 돼요.
+   상단바(72px + 안전영역) 아래 10px에서 시작하고, 앞선 배너와 넓은 화면의 여백은 그만큼 더 내려요. */
+.toast { position: fixed; right: 20px; top: calc(82px + env(safe-area-inset-top) + var(--toast-shell-gap, 0px) + var(--toast-banner, 0px)); left: 20px; z-index: 90; max-width: 470px; margin: auto; padding: 13px 16px; border-radius: 13px; background: var(--text); color: var(--bg); box-shadow: 0 12px 34px rgb(0 0 0 / 25%); font-size: 11px; text-align: center; }
+:is(.demo-banner, .offline-banner) ~ .toast { --toast-banner: 30px; }
 .toast:empty { display: none; }
 .launch, .fatal { min-height: 100vh; display: grid; place-items: center; align-content: center; gap: 13px; padding: 30px; text-align: center; }
 .launch span, .fatal > span { display: grid; place-items: center; width: 68px; height: 68px; border-radius: 22px; background: var(--accent); color: #fff; font-size: 29px; font-weight: 900; letter-spacing: -3px; }
@@ -520,7 +523,7 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
   body { padding: 20px 0; }
   .app-shell, .auth-shell { min-height: calc(100vh - 40px); border-radius: 32px; }
   .bottom-nav { bottom: 20px; border-radius: 0 0 32px 32px; }
-  .toast { bottom: 110px; }
+  :root { --toast-shell-gap: 20px; } /* 셸이 body 안쪽 20px에서 시작해요 */
 }
 
 @media (max-width: 350px) {
@@ -691,7 +694,7 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
   .auth-card h1 { font-size: 31px; }
   .auth-card .form-stack { display: grid; gap: 14px; }
   .sticky-action { bottom: calc(66px + env(safe-area-inset-bottom)); }
-  .toast { right: 18px; bottom: calc(72px + env(safe-area-inset-bottom)); left: 18px; }
+  .toast { right: 18px; left: 18px; }
 }
 
 @media (orientation: portrait) and (max-width: 370px) {
