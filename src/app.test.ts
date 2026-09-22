@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TeumApp } from "./app";
 import { ApiError } from "./api";
 import { createDemoApi } from "./demo";
-import type { SeatInventory, SeatMapSeat, StatusResult } from "./types";
+import type { SeatInventory, SeatMapSeat, SeatTarget, StatusResult } from "./types";
 
 const mounted: TeumApp[] = [];
 
@@ -276,6 +276,91 @@ describe("concept C application shell", () => {
     expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value).toBe("10:40");
     expect(root.querySelector<HTMLInputElement>("[name='max_dep_time']")!.value).toBe("12:40");
     expect(root.querySelector(".stepper output")?.textContent).toBe("1명");
+  });
+
+  it("restores a cancellation-wait seat plan carried in the bootstrap draft", async () => {
+    const demo = createDemoApi();
+    const state = await demo.bootstrap();
+    const targets: SeatTarget[] = [{
+      carNo: 3, seatNo: "demo-1-A", label: "1A", row: 1, column: "A",
+      direction: "1", floor: "", adjacencyGroup: "1:left", position: 1, rowPosition: 1,
+    }];
+    state.draft = {
+      ...state.draft!,
+      trains: ["015"],
+      seat_plan: { strategy: "independent", passengerCount: 1, trains: [{ trainNo: "015", seatClass: "general", targets }] },
+    };
+    const { app, root } = await mountLive({ bootstrap: async () => state });
+
+    expect(app).toMatchObject({ cancellationTargets: [{ trainNo: "015", seatClass: "general", targets }] });
+
+    app.navigate("journey");
+    root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+    await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
+    expect(root.querySelector("[data-train-no='015'][data-seat-class='general'] em")?.textContent).toBe("선택 완료 · 1석");
+    expect(root.querySelector("[data-action='start-cancellation-wait']")).not.toBeNull();
+  });
+
+  it("drops a restored cancellation-wait target once a re-search no longer lists its train", async () => {
+    const demo = createDemoApi();
+    const state = await demo.bootstrap();
+    const targets: SeatTarget[] = [{
+      carNo: 3, seatNo: "demo-1-A", label: "1A", row: 1, column: "A",
+      direction: "1", floor: "", adjacencyGroup: "1:left", position: 1, rowPosition: 1,
+    }];
+    state.draft = {
+      ...state.draft!,
+      trains: ["015"],
+      seat_plan: { strategy: "independent", passengerCount: 1, trains: [{ trainNo: "015", seatClass: "general", targets }] },
+    };
+    const trains = vi.fn()
+      .mockResolvedValueOnce({
+        trains: [{ no: "015", label: "07:27→10:12 KTX", soldout: true, waitlistEligible: true, generalAvailable: false, specialAvailable: false }],
+        truncated: false, passengerCount: 1,
+      })
+      .mockResolvedValueOnce({
+        trains: [{ no: "019", label: "08:03→10:48 KTX", soldout: true, waitlistEligible: false, generalAvailable: false, specialAvailable: false }],
+        truncated: false, passengerCount: 1,
+      });
+    const { app, root } = await mountLive({ bootstrap: async () => state, trains });
+
+    // The re-search still lists train 015, so the restored target and start button survive.
+    app.navigate("journey");
+    root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+    await vi.waitFor(() => expect(root.querySelector("[data-train-no='015']")).not.toBeNull());
+    expect(root.querySelector("[data-action='start-cancellation-wait']")).not.toBeNull();
+
+    // A different route/date drops 015 from the results, so the stale target (and its start button) must go too.
+    app.navigate("journey");
+    root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+    await vi.waitFor(() => expect(root.querySelector("[data-train-no='019']")).not.toBeNull());
+    expect(root.querySelector("[data-train-no='015']")).toBeNull();
+    expect(root.querySelector("[data-action='start-cancellation-wait']")).toBeNull();
+  });
+
+  it("fills in v/action when a restored server draft predates those fields", async () => {
+    const demo = createDemoApi();
+    const state = await demo.bootstrap();
+    const targets: SeatTarget[] = [{
+      carNo: 3, seatNo: "demo-1-A", label: "1A", row: 1, column: "A",
+      direction: "1", floor: "", adjacencyGroup: "1:left", position: 1, rowPosition: 1,
+    }];
+    const { v: _v, action: _action, ...draftWithoutAppFields } = state.draft!;
+    state.draft = {
+      ...draftWithoutAppFields,
+      trains: ["015"],
+      seat_plan: { strategy: "independent", passengerCount: 1, trains: [{ trainNo: "015", seatClass: "general", targets }] },
+    } as typeof state.draft;
+    const search = vi.fn().mockResolvedValue({ started: true, running: null });
+    const { app, root } = await mountLive({ bootstrap: async () => state, search });
+
+    app.navigate("journey");
+    root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+    await vi.waitFor(() => expect(root.querySelector("[data-action='start-cancellation-wait']")).not.toBeNull());
+    root.querySelector<HTMLButtonElement>("[data-action='start-cancellation-wait']")!.click();
+
+    await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
+    expect(search.mock.calls[0]![0].conditions).toMatchObject({ v: 1, action: "prepare_search" });
   });
 
   it("offers the real access-request action when the server requires approval", async () => {
@@ -658,19 +743,22 @@ it("starts cancellation waiting with the selected physical-seat range", async ()
       },
     },
   });
-  const targets = search.mock.calls[0]![0].conditions.seat_plan.trains[0].targets;
+  const sentTrain = search.mock.calls[0]![0].conditions.seat_plan.trains[0];
+  const targets = sentTrain.targets;
   expect(targets.map((seat: { label: string }) => seat.label)).toEqual(["3A", "3D"]);
   // Only the fields SeatTarget.from_payload reads; salePossible/familyLabel would just bloat a big plan.
   expect(Object.keys(targets[0]).sort()).toEqual(
-    ["adjacencyGroup", "carNo", "column", "direction", "floor", "label", "position", "row", "seatNo"].sort(),
+    ["adjacencyGroup", "carNo", "column", "direction", "floor", "label", "position", "row", "rowPosition", "seatNo"].sort(),
   );
+  // trainKey is never read by the server; keeping it in the plan just bloats the payload.
+  expect(Object.keys(sentTrain).sort()).toEqual(["seatClass", "targets", "trainNo"].sort());
 });
 
 function makeCarInventory(carNo: number): SeatInventory {
   const seat = (row: number, column: "A" | "B"): SeatMapSeat => ({
     carNo, seatNo: `${carNo}-${row}-${column}`, label: `${row}${column}`,
     salePossible: true, direction: "1", floor: "", row, column,
-    adjacencyGroup: `${carNo}:${row}`, position: column === "A" ? 1 : 2, familyLabel: "",
+    adjacencyGroup: `${carNo}:${row}`, position: column === "A" ? 1 : 2, rowPosition: column === "A" ? 1 : 2, familyLabel: "",
   });
   return {
     carNo, layoutType: 2, arrangementCode: "4", remainingCount: 4, totalCount: 4,
@@ -795,7 +883,7 @@ it("keeps the selection untouched and shows the server message when the batch re
 it("shows numeric seat labels and hides synthetic column chips for a 무궁화 car", async () => {
   const numericSeat = (column: "A" | "B", label: string): SeatMapSeat => ({
     carNo: 6, seatNo: `demo-${label}`, label, salePossible: true, direction: "1", floor: "",
-    row: 1, column, adjacencyGroup: `1:${column}`, position: column === "A" ? 1 : 2, familyLabel: "",
+    row: 1, column, adjacencyGroup: `1:${column}`, position: column === "A" ? 1 : 2, rowPosition: column === "A" ? 1 : 2, familyLabel: "",
   });
   const numericInventory: SeatInventory = {
     carNo: 6, layoutType: 2, arrangementCode: "4", remainingCount: 2, totalCount: 2,

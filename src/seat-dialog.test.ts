@@ -43,7 +43,7 @@ function makeCarInventory(carNo: number, salePossible = true, rows = 4): SeatInv
   const seat = (row: number, column: "A" | "B"): SeatMapSeat => ({
     carNo, seatNo: `${carNo}-${row}-${column}`, label: `${row}${column}`,
     salePossible, direction: "1", floor: "", row, column,
-    adjacencyGroup: `${carNo}:${row}`, position: column === "A" ? 1 : 2, familyLabel: "",
+    adjacencyGroup: `${carNo}:${row}`, position: column === "A" ? 1 : 2, rowPosition: column === "A" ? 1 : 2, familyLabel: "",
   });
   const seats = Array.from({ length: rows }, (_, index) => index + 1).flatMap((row) => [seat(row, "A"), seat(row, "B")]);
   return { carNo, layoutType: 2, arrangementCode: "4", remainingCount: seats.length, totalCount: seats.length, seats };
@@ -89,7 +89,7 @@ describe("seat dialog selectability and window detection", () => {
     const seat = (row: number, column: "A" | "B" | "C" | "D", group: "left" | "right", position: number): SeatMapSeat => ({
       carNo: 3, seatNo: `${row}-${column}`, label: `${row}${column}`,
       salePossible: true, direction: "1", floor: "", row, column,
-      adjacencyGroup: `${row}:${group}`, position, familyLabel: "",
+      adjacencyGroup: `${row}:${group}`, position, rowPosition: "ABCD".indexOf(column) + 1, familyLabel: "",
     });
     // Row 1 is the full 4-across layout; row 2 is a short row next to a door, so its last seat (B) sits by the aisle, not a window.
     const inventory: SeatInventory = {

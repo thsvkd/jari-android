@@ -9,7 +9,7 @@ import {
 } from "./seat-map";
 import type { SeatMapSeat } from "./types";
 
-const seat = (row: number, column: string, group: string, position: number, familyLabel = ""): SeatMapSeat => ({
+const seat = (row: number, column: string, group: string, position: number, familyLabel = "", rowPosition = 0): SeatMapSeat => ({
   carNo: 3,
   seatNo: `${row}-${column}`,
   label: `${row}${column}`,
@@ -20,6 +20,7 @@ const seat = (row: number, column: string, group: string, position: number, fami
   column,
   adjacencyGroup: `${row}:${group}`,
   position,
+  rowPosition,
   familyLabel,
 });
 
@@ -67,6 +68,24 @@ describe("dynamic Korail seat layouts", () => {
     expect(consecutiveGroups(seats, 2).map((group) => group.map((item) => item.label))).toEqual([
       ["1A", "1B"], ["1C", "1D"], ["2A", "2B"], ["2C", "2D"],
     ]);
+    // No rowPosition on this fixture, so 3+ finds no row-wide blocks either (only 2 seats per adjacencyGroup side).
     expect(consecutiveGroups(seats, 3)).toEqual([]);
+  });
+
+  it("also matches row-wide blocks across the aisle for 3+ passengers", () => {
+    const labels = (groups: SeatMapSeat[][]) => groups.map((group) => group.map((item) => item.label));
+    const threeAcross = [
+      seat(1, "A", "left", 1, "", 1), seat(1, "B", "left", 2, "", 2), seat(1, "C", "right", 1, "", 3),
+    ];
+    expect(labels(consecutiveGroups(threeAcross, 3))).toEqual([["1A", "1B", "1C"]]);
+
+    const spansRows = [
+      seat(1, "A", "left", 1, "", 1), seat(1, "B", "left", 2, "", 2),
+      seat(2, "A", "left", 1, "", 1),
+    ];
+    expect(consecutiveGroups(spansRows, 3)).toEqual([]);
+
+    const twoAcrossAisle = [seat(1, "B", "left", 2, "", 2), seat(1, "C", "right", 1, "", 3)];
+    expect(consecutiveGroups(twoAcrossAisle, 2)).toEqual([]);
   });
 });

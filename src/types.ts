@@ -158,6 +158,9 @@ export interface SeatMapSeat {
   adjacencyGroup: string;
   position: number;
   familyLabel: string;
+  // Left-to-right order among the seats returned for that row (1-based); 0 when the row/side is unknown.
+  // Not a fixed A=1..D=4 map — a 1+2 special car's A/C/D seats come back as 1/2/3. Lets consecutiveGroups match 3+ passengers across an aisle.
+  rowPosition: number;
 }
 
 export interface SeatInventory {
@@ -189,6 +192,8 @@ export interface SeatTarget {
   floor: string;
   adjacencyGroup: string;
   position: number;
+  // See SeatMapSeat.rowPosition: left-to-right order within the row's returned seats, not a fixed A=1..D=4 map.
+  rowPosition: number;
 }
 
 export interface TrainSeatTargets {

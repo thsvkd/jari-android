@@ -289,6 +289,7 @@ export class TeumApp {
         this.draft = conditionsToDraft(state.draft);
         this.conditions = state.draft;
         this.selectedTrains = state.draft?.trains?.map(String) ?? [];
+        this.cancellationTargets = state.draft?.seat_plan?.trains ?? [];
       }
       await this.options.onBootstrap?.(state);
       if (generation !== this.generation) return;
@@ -903,7 +904,9 @@ export class TeumApp {
         return;
       }
       if (passengerCount > 1 && this.draft.seatStrategy === "1" && !consecutiveGroups(dialog.selected, passengerCount).length) {
-        dialog.error = "서로 붙어 있는 연속 좌석을 선택해 주세요.";
+        dialog.error = passengerCount >= 3
+          ? "같은 줄에서 서로 붙어 있는 좌석을 선택해 주세요. 통로 건너편이어도 괜찮아요."
+          : "서로 붙어 있는 연속 좌석을 선택해 주세요.";
         this.refreshSeatDialog(true);
         return;
       }
@@ -947,14 +950,16 @@ export class TeumApp {
       return;
     }
     if (passengerCount > 1 && this.draft.seatStrategy === "1" && !consecutiveGroups(dialog.selected, passengerCount).length) {
-      dialog.error = `${passengerCount}명이 붙어 앉을 수 있는 연속 좌석 범위를 선택해 주세요.`;
+      dialog.error = passengerCount >= 3
+        ? "같은 줄에서 서로 붙어 있는 좌석 범위를 선택해 주세요. 통로 건너편이어도 괜찮아요."
+        : `${passengerCount}명이 붙어 앉을 수 있는 연속 좌석 범위를 선택해 주세요.`;
       this.refreshSeatDialog(true);
       return;
     }
     const next = this.cancellationTargets.filter((target) => !(target.trainNo === dialog.train.no && target.seatClass === dialog.seatClass));
     // Only the fields the server reads; a full SeatMapSeat per seat bloats large multi-car plans.
-    const targets: SeatTarget[] = dialog.selected.map(({ carNo, seatNo, label, row, column, direction, floor, adjacencyGroup, position }) => (
-      { carNo, seatNo, label, row, column, direction, floor, adjacencyGroup, position }
+    const targets: SeatTarget[] = dialog.selected.map(({ carNo, seatNo, label, row, column, direction, floor, adjacencyGroup, position, rowPosition }) => (
+      { carNo, seatNo, label, row, column, direction, floor, adjacencyGroup, position, rowPosition }
     ));
     next.push({ trainNo: dialog.train.no, trainKey: dialog.train.trainKey, seatClass: dialog.seatClass, targets });
     this.cancellationTargets = next;
@@ -965,12 +970,14 @@ export class TeumApp {
   }
 
   private async startCancellationWait(): Promise<void> {
-    const conditions = this.conditions ?? buildConditions(this.draft);
+    // A draft restored from the server may predate v/action; buildConditions always fills them, this.conditions overrides the rest.
+    const conditions = { ...buildConditions(this.draft), ...this.conditions };
     const selectedTrains = [...new Set(this.cancellationTargets.map((target) => target.trainNo))];
     const seatPlan: CancellationWaitPlan = {
       strategy: this.draft.passengerCount > 1 && this.draft.seatStrategy === "1" ? "consecutive" : "independent",
       passengerCount: this.draft.passengerCount,
-      trains: this.cancellationTargets,
+      // The server never reads trainKey; drop it so the payload doesn't carry it.
+      trains: this.cancellationTargets.map(({ trainNo, seatClass, targets }) => ({ trainNo, seatClass, targets })),
     };
     this.conditions = { ...conditions, waitlist: false, trains: selectedTrains, seat_plan: seatPlan };
     this.selectedTrains = selectedTrains;
@@ -1231,12 +1238,17 @@ export class TeumApp {
       this.selectedTrains = this.selectedTrains.filter((number) =>
         result.trains.some((train) => train.no === number),
       );
+      // Drop seat-wait targets for trains a re-search (new route/date) no longer lists, or the start button would poll a train that's gone.
+      this.cancellationTargets = this.cancellationTargets.filter((target) =>
+        result.trains.some((train) => train.no === target.trainNo),
+      );
       this.navigate("trains");
     });
   }
 
   private async startNow(): Promise<void> {
-    const conditions = this.conditions ?? buildConditions(this.draft);
+    // A draft restored from the server may predate v/action; buildConditions always fills them, this.conditions overrides the rest.
+    const conditions = { ...buildConditions(this.draft), ...this.conditions };
     await this.run(async (isCurrent) => {
       const result = await this.api.search(buildBookingPayload(conditions, this.selectedTrains));
       if (!isCurrent()) return;

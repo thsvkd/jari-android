@@ -64,25 +64,42 @@ export function filterSeats(seats: SeatMapSeat[], filter: SeatFilter): SeatMapSe
     && !(filter.excludeFamily && seat.familyLabel));
 }
 
-export function consecutiveGroups(seats: SeatMapSeat[], count: number): SeatMapSeat[][] {
-  if (count < 1) return [];
-  const groups = new Map<string, SeatMapSeat[]>();
-  for (const seat of seats) {
-    if (!seat.adjacencyGroup) continue;
-    const key = `${seat.carNo}:${seat.adjacencyGroup}`;
-    const group = groups.get(key) ?? [];
-    group.push(seat);
-    groups.set(key, group);
-  }
+const blocksInGroups = (groups: Map<string, SeatMapSeat[]>, count: number, order: (seat: SeatMapSeat) => number): SeatMapSeat[][] => {
   const results: SeatMapSeat[][] = [];
   for (const group of groups.values()) {
-    const ordered = [...group].sort((a, b) => a.position - b.position);
+    const ordered = [...group].sort((a, b) => order(a) - order(b));
     for (let index = 0; index <= ordered.length - count; index += 1) {
       const block = ordered.slice(index, index + count);
-      if (block.every((seat, offset) => seat.position === block[0]!.position + offset)) {
+      if (block.every((seat, offset) => order(seat) === order(block[0]!) + offset)) {
         results.push(block);
       }
     }
+  }
+  return results;
+};
+
+export function consecutiveGroups(seats: SeatMapSeat[], count: number): SeatMapSeat[][] {
+  if (count < 1) return [];
+  const sideGroups = new Map<string, SeatMapSeat[]>();
+  for (const seat of seats) {
+    if (!seat.adjacencyGroup) continue;
+    const key = `${seat.carNo}:${seat.adjacencyGroup}`;
+    const group = sideGroups.get(key) ?? [];
+    group.push(seat);
+    sideGroups.set(key, group);
+  }
+  const results = blocksInGroups(sideGroups, count, (seat) => seat.position);
+  // 2+2 cars only fit 2 in an adjacencyGroup, so 3+ passengers also get row-wide blocks that may cross the aisle.
+  if (count >= 3) {
+    const rowGroups = new Map<string, SeatMapSeat[]>();
+    for (const seat of seats) {
+      if (seat.row === null || seat.rowPosition <= 0) continue;
+      const key = `${seat.carNo}:${seat.row}`;
+      const group = rowGroups.get(key) ?? [];
+      group.push(seat);
+      rowGroups.set(key, group);
+    }
+    results.push(...blocksInGroups(rowGroups, count, (seat) => seat.rowPosition));
   }
   return results;
 }

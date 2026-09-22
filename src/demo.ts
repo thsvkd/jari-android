@@ -73,6 +73,7 @@ const demoSeats: SeatMapSeat[] = Array.from({ length: 16 }, (_, index) => {
     column,
     adjacencyGroup: `${row}:${column < "C" ? "left" : "right"}`,
     position: column === "A" || column === "C" ? 1 : 2,
+    rowPosition: (index % 4) + 1,
     familyLabel: row === 2 ? "4인 동반석" : "",
   };
 });
