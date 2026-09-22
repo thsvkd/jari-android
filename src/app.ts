@@ -673,7 +673,7 @@ export class JariApp {
               const selectedCount = this.cancellationTargets
                 .find((target) => target.trainNo === train.no && target.seatClass === seatClass)
                 ?.targets.length ?? 0;
-              return `<button class="button seat-action ${selectedCount ? "selected" : ""}" type="button" data-seat-map="${escapeHtml(train.trainKey || "")}" data-train-no="${escapeHtml(train.no)}" data-seat-class="${seatClass}" data-seat-mode="${available ? "immediate" : "wait"}" ${train.trainKey ? "" : "disabled"}><span>${available ? `${label} 좌석 선택` : `${label} 좌석 지정`}</span>${selectedCount ? `<em>선택 완료 · ${selectedCount}석</em>` : ""}</button>`;
+              return `<button class="button seat-action ${selectedCount ? "selected" : ""}" type="button" data-seat-map="${escapeHtml(train.trainKey || "")}" data-train-no="${escapeHtml(train.no)}" data-seat-class="${seatClass}" data-seat-mode="${available ? "immediate" : "wait"}" ${train.trainKey ? "" : "disabled"}><span>${available ? `${label} · 지금 예약할 좌석` : `${label} · 기다릴 좌석 고르기`}</span>${selectedCount ? `<em>선택 완료 · ${selectedCount}석</em>` : ""}</button>`;
             };
             const classButtons = configuredClasses.map((seatClass) =>
               seatButton(seatClass, seatClass === "general" ? train.generalAvailable : train.specialAvailable),
@@ -701,7 +701,7 @@ export class JariApp {
       <div class="train-list">${list}</div>
       ${this.renderError()}
       ${this.renderAccessRequest()}
-      <button class="button primary sticky-action" data-action="trains-next">${this.cancellationTargets.length ? `${new Set(this.cancellationTargets.map((target) => target.trainNo)).size}편 선택 · 조건 확인` : "시간대 전체 · 조건 확인"} <span>→</span></button>`;
+      <button class="button primary sticky-action" data-action="trains-next">${this.cancellationTargets.length ? `${new Set(this.cancellationTargets.map((target) => target.trainNo)).size}편 선택 · 다음: 조건 확인` : "다음: 조건 확인"} <span>→</span></button>`;
   }
 
   private renderSeatDialog(): string {
@@ -759,7 +759,7 @@ export class JariApp {
     const passengerCount = this.draft.passengerCount;
     const confirmText = dialog.mode === "immediate"
       ? `${dialog.selected.length}/${passengerCount}석 선택 · 예약하기`
-      : `${dialog.selected.length}석 범위로 취소표 대기`;
+      : `${dialog.selected.length}석 중 빈자리 나면 예약`;
     // 아직 고르지 않은 좌석으로는 누를 수 없어요. 누른 뒤에야 오류로 알리면 버튼이 거짓말을 하는 셈이에요.
     const confirmDisabled = locked || (dialog.mode === "immediate"
       ? dialog.selected.length !== passengerCount

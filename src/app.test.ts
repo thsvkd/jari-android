@@ -340,7 +340,7 @@ describe("concept C application shell", () => {
     root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
     await vi.waitFor(() => expect(root.querySelector("[data-train-no='019']")).not.toBeNull());
     expect(root.querySelector("[data-train-no='015']")).toBeNull();
-    expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("시간대 전체");
+    expect(root.querySelector("[data-action='trains-next']")!.textContent).not.toContain("편 선택");
   });
 
   it("fills in v/action when a restored server draft predates those fields", async () => {
@@ -821,15 +821,15 @@ it("re-picks every car when the condition changes after a bulk apply", async () 
   await openThreeCarWaitDialog(root, app);
   root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
   root.querySelector<HTMLButtonElement>("[data-action='apply-all-cars']")!.click();
-  await vi.waitFor(() => expect(root.querySelector("[data-action='confirm-seat-dialog']")!.textContent).toBe("6석 범위로 취소표 대기"));
+  await vi.waitFor(() => expect(root.querySelector("[data-action='confirm-seat-dialog']")!.textContent).toBe("6석 중 빈자리 나면 예약"));
 
   // Widening the condition grows every car, not only the one on screen - and without another request.
   root.querySelector<HTMLButtonElement>("[data-seat-filter='col:B']")!.click();
-  expect(root.querySelector("[data-action='confirm-seat-dialog']")!.textContent).toBe("12석 범위로 취소표 대기");
+  expect(root.querySelector("[data-action='confirm-seat-dialog']")!.textContent).toBe("12석 중 빈자리 나면 예약");
   expect(root.querySelector("[data-seat-car='5'] em")?.textContent).toBe("4");
   // Leaving out a car at each end drops its seats at once.
   root.querySelector<HTMLButtonElement>("[data-seat-filter='cars:+']")!.click();
-  expect(root.querySelector("[data-action='confirm-seat-dialog']")!.textContent).toBe("4석 범위로 취소표 대기");
+  expect(root.querySelector("[data-action='confirm-seat-dialog']")!.textContent).toBe("4석 중 빈자리 나면 예약");
   expect(seatInventories).toHaveBeenCalledTimes(1);
 
   // The condition now belongs to every car, so moving to another car keeps its chips on.
@@ -852,7 +852,7 @@ it("takes a train as a whole when its card is pressed, and searches it without a
   expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("1편 선택");
   // Pressing again lets it go.
   root.querySelector<HTMLButtonElement>("[data-train-toggle='015']")!.click();
-  expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("시간대 전체");
+  expect(root.querySelector("[data-action='trains-next']")!.textContent).not.toContain("편 선택");
   root.querySelector<HTMLButtonElement>("[data-train-toggle='015']")!.click();
 
   root.querySelector<HTMLButtonElement>("[data-action='trains-next']")!.click();
@@ -1548,7 +1548,7 @@ it("keeps the seat sheet's confirm button out of reach until something is select
   await vi.waitFor(() => expect(root.querySelector("[data-seat-filter='col:A']")).not.toBeNull());
 
   const confirm = () => root.querySelector<HTMLButtonElement>("[data-action='confirm-seat-dialog']")!;
-  expect(confirm().textContent).toBe("0석 범위로 취소표 대기");
+  expect(confirm().textContent).toBe("0석 중 빈자리 나면 예약");
   expect(confirm().disabled).toBe(true);
   root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
   expect(confirm().disabled).toBe(false);
@@ -1660,4 +1660,18 @@ it("redraws the home badge on each status poll", async () => {
   await vi.advanceTimersByTimeAsync(30_000);
   await vi.waitFor(() => expect(status).toHaveBeenCalled());
   expect(root.querySelector(".idle-badge")?.textContent).toBe("찾는 중 · 1분 전");
+});
+it("says what each train-list button will do", async () => {
+  const { app, root } = await mountLive();
+  app.navigate("journey");
+  edit(root, "seat_grade_mode", "specific");
+  root.querySelector<HTMLInputElement>("[name='seat_class'][value='general']")!.click();
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='025'][data-seat-class='general']")).not.toBeNull());
+
+  expect(root.querySelector("[data-train-no='025'][data-seat-class='general']")?.textContent).toContain("일반실 · 지금 예약할 좌석");
+  expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")?.textContent).toContain("일반실 · 기다릴 좌석 고르기");
+  expect(root.querySelector("[data-action='trains-next']")?.textContent).toContain("다음: 조건 확인");
+  root.querySelector<HTMLButtonElement>("[data-train-toggle='015']")!.click();
+  expect(root.querySelector("[data-action='trains-next']")?.textContent).toContain("1편 선택 · 다음: 조건 확인");
 });
