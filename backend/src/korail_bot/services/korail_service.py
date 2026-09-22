@@ -74,6 +74,7 @@ _TRAIN_FIELD_WIDTHS = {
     "train_class_code": 2,
     "departure_run_order": 6,
     "arrival_run_order": 6,
+    "seat_attribute_code": 3,
 }
 
 _NO_REMAINING_SEATS_CODE = "ERI411321"

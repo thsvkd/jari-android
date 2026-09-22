@@ -135,6 +135,7 @@ def test_search_restores_leading_zeros_korail_drops_from_numeric_fields():
             "h_trn_clsf_cd": 7,
             "h_dpt_stn_run_ordr": 1,
             "h_arv_stn_run_ordr": 14,
+            "h_seat_att_cd": 15,
         }
     )
     with pytest.raises(KorailProtocolError):
@@ -159,4 +160,4 @@ def test_search_restores_leading_zeros_korail_drops_from_numeric_fields():
     )
     assert (train.departure_time, train.train_class_code) == ("063000", "07")
     assert (train.departure_run_order, train.arrival_run_order) == ("000001", "000014")
-    assert train.arrival_time == "084300"
+    assert (train.arrival_time, train.seat_attribute_code) == ("084300", "015")
