@@ -79,6 +79,17 @@ interface SeatDialogState {
   appliedToAll: boolean;
 }
 
+// One bottom sheet serves both the in-app confirmations and the idle card's date pick.
+// It resolves with the confirm button's value - the date input, or "" when the sheet has no input - and null when dismissed.
+interface SheetState {
+  title: string;
+  body: string;
+  content: string;
+  confirmLabel: string;
+  danger: boolean;
+  resolve: (value: string | null) => void;
+}
+
 // Leave at least one car in the middle: a 3-car train allows 1, a 2-car train 0.
 const maxTrimCars = (cars: number): number => Math.max(0, Math.floor((cars - 1) / 2));
 // The cars "호차 앞뒤 제외" keeps: the formation minus that many cars at each end.
@@ -162,6 +173,7 @@ export class JariApp {
   private trainOptions: TrainOption[] = [];
   private trainListTruncated = false;
   private seatDialog: SeatDialogState | null = null;
+  private sheet: SheetState | null = null;
   private cancellationTargets: CancellationWaitPlan["trains"] = [];
   private notifications: NotificationItem[] = [];
   private notificationsLoaded = false;
@@ -194,10 +206,13 @@ export class JariApp {
     this.onClick = this.onClick.bind(this);
     this.onChange = this.onChange.bind(this);
     this.onSubmit = this.onSubmit.bind(this);
+    this.onKeyDown = this.onKeyDown.bind(this);
     this.root.addEventListener("click", this.onClick);
     this.root.addEventListener("change", this.onChange);
     this.root.addEventListener("input", this.onChange);
     this.root.addEventListener("submit", this.onSubmit);
+    // On the window: the sheet's Escape must work wherever the focus sits, including before anything inside it is focused.
+    window.addEventListener("keydown", this.onKeyDown);
   }
 
   private resetSession(): void {
@@ -216,6 +231,9 @@ export class JariApp {
     this.trainOptions = [];
     this.trainListTruncated = false;
     this.seatDialog = null;
+    // Leave nobody awaiting a sheet that the reset just removed from the screen.
+    this.sheet?.resolve(null);
+    this.sheet = null;
     this.inviteLoading = false;
     this.notifySaveVersion += 1;
     this.cancellationTargets = [];
@@ -252,6 +270,7 @@ export class JariApp {
     this.root.removeEventListener("change", this.onChange);
     this.root.removeEventListener("input", this.onChange);
     this.root.removeEventListener("submit", this.onSubmit);
+    window.removeEventListener("keydown", this.onKeyDown);
     if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
     if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
   }
@@ -382,6 +401,7 @@ export class JariApp {
         <main class="screen screen-${this.view}">${content}</main>
         ${this.renderNavigation()}
         ${this.renderSeatDialog()}
+        ${this.renderSheet()}
         ${this.busy ? '<div class="blocker" role="status"><span class="spinner"></span><b>잠시만 기다려 주세요</b></div>' : ""}
         <div class="toast" role="status" aria-live="polite">${escapeHtml(this.toast)}</div>
       </div>`;
@@ -644,6 +664,45 @@ export class JariApp {
       ${dialog.inventory && dialog.error ? `<p class="notice warning seat-inline-error" role="alert">${escapeHtml(dialog.error)}</p>` : ""}
       <footer><div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || dialog.filter.columns.length || dialog.filter.trimRows || dialog.filter.excludeFamily ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div><button type="button" class="button primary" data-action="confirm-seat-dialog" ${locked ? "disabled" : ""}>${confirmText}</button></footer>
     </section></div>`;
+  }
+
+  private renderSheet(): string {
+    const sheet = this.sheet;
+    if (!sheet) return "";
+    return `<div class="modal-backdrop" role="presentation"><section class="action-sheet" role="dialog" aria-modal="true" aria-labelledby="action-sheet-title">
+      <h2 id="action-sheet-title">${escapeHtml(sheet.title)}</h2>
+      ${sheet.body ? `<p>${escapeHtml(sheet.body)}</p>` : ""}
+      ${sheet.content}
+      <div class="action-sheet-actions"><button type="button" class="button ghost" data-action="sheet-cancel">취소</button><button type="button" class="button ${sheet.danger ? "ghost danger" : "primary"}" data-action="sheet-confirm">${escapeHtml(sheet.confirmLabel)}</button></div>
+    </section></div>`;
+  }
+
+  private openSheet(options: { title: string; body?: string; content?: string; confirmLabel: string; danger?: boolean }): Promise<string | null> {
+    this.closeSheet(null);
+    return new Promise((resolve) => {
+      this.sheet = {
+        title: options.title,
+        body: options.body ?? "",
+        content: options.content ?? "",
+        confirmLabel: options.confirmLabel,
+        danger: options.danger === true,
+        resolve,
+      };
+      this.render();
+    });
+  }
+
+  private closeSheet(value: string | null): void {
+    const sheet = this.sheet;
+    if (!sheet) return;
+    this.sheet = null;
+    sheet.resolve(value);
+    this.render();
+  }
+
+  // In-app replacement for window.confirm: same sheet, no input, answers true only when the confirm button is pressed.
+  private confirmSheet(options: { title: string; body?: string; confirmLabel: string; danger?: boolean }): Promise<boolean> {
+    return this.openSheet(options).then((value) => value !== null);
   }
 
   private renderSeatFilter(dialog: SeatDialogState, seats: SeatMapSeat[]): string {
@@ -1394,6 +1453,51 @@ export class JariApp {
     });
   }
 
+  // The home card's "그만 찾기" and the detail screen's "검색 중지" ask differently but stop the same search.
+  private async cancelSearch(fromHome: boolean): Promise<void> {
+    const confirmed = fromHome
+      ? await this.confirmSheet({ title: "자리 찾기를 그만할까요?", body: "지금까지 잡은 예약은 그대로 남아요.", confirmLabel: "그만 찾기", danger: true })
+      : await this.confirmSheet({ title: "진행 중인 검색이나 예약된 검색을 취소할까요?", confirmLabel: "검색 취소", danger: true });
+    if (!confirmed) return;
+    await this.run(async (isCurrent) => {
+      const result = await this.api.cancelSearch();
+      if (!isCurrent()) return;
+      if (!result.stopped && !result.unscheduled) {
+        this.error = "서버에서 중지할 검색을 찾지 못했어요.";
+        return;
+      }
+      this.showToast("검색을 중지했어요.");
+      await this.reload();
+    });
+  }
+
+  private async cancelPending(): Promise<void> {
+    const confirmed = await this.confirmSheet({ title: "결제를 기다리는 예약을 모두 취소할까요?", confirmLabel: "예약 취소", danger: true });
+    if (!confirmed) return;
+    await this.run(async (isCurrent) => {
+      const result = await this.api.cancelReservations();
+      if (!isCurrent()) return;
+      if (!result.cancelled) {
+        this.error = "서버에서 예약을 취소하지 못했어요.";
+        return;
+      }
+      this.state!.pending = result.pending;
+      this.showToast("예약을 취소했어요.");
+    });
+  }
+
+  private async railLogout(): Promise<void> {
+    const confirmed = await this.confirmSheet({ title: "코레일 계정 연결을 해제할까요?", body: "진행 중인 검색은 따로 중지해야 해요.", confirmLabel: "연결 해제", danger: true });
+    if (!confirmed) return;
+    await this.run(async (isCurrent) => {
+      const result = await this.api.railwayLogout();
+      if (!isCurrent()) return;
+      this.state!.rail.registered = result.registered;
+      this.showToast("코레일 계정 연결을 해제했어요.");
+      this.render();
+    });
+  }
+
   private async loadNotifications(): Promise<void> {
     if (!this.state?.capabilities.durableNotifications) return;
     // Not run(): it drops the request while the app is busy, which would read as "no notifications".
@@ -1457,7 +1561,12 @@ export class JariApp {
   }
 
   private onClick(event: Event): void {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button");
+    const target = event.target as HTMLElement;
+    if (this.sheet && target.classList.contains("modal-backdrop")) {
+      this.closeSheet(null);
+      return;
+    }
+    const button = target.closest<HTMLButtonElement>("button");
     if (!button) return;
     if (button.dataset.trainToggle) {
       this.toggleWholeTrain(button.dataset.trainToggle);
@@ -1625,32 +1734,11 @@ export class JariApp {
         });
         break;
       case "cancel-search":
-        if (window.confirm("진행 중인 검색이나 예약된 검색을 취소할까요?")) {
-          void this.run(async (isCurrent) => {
-            const result = await this.api.cancelSearch();
-            if (!isCurrent()) return;
-            if (!result.stopped && !result.unscheduled) {
-              this.error = "서버에서 중지할 검색을 찾지 못했어요.";
-              return;
-            }
-            this.showToast("검색을 중지했어요.");
-            await this.reload();
-          });
-        }
+      case "stop-search":
+        void this.cancelSearch(action === "stop-search");
         break;
       case "cancel-pending":
-        if (window.confirm("결제를 기다리는 예약을 모두 취소할까요?")) {
-          void this.run(async (isCurrent) => {
-            const result = await this.api.cancelReservations();
-            if (!isCurrent()) return;
-            if (!result.cancelled) {
-              this.error = "서버에서 예약을 취소하지 못했어요.";
-              return;
-            }
-            this.state!.pending = result.pending;
-            this.showToast("예약을 취소했어요.");
-          });
-        }
+        void this.cancelPending();
         break;
       case "notify-minus":
         void this.changeNotify(-1);
@@ -1682,15 +1770,13 @@ export class JariApp {
         this.render();
         break;
       case "rail-logout":
-        if (window.confirm("코레일 계정 연결을 해제할까요? 진행 중인 검색은 따로 중지해야 해요.")) {
-          void this.run(async (isCurrent) => {
-            const result = await this.api.railwayLogout();
-            if (!isCurrent()) return;
-            this.state!.rail.registered = result.registered;
-            this.showToast("코레일 계정 연결을 해제했어요.");
-            this.render();
-          });
-        }
+        void this.railLogout();
+        break;
+      case "sheet-cancel":
+        this.closeSheet(null);
+        break;
+      case "sheet-confirm":
+        this.closeSheet(this.root.querySelector<HTMLInputElement>("#sheet-date")?.value ?? "");
         break;
       case "app-logout": {
         // Start revocation with A's token, then invalidate all A UI work immediately.
@@ -1702,6 +1788,10 @@ export class JariApp {
       }
         break;
     }
+  }
+
+  private onKeyDown(event: KeyboardEvent): void {
+    if (event.key === "Escape" && this.sheet) this.closeSheet(null);
   }
 
   private onChange(event: Event): void {

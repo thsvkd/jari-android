@@ -1141,6 +1141,45 @@ it("reaches the confirm screen from the train list by clicks alone and saves a f
   await vi.waitFor(() => expect(saveFavourite).toHaveBeenCalledOnce());
 });
 
+it("asks in an in-app sheet instead of window.confirm, and only acts when it is confirmed", async () => {
+  const cancelSearch = vi.fn(async () => ({ stopped: true, unscheduled: false }));
+  const { app, root } = await mountLive({ cancelSearch });
+  app.navigate("activity");
+
+  root.querySelector<HTMLButtonElement>("[data-action='cancel-search']")!.click();
+  const sheet = root.querySelector<HTMLElement>(".action-sheet");
+  expect(sheet?.getAttribute("role")).toBe("dialog");
+  expect(sheet?.getAttribute("aria-modal")).toBe("true");
+  expect(sheet?.textContent).toContain("진행 중인 검색이나 예약된 검색을 취소할까요?");
+
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-cancel']")!.click();
+  expect(root.querySelector(".action-sheet")).toBeNull();
+  expect(cancelSearch).not.toHaveBeenCalled();
+
+  root.querySelector<HTMLButtonElement>("[data-action='cancel-search']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+  await vi.waitFor(() => expect(cancelSearch).toHaveBeenCalledOnce());
+});
+
+it.each([
+  ["backdrop", (root: HTMLElement) => root.querySelector<HTMLElement>(".modal-backdrop")!.click()],
+  ["escape", () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))],
+])("dismisses the confirm sheet on %s without cancelling anything", async (_name, dismiss) => {
+  const cancelReservations = vi.fn(async () => ({ cancelled: true, pending: [] }));
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.pending = [{ reservationId: "TEST", trainInfo: "KTX 015 서울 → 부산", expiresAt: null, seatNumber: null }];
+  const { app, root } = await mountLive({ bootstrap: async () => state, cancelReservations });
+  app.navigate("activity");
+
+  root.querySelector<HTMLButtonElement>("[data-action='cancel-pending']")!.click();
+  expect(root.querySelector(".action-sheet")?.textContent).toContain("결제를 기다리는 예약을 모두 취소할까요?");
+
+  dismiss(root);
+  expect(root.querySelector(".action-sheet")).toBeNull();
+  expect(cancelReservations).not.toHaveBeenCalled();
+});
+
 it("offers the access request on the train list, where the error message points to it", async () => {
   const search = vi.fn().mockResolvedValue({ started: false, needsAccessRequest: true });
   const { app, root } = await mountLive({ search });
