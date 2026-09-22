@@ -1524,6 +1524,19 @@ it("asks before deleting a favourite, naming it, and keeps it when dismissed", a
   await vi.waitFor(() => expect(deleteFavourite).toHaveBeenCalledOnce());
 });
 
+it("explains a home problem state and marks it with a glyph instead of the word 확인", async () => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running!.health = "error";
+  const { root } = await mountLive({ bootstrap: async () => state });
+  const card = root.querySelector<HTMLElement>("[data-search-status]")!;
+
+  expect(card.dataset.state).toBe("error");
+  expect(card.querySelector(".search-status-icon")?.textContent).toBe("!");
+  expect(card.querySelector(".search-status-description")?.textContent).toBe("검색 기록은 남아 있지만 현재 조회 상태를 확인할 수 없어요.");
+  expect(card.querySelector("[data-view='activity']")?.textContent).toContain("검색 상세 보기");
+});
+
 describe("확인 화면의 좌석 지정", () => {
   const withPlan = async (trains: { trainNo: string; seatClass: "general"; targets: SeatTarget[] }[] | null) => {
     const demo = createDemoApi();

@@ -498,10 +498,10 @@ export class JariApp {
       : (status.kind === "healthy" || status.kind === "running-unverified") && journey
         ? this.renderRunningCard(status.kind, journey)
         : `<section class="card search-status-card" data-search-status data-state="${status.kind}" aria-label="검색 상태 요약">
-        <div class="search-status-title"><span class="search-status-icon">${status.kind === "reserved" ? "예약" : ["error", "stale", "offline"].includes(status.kind) ? "확인" : "대기"}</span><h2>${escapeHtml(status.title)}</h2></div>
+        <div class="search-status-title"><span class="search-status-icon">${status.kind === "reserved" ? "예약" : ["error", "stale", "offline"].includes(status.kind) ? "!" : "대기"}</span><h2>${escapeHtml(status.title)}</h2></div>
         ${route}
         ${journey ? `<p class="search-conditions">${escapeHtml(journey.trainTypeShow)} · ${escapeHtml(seatLabels[journey.specialInfoShow] ?? journey.specialInfoShow)} · ${journey.passengerCount}명</p>` : ""}
-        ${status.kind === "reserved" || status.kind === "scheduled" ? `<p class="search-status-description">${escapeHtml(status.description)}</p>` : ""}
+        ${["reserved", "scheduled", "error", "stale", "offline"].includes(status.kind) ? `<p class="search-status-description">${escapeHtml(status.description)}</p>` : ""}
         ${!paymentFirst && state.running && radar.lastCheckedLabel ? `<p class="search-last-check">마지막 조회 ${escapeHtml(radar.lastCheckedLabel)}</p>` : ""}
         ${busy ? `<button class="button secondary" data-view="activity">${paymentFirst ? "예약 확인하기" : "검색 상세 보기"}<span>→</span></button>` : ""}
       </section>`;
