@@ -179,6 +179,9 @@ small { color: var(--muted); }
 .button.secondary { background: var(--accent-soft); color: var(--accent-ink); }
 .button.ghost { border: 1px solid var(--line); background: var(--surface); color: var(--text); box-shadow: none; }
 .button.danger, .text-button.danger { color: var(--danger); }
+/* 되돌리기 어려운 동작은 꽉 찬 빨간 버튼으로. ghost와 함께 쓰면 지금처럼 테두리 버튼으로 남아요. */
+.button.danger:not(.ghost) { background: var(--danger); color: #fff; box-shadow: 0 9px 20px color-mix(in srgb, var(--danger) 23%, transparent); }
+:root[data-theme="dark"] .button.danger:not(.ghost) { color: #2a1113; }
 .button.roomy { margin-top: 28px; justify-content: space-between; min-height: 59px; padding-inline: 20px; }
 .button.roomy b { font-size: 21px; font-weight: 400; }
 .text-button { padding: 8px 0; background: transparent; color: var(--accent-ink); font-size: 11px; font-weight: 700; }

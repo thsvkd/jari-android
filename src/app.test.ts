@@ -1329,6 +1329,14 @@ it("asks in an in-app sheet instead of window.confirm, and only acts when it is 
   await vi.waitFor(() => expect(cancelSearch).toHaveBeenCalledOnce());
 });
 
+it("stops a search from 검색 상세 with a solid danger button", async () => {
+  const { app, root } = await mountLive();
+  app.navigate("activity");
+
+  expect(root.querySelector("[data-action='cancel-search']")?.className).toBe("button danger");
+  expect(root.querySelector("[data-action='cancel-search'].ghost")).toBeNull();
+});
+
 it("asks nothing through the browser's own dialog any more", async () => {
   const source = await readFile("src/app.ts", "utf8");
   expect(source).not.toContain("window.confirm");
