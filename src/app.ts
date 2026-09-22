@@ -134,7 +134,7 @@ function activityEmptyMark(): string {
   return `<span class="empty-mark" aria-hidden="true"><svg viewBox="0 0 64 64" fill="none"><rect x="13" y="15" width="38" height="30" rx="9"/><path d="M20 45l-5 7m29-7 5 7M21 26h22M23 36h4m10 0h4"/><circle class="filled" cx="46" cy="17" r="7"/><path class="signal" d="M46 14v3l2 2"/></svg></span>`;
 }
 
-export class TeumApp {
+export class JariApp {
   private generation = 0;
   private readonly root: HTMLElement;
   private readonly api: MobileApi;
@@ -171,7 +171,7 @@ export class TeumApp {
     this.root = root;
     this.api = api;
     this.options = options;
-    const savedTheme = window.localStorage.getItem("teum.theme");
+    const savedTheme = window.localStorage.getItem("jari.theme");
     this.theme =
       savedTheme === "light" || savedTheme === "dark"
         ? savedTheme
@@ -1589,7 +1589,7 @@ export class TeumApp {
         break;
       case "theme":
         this.theme = this.theme === "dark" ? "light" : "dark";
-        window.localStorage.setItem("teum.theme", this.theme);
+        window.localStorage.setItem("jari.theme", this.theme);
         this.render();
         break;
       case "request-push":

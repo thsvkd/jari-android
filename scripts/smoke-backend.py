@@ -16,7 +16,7 @@ from korail_bot.mobile.identity import IdentityStore
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="teum-smoke-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="jari-smoke-") as temporary:
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]

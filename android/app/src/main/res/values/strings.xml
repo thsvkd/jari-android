@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">자리났다</string>
     <string name="title_activity_main">자리났다</string>
-    <string name="package_name">com.teum.app</string>
-    <string name="custom_url_scheme">com.teum.app</string>
+    <string name="package_name">com.jari.app</string>
+    <string name="custom_url_scheme">com.jari.app</string>
 </resources>

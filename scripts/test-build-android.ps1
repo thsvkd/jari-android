@@ -2,10 +2,10 @@
 param([string]$RealJavaHome)
 
 $ErrorActionPreference = 'Stop'
-$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('teum-build-tests-' + [guid]::NewGuid())
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('jari-build-tests-' + [guid]::NewGuid())
 $savedEnvironment = @{}
 $environmentNames = @('PATH', 'JAVA_HOME', 'ANDROID_HOME', 'LOCALAPPDATA', 'ProgramFiles',
-    'TEUM_TEST_LOG', 'TEUM_TEST_FAIL', 'TEUM_TEST_JAVA_VERSION', 'VITE_API_BASE_URL')
+    'JARI_TEST_LOG', 'JARI_TEST_FAIL', 'JARI_TEST_JAVA_VERSION', 'VITE_API_BASE_URL')
 foreach ($name in $environmentNames) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
@@ -19,16 +19,16 @@ try {
         New-Item -ItemType Directory -Path $path -Force | Out-Null
     }
     Copy-Item (Join-Path $PSScriptRoot 'build-android.ps1') "$fixture/scripts/build-android.ps1"
-    Set-Content "$fixture/.env.production.local" 'VITE_API_BASE_URL=https://teum.example.test' -Encoding Ascii
+    Set-Content "$fixture/.env.production.local" 'VITE_API_BASE_URL=https://jari.example.test' -Encoding Ascii
     Set-Content "$fixture/android/app/google-services.json" '{}' -Encoding Ascii
     # Native executable boundary: no npm, Capacitor or Gradle installation is invoked.
     foreach ($command in @('npm', 'npx', 'gradlew')) {
         $destination = if ($command -eq 'gradlew') { "$fixture/android/gradlew.bat" } else { "$bin/$command.cmd" }
         @"
 @echo off
-echo $command %*>>"%TEUM_TEST_LOG%"
+echo $command %*>>"%JARI_TEST_LOG%"
 echo SDK=%ANDROID_HOME%
-if "%TEUM_TEST_FAIL%"=="$command" exit /b 37
+if "%JARI_TEST_FAIL%"=="$command" exit /b 37
 exit /b 0
 "@ | Set-Content $destination -Encoding Ascii
     }
@@ -37,8 +37,8 @@ using System;
 class FakeJava {
     static int Main(string[] args) {
         if (args.Length != 1 || args[0] != "-version") return 99;
-        Console.Error.WriteLine("openjdk version \"" + Environment.GetEnvironmentVariable("TEUM_TEST_JAVA_VERSION") + "\"");
-        return Environment.GetEnvironmentVariable("TEUM_TEST_FAIL") == "java" ? 37 : 0;
+        Console.Error.WriteLine("openjdk version \"" + Environment.GetEnvironmentVariable("JARI_TEST_JAVA_VERSION") + "\"");
+        return Environment.GetEnvironmentVariable("JARI_TEST_FAIL") == "java" ? 37 : 0;
     }
 }
 '@ | Set-Content "$testRoot/FakeJava.cs" -Encoding Ascii
@@ -49,7 +49,7 @@ class FakeJava {
     $env:LOCALAPPDATA = "$testRoot/local"
     $env:ProgramFiles = "$testRoot/programs"
     $env:VITE_API_BASE_URL = $null
-    $env:TEUM_TEST_LOG = "$testRoot/commands.log"
+    $env:JARI_TEST_LOG = "$testRoot/commands.log"
     $shell = (Get-Process -Id $PID).Path
 
     function Test-Pipeline {
@@ -65,13 +65,13 @@ class FakeJava {
         if ($MissingApiUrl) {
             Remove-Item "$fixture/.env.production.local" -Force -ErrorAction SilentlyContinue
         } else {
-            Set-Content "$fixture/.env.production.local" 'VITE_API_BASE_URL=https://teum.example.test' -Encoding Ascii
+            Set-Content "$fixture/.env.production.local" 'VITE_API_BASE_URL=https://jari.example.test' -Encoding Ascii
         }
         $env:JAVA_HOME = $JavaHome
         $env:ANDROID_HOME = if ($DefaultSdk) { $null } else { "$testRoot/local/Android/Sdk" }
-        $env:TEUM_TEST_FAIL = $FailCommand
-        $env:TEUM_TEST_JAVA_VERSION = $JavaVersion
-        Set-Content $env:TEUM_TEST_LOG ''
+        $env:JARI_TEST_FAIL = $FailCommand
+        $env:JARI_TEST_JAVA_VERSION = $JavaVersion
+        Set-Content $env:JARI_TEST_LOG ''
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$fixture/scripts/build-android.ps1")
         if ($SkipWebBuild) { $arguments += '-SkipWebBuild' }
         # Windows PowerShell exposes native stderr as error records. Capture these
@@ -80,7 +80,7 @@ class FakeJava {
         $output = (& $shell @arguments 2>&1 | Out-String)
         $code = $LASTEXITCODE
         $ErrorActionPreference = 'Stop'
-        $commands = ((Get-Content $env:TEUM_TEST_LOG | Where-Object { $_.Trim() }) -join '|').Trim()
+        $commands = ((Get-Content $env:JARI_TEST_LOG | Where-Object { $_.Trim() }) -join '|').Trim()
         $successOutput = $output -match 'APK:'
         if (($code -eq 0) -ne $ExpectSuccess -or $successOutput -ne $ExpectSuccess -or $commands -ne $ExpectedCommands -or
             ($ExpectedError -and $output -notmatch $ExpectedError) -or
@@ -117,7 +117,7 @@ finally {
     $resolvedRoot = [IO.Path]::GetFullPath($testRoot)
     $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
     if ($resolvedRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -and
-        (Split-Path $resolvedRoot -Leaf) -like 'teum-build-tests-*') {
+        (Split-Path $resolvedRoot -Leaf) -like 'jari-build-tests-*') {
         Remove-Item -LiteralPath $resolvedRoot -Recurse -Force
     }
 }

@@ -35,7 +35,10 @@ class MobileConfig:
             raise ValueError(
                 "Set MOBILE_REDIS_URL to the dedicated Redis database (redis:// or rediss://)"
             )
-        data = Path(os.environ.get("MOBILE_DATA_DIR", ".data/teum")).resolve()
+        data = Path(os.environ.get("MOBILE_DATA_DIR", ".data/jari")).resolve()
+        legacy = data.with_name("teum")
+        if "MOBILE_DATA_DIR" not in os.environ and not data.exists() and legacy.is_dir():
+            legacy.rename(data)  # the directory this data lived in before the app was renamed
         origins = tuple(
             filter(
                 None,

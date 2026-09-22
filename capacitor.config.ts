@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
-  appId: "com.teum.app",
+  appId: "com.jari.app",
   appName: "자리났다",
   webDir: "dist",
   // The bundled Vite assets are the only production web content. A live server

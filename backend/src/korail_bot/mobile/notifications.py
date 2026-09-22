@@ -180,7 +180,7 @@ def configured_fcm(credentials_path):
     except ImportError as exc:
         raise ValueError("Install the mobile-push extra to enable configured FCM") from exc
     app = firebase_admin.initialize_app(
-        credentials.Certificate(credentials_path), options={"httpTimeout": 10}, name="teum"
+        credentials.Certificate(credentials_path), options={"httpTimeout": 10}, name="jari"
     )
 
     def send(token, event_id):

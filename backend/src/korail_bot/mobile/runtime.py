@@ -85,6 +85,9 @@ class MobileRuntime:
         if self.started:
             return
         if self.storage:
+            moved = self.storage.redis.adopt_legacy_keys()
+            if moved:
+                logger.info("Adopted %d keys from the legacy Redis namespace", moved)
             if not self.storage.redis.set("runtime_owner", self.owner, nx=True, ex=120):
                 raise RuntimeError("Another mobile runtime owns this Redis namespace")
             self.reservation.reconcile_after_restart()

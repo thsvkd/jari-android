@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { TeumApp } from "./app";
+import { JariApp } from "./app";
 import { ApiError } from "./api";
 import { createDemoApi } from "./demo";
 import type { SeatInventory, SeatMapSeat } from "./types";
 
-const mounted: TeumApp[] = [];
+const mounted: JariApp[] = [];
 
 afterEach(() => {
   for (const app of mounted.splice(0)) app.dispose();
@@ -16,7 +16,7 @@ async function mountLive(overrides: Partial<ReturnType<typeof createDemoApi>> = 
   const api = { ...createDemoApi(), ...overrides };
   const root = document.createElement("div");
   document.body.append(root);
-  const app = new TeumApp(root, api, { demoMode: false });
+  const app = new JariApp(root, api, { demoMode: false });
   mounted.push(app);
   await app.start(true);
   return { app, root };
@@ -53,7 +53,7 @@ const threeCarSeatCars = async () => ({
   cars: [3, 4, 5].map((carNo) => ({ carNo, roomClassName: "일반실", remainingSeatCount: 4, attributes: [] })),
 });
 
-async function openThreeCarWaitDialog(root: HTMLElement, app: TeumApp) {
+async function openThreeCarWaitDialog(root: HTMLElement, app: JariApp) {
   app.navigate("journey");
   root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
   await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());

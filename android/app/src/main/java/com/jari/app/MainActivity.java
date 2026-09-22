@@ -1,4 +1,4 @@
-package com.teum.app;
+package com.jari.app;
 
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;

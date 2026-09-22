@@ -28,8 +28,8 @@ describe("browser session storage", () => {
     await writeToken("session-token");
 
     await expect(readToken()).resolves.toBe("session-token");
-    expect(window.localStorage.getItem("teum.session")).toBeNull();
-    expect(window.sessionStorage.getItem("teum.session")).toBeNull();
+    expect(window.localStorage.getItem("jari.session")).toBeNull();
+    expect(window.sessionStorage.getItem("jari.session")).toBeNull();
   });
 
   it("removes the browser token when cleared", async () => {

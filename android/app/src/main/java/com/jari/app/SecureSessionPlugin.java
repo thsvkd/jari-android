@@ -1,4 +1,4 @@
-package com.teum.app;
+package com.jari.app;
 
 import android.content.Context;
 import android.content.Intent;
@@ -27,8 +27,8 @@ import javax.crypto.spec.GCMParameterSpec;
  */
 @CapacitorPlugin(name = "SecureSession")
 public class SecureSessionPlugin extends Plugin {
-    private static final String KEY_ALIAS = "teum_session_aes_v1";
-    private static final String PREFERENCES = "teum_secure_session";
+    private static final String KEY_ALIAS = "jari_session_aes_v1";
+    private static final String PREFERENCES = "jari_secure_session";
     private static final String TOKEN_KEY = "token";
     private static final String VERSION = "v1";
     private static final int GCM_TAG_LENGTH = 128;

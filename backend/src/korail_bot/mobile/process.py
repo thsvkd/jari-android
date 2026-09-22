@@ -15,7 +15,7 @@ class MobileReservationService(ReservationService):
     def __init__(self, storage, notifications, config):
         super().__init__(storage, notifications)
         self.config = config
-        self.tag = "--teum-runtime=" + digest(config.database + (config.redis_url or ""))[:24]
+        self.tag = "--jari-runtime=" + digest(config.database + (config.redis_url or ""))[:24]
         self.start_lock = threading.RLock()
         self.operation_locks = [threading.RLock() for _ in range(128)]
 

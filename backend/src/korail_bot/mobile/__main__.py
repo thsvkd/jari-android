@@ -10,7 +10,7 @@ from korail_bot.mobile.identity import IdentityStore
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Standalone Teum API")
+    parser = argparse.ArgumentParser(description="Standalone 자리났다 API")
     commands = parser.add_subparsers(dest="command", required=True)
     invite = commands.add_parser("invite", help="Create a one-use app invitation")
     invite.add_argument("--ttl-hours", type=int, default=24)
@@ -47,9 +47,7 @@ def main():
 
         from korail_bot.mobile.runtime import MobileRuntime
 
-        runtime = MobileRuntime(
-            config, on_lease_lost=lambda: os.kill(os.getpid(), signal.SIGTERM)
-        )
+        runtime = MobileRuntime(config, on_lease_lost=lambda: os.kill(os.getpid(), signal.SIGTERM))
 
         def shutdown(signum, frame):
             raise KeyboardInterrupt

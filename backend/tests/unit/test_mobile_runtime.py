@@ -190,3 +190,18 @@ def test_a_lost_lease_ends_the_process_instead_of_serving_on(tmp_path):
 
     assert lost == [True]
     assert runtime.stop_event.is_set()
+
+
+def test_keys_under_the_old_namespace_are_adopted_once_without_overwriting():
+    client = fakeredis.FakeRedis(decode_responses=True)
+    client.set("teum:mobile:v1:favourite:1:a", "old", ex=600)
+    client.set("teum:mobile:v1:runtime_owner", "stale")
+    client.set("jari:mobile:v1:runtime_owner", "current")
+    redis = NamespacedRedis(client)
+
+    assert redis.adopt_legacy_keys() == 1
+    assert redis.get("favourite:1:a") == "old"
+    assert 0 < redis.ttl("favourite:1:a") <= 600
+    assert redis.get("runtime_owner") == "current"
+    assert client.get("teum:mobile:v1:favourite:1:a") is None
+    assert redis.adopt_legacy_keys() == 0

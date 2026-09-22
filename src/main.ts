@@ -3,7 +3,7 @@ import "./styles.css";
 import { Capacitor } from "@capacitor/core";
 
 import { ApiError, createHttpApi, createSessionStorage, resolveApiBase } from "./api";
-import { TeumApp } from "./app";
+import { JariApp } from "./app";
 import { createDemoApi } from "./demo";
 import {
   clearToken,
@@ -20,7 +20,7 @@ const rootElement = root;
 
 const query = new URLSearchParams(window.location.search);
 const demoMode = query.get("demo") === "1" || import.meta.env.VITE_DEMO_MODE === "true";
-let app: TeumApp | undefined;
+let app: JariApp | undefined;
 
 async function launch(): Promise<void> {
   try {
@@ -52,7 +52,7 @@ async function launch(): Promise<void> {
       });
     };
 
-    app = new TeumApp(rootElement, api, {
+    app = new JariApp(rootElement, api, {
       demoMode,
       onToken: session.write,
       onBootstrap: async () => {

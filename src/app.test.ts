@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { TeumApp } from "./app";
+import { JariApp } from "./app";
 import { ApiError } from "./api";
 import { createDemoApi } from "./demo";
 import type { SeatInventory, SeatMapSeat, SeatTarget, StatusResult } from "./types";
 
-const mounted: TeumApp[] = [];
+const mounted: JariApp[] = [];
 
 afterEach(() => {
   for (const app of mounted.splice(0)) app.dispose();
@@ -106,7 +106,7 @@ describe("concept C application shell", () => {
     const api = { ...demoApi, bootstrap: async () => state };
     const root = document.createElement("div");
     document.body.append(root);
-    const app = new TeumApp(root, api, { demoMode: false });
+    const app = new JariApp(root, api, { demoMode: false });
     mounted.push(app);
 
     await app.start(true);
@@ -129,7 +129,7 @@ describe("concept C application shell", () => {
     const api = { ...demoApi, bootstrap: async () => state };
     const root = document.createElement("div");
     document.body.append(root);
-    const app = new TeumApp(root, api, { demoMode: false });
+    const app = new JariApp(root, api, { demoMode: false });
     mounted.push(app);
 
     await app.start(true);
@@ -174,7 +174,7 @@ describe("concept C application shell", () => {
     adminState.user = { id: "admin", username: "operator", role: "admin" };
     const adminRoot = document.createElement("div");
     document.body.append(adminRoot);
-    const adminApp = new TeumApp(adminRoot, { ...demoApi, bootstrap: async () => adminState }, { demoMode: false });
+    const adminApp = new JariApp(adminRoot, { ...demoApi, bootstrap: async () => adminState }, { demoMode: false });
     mounted.push(adminApp);
     await adminApp.start(true);
     adminApp.navigate("settings");
@@ -189,7 +189,7 @@ describe("concept C application shell", () => {
     memberState.user = { id: "member", username: "traveller", role: "member" };
     const memberRoot = document.createElement("div");
     document.body.append(memberRoot);
-    const memberApp = new TeumApp(memberRoot, { ...demoApi, bootstrap: async () => memberState }, { demoMode: false });
+    const memberApp = new JariApp(memberRoot, { ...demoApi, bootstrap: async () => memberState }, { demoMode: false });
     mounted.push(memberApp);
     await memberApp.start(true);
     memberApp.navigate("settings");
@@ -201,7 +201,7 @@ describe("concept C application shell", () => {
   it("marks the fixture-only experience on every demo screen", async () => {
     const root = document.createElement("div");
     document.body.append(root);
-    const app = new TeumApp(root, createDemoApi(), { demoMode: true });
+    const app = new JariApp(root, createDemoApi(), { demoMode: true });
     mounted.push(app);
 
     await app.start(true);
@@ -223,7 +223,7 @@ describe("concept C application shell", () => {
     const api = { ...demoApi, bootstrap: async () => state };
     const root = document.createElement("div");
     document.body.append(root);
-    const app = new TeumApp(root, api, { demoMode: false });
+    const app = new JariApp(root, api, { demoMode: false });
     mounted.push(app);
 
     await app.start(true);
@@ -373,7 +373,7 @@ describe("concept C application shell", () => {
     };
     const root = document.createElement("div");
     document.body.append(root);
-    const app = new TeumApp(root, api, { demoMode: true });
+    const app = new JariApp(root, api, { demoMode: true });
     mounted.push(app);
 
     await app.start(true);
@@ -389,7 +389,7 @@ describe("concept C application shell", () => {
   it("keeps edited journey fields when passenger controls rerender the form", async () => {
     const root = document.createElement("div");
     document.body.append(root);
-    const app = new TeumApp(root, createDemoApi(), { demoMode: true });
+    const app = new JariApp(root, createDemoApi(), { demoMode: true });
     mounted.push(app);
     await app.start(true);
     app.navigate("journey");
@@ -406,7 +406,7 @@ describe("concept C application shell", () => {
   it("never collects railway credentials in demo mode", async () => {
     const root = document.createElement("div");
     document.body.append(root);
-    const app = new TeumApp(root, createDemoApi(), { demoMode: true });
+    const app = new JariApp(root, createDemoApi(), { demoMode: true });
     mounted.push(app);
     await app.start(true);
 
@@ -424,7 +424,7 @@ describe("concept C application shell", () => {
     const api = { ...demoApi, bootstrap: async () => state };
     const root = document.createElement("div");
     document.body.append(root);
-    const app = new TeumApp(root, api, { demoMode: false });
+    const app = new JariApp(root, api, { demoMode: false });
     mounted.push(app);
 
     await app.start(true);
@@ -436,7 +436,7 @@ describe("concept C application shell", () => {
   it("matches the server app-account credential bounds", async () => {
     const root = document.createElement("div");
     document.body.append(root);
-    const app = new TeumApp(root, createDemoApi(), { demoMode: false });
+    const app = new JariApp(root, createDemoApi(), { demoMode: false });
     mounted.push(app);
     await app.start(false);
     root.querySelector<HTMLButtonElement>("[data-auth-gate='guest']")?.click();
@@ -465,7 +465,7 @@ async function mountLive(overrides: Partial<ReturnType<typeof createDemoApi>> = 
   const api = { ...createDemoApi(), ...overrides };
   const root = document.createElement("div");
   document.body.append(root);
-  const app = new TeumApp(root, api, { demoMode: false });
+  const app = new JariApp(root, api, { demoMode: false });
   mounted.push(app);
   await app.start(true);
   return { app, root, api };
@@ -514,7 +514,7 @@ describe("account isolation regressions", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const api = { ...createDemoApi(), bootstrap: vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue({ ...state, draft: null }) };
-    const app = new TeumApp(root, api, { demoMode: false });
+    const app = new JariApp(root, api, { demoMode: false });
     mounted.push(app);
     const first = app.start(true);
     await app.start(false);
@@ -650,7 +650,7 @@ it("discards a deferred login token after the auth generation is reset", async (
   const onToken = vi.fn();
   const root = document.createElement("div");
   document.body.append(root);
-  const app = new TeumApp(root, { ...createDemoApi(), login: () => pending.promise }, { demoMode: false, onToken });
+  const app = new JariApp(root, { ...createDemoApi(), login: () => pending.promise }, { demoMode: false, onToken });
   mounted.push(app);
   await app.start(false);
   root.querySelector<HTMLButtonElement>("[data-auth-gate='guest']")!.click();
@@ -772,7 +772,7 @@ const threeCarSeatCars = async () => ({
 
 const seatInventoryFake = async (_trainKey: string, carNo: number) => makeCarInventory(carNo);
 
-async function openThreeCarWaitDialog(root: HTMLElement, app: TeumApp) {
+async function openThreeCarWaitDialog(root: HTMLElement, app: JariApp) {
   app.navigate("journey");
   root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
   await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());

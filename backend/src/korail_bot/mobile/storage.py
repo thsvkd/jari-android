@@ -7,7 +7,9 @@ from korail_bot.utils.crypto import SecretBox
 
 
 class NamespacedRedis:
-    PREFIX = "teum:mobile:v1:"
+    PREFIX = "jari:mobile:v1:"
+    # The namespace this data lived under before the app was renamed.
+    LEGACY_PREFIX = "teum:mobile:v1:"
     SINGLE_KEY = frozenset(
         {"get", "set", "expire", "incr", "ttl", "sadd", "sismember", "smembers", "srem"}
     )
@@ -23,6 +25,14 @@ class NamespacedRedis:
             return getattr(self.client, name)(self.PREFIX + key, *args, **kwargs)
 
         return call
+
+    def adopt_legacy_keys(self):
+        """Move keys left under the old namespace into this one. Keeps TTLs; never overwrites."""
+        moved = 0
+        for key in self.client.scan_iter(match=self.LEGACY_PREFIX + "*", count=100):
+            if self.client.renamenx(key, self.PREFIX + key.removeprefix(self.LEGACY_PREFIX)):
+                moved += 1
+        return moved
 
     def scan_iter(self, match="*", count=100):
         for key in self.client.scan_iter(match=self.PREFIX + match, count=count):
