@@ -11,6 +11,7 @@ from korail_mobile_api import PhysicalSeat, SeatCar, SeatCarListResponse, SeatIn
 
 from korail_bot.mobile.config import MobileConfig
 from korail_bot.mobile.runtime import MobileRuntime
+from korail_bot.mobile.storage import MobileStorage
 from korail_bot.mobile.worker import apply_result
 from korail_bot.models import (
     OnboardedAccount,
@@ -822,3 +823,84 @@ def test_unlink_cannot_finish_while_scheduled_start_holds_credentials(tmp_path, 
     finally:
         release.set()
         runtime.storage.close()
+
+
+def _plan_gateway(client):
+    storage = MobileStorage(client=client, secret="a" * 40)
+    return storage, MiniAppGateway(storage, MagicMock(), MagicMock(), MagicMock())
+
+
+def _start_running(storage, seat_plan_json):
+    storage.save_running_reservation(
+        RunningReservation(
+            chat_id=-100,
+            process_id=123,
+            korail_id="phone",
+            search_params=TrainSearchParams(
+                dep_date="20260930",
+                src_locate="서울",
+                dst_locate="부산",
+                dep_time="070000",
+                train_numbers=["015", "019"],
+                seat_plan_json=seat_plan_json,
+            ),
+        )
+    )
+
+
+def test_running_search_describes_the_seat_plan_the_worker_polls_with():
+    client = fakeredis.FakeRedis(decode_responses=True)
+    storage, gateway = _plan_gateway(client)
+    storage.save_user_session(
+        UserSession(
+            chat_id=-100,
+            train_info={"trainOptions": [{"no": "015", "label": "07:00→09:40 KTX"}]},
+        )
+    )
+    plan = {
+        "strategy": "independent",
+        "passengerCount": 2,
+        "trains": [
+            {
+                "trainNo": "015",
+                "seatClass": "general",
+                # Out of seating order on the wire, to prove the description sorts.
+                "targets": [
+                    {"carNo": 3, "seatNo": "005B", "label": "5B", "row": 5, "column": "B"},
+                    {"carNo": 3, "seatNo": "005A", "label": "5A", "row": 5, "column": "A"},
+                ],
+            },
+            {"trainNo": "019", "seatClass": "any", "targets": []},
+        ],
+    }
+    _start_running(storage, json.dumps(plan, ensure_ascii=False))
+    running = gateway._running(-100)
+    assert running["seatPlan"] == {
+        "trains": [
+            {
+                "trainNo": "015",
+                "label": "07:00→09:40 KTX",
+                "seatClass": "general",
+                "targets": [{"carNo": 3, "labels": ["5A", "5B"]}],
+            },
+            {
+                # No picker session row for it, so the number stands in.
+                "trainNo": "019",
+                "label": "019",
+                "seatClass": "any",
+                "targets": [],
+            },
+        ]
+    }
+    assert running["seatPlanSummary"] == "015 일반실 3호차 5A·5B · 019 좌석 무관"
+    storage.close()
+
+
+def test_plain_search_has_no_seat_plan_to_describe():
+    client = fakeredis.FakeRedis(decode_responses=True)
+    storage, gateway = _plan_gateway(client)
+    _start_running(storage, "")
+    running = gateway._running(-100)
+    assert running["seatPlan"] is None
+    assert running["seatPlanSummary"] == ""
+    storage.close()

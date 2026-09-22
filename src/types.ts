@@ -66,12 +66,24 @@ export interface SearchDescription {
   selectedTrains: string[];
 }
 
+// The seats the running worker is polling for, grouped per car; empty targets mean the whole train was chosen.
+export interface RunningSeatPlanTrain {
+  trainNo: string;
+  // The picker's "07:00→09:40 KTX"; falls back to the train number once the picker session is gone.
+  label: string;
+  seatClass: "general" | "special" | "any";
+  targets: Array<{ carNo: number; labels: string[] }>;
+}
+
 export interface RunningSearch extends SearchDescription {
   startedAt: string | null;
   health?: SearchHealth;
   lastCheckedAt?: string | null;
   attemptCount?: number | null;
   elapsedSeconds?: number | null;
+  seatPlan?: { trains: RunningSeatPlanTrain[] } | null;
+  // The same plan as one Korean line, already cut to fit; "" when there is no plan.
+  seatPlanSummary?: string;
 }
 
 export interface ScheduledSearch {

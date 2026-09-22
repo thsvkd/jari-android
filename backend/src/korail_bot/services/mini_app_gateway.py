@@ -23,7 +23,9 @@ from korail_bot.models import (
     MAJOR_STATIONS,
     FavouriteSearch,
     SeatPlanError,
+    SeatTarget,
     TrainSearchParams,
+    TrainSeatTargets,
     UserProgress,
     UserSession,
     parse_seat_plan,
@@ -47,6 +49,66 @@ logger = get_logger(__name__)
 #: A search may be narrowed to at most this many trains, matching the chat's
 #: own list. More than this on screen is not a choice, it is a wall of text.
 MAX_SELECTED_TRAINS = 30
+
+#: The seat-plan summary is one line under a heading on the detail screen, so
+#: it is cut to what fits rather than wrapped into a paragraph.
+SEAT_PLAN_SUMMARY_LIMIT = 120
+SEAT_CLASS_NAMES = {"general": "일반실", "special": "특실"}
+
+
+def _car_groups(train: TrainSeatTargets) -> list[dict]:
+    """The seats chosen in one train, grouped by car and in seating order."""
+    cars: dict[int, list[SeatTarget]] = {}
+    for target in train.targets:
+        cars.setdefault(target.car_no, []).append(target)
+    return [
+        {
+            "carNo": car_no,
+            # By row and side, not by label text: "10A" sorts before "5A".
+            "labels": [
+                target.label
+                for target in sorted(targets, key=lambda t: (t.row or 0, t.column, t.label))
+            ],
+        }
+        for car_no, targets in sorted(cars.items())
+    ]
+
+
+def _train_summary(train: TrainSeatTargets, groups: list[dict]) -> str:
+    """One train of the plan as the detail screen reads it aloud."""
+    parts = [train.train_no]
+    name = SEAT_CLASS_NAMES.get(train.seat_class)
+    if name:
+        parts.append(name)
+    if train.any_seat:
+        parts.append("좌석 무관")
+    else:
+        parts.extend(f"{group['carNo']}호차 {'·'.join(group['labels'])}" for group in groups)
+    return " ".join(parts)
+
+
+def _clipped_summary(parts: list[str]) -> str:
+    """Whole trains while they fit, then a count of the ones left out."""
+    text = " · ".join(parts)
+    if len(text) <= SEAT_PLAN_SUMMARY_LIMIT:
+        return text
+    kept: list[str] = []
+    for index, part in enumerate(parts):
+        suffix = _summary_suffix(len(parts) - index - 1)
+        candidate = " · ".join([*kept, part])
+        if len(candidate) + len(suffix) > SEAT_PLAN_SUMMARY_LIMIT:
+            break
+        kept.append(part)
+    suffix = _summary_suffix(len(parts) - len(kept))
+    if not kept:
+        # One train with a whole car picked is longer than the whole line, and
+        # "… 외 0편" tells the user nothing. Cut the train instead of dropping it.
+        return parts[0][: SEAT_PLAN_SUMMARY_LIMIT - len(suffix)] + suffix
+    return " · ".join(kept) + suffix
+
+
+def _summary_suffix(remaining: int) -> str:
+    return f"… 외 {remaining}편" if remaining else "…"
 
 
 class MiniAppError(Exception):
@@ -676,6 +738,50 @@ class MiniAppGateway:
         return {
             **self._describe_params(running.search_params),
             "startedAt": as_utc(running.started_at).isoformat() if running.started_at else None,
+            **self._seat_plan_description(chat_id, running.search_params),
+        }
+
+    def _seat_plan_description(self, chat_id: int, params: TrainSearchParams) -> dict:
+        """
+        The seats the running worker is actually polling for.
+
+        Read back from the record the search runs on, not from the app's last
+        draft: the draft can be edited or cleared while the search keeps
+        waiting on the plan it was started with.
+        """
+        try:
+            plan = parse_seat_plan(params.seat_plan_json)
+        except SeatPlanError:
+            # The worker keeps its own copy either way, so a plan this side
+            # cannot read is a missing line on a screen, not a broken state.
+            logger.warning("Could not describe the running seat plan for chat_id=%s", chat_id)
+            plan = None
+        if plan is None:
+            return {"seatPlan": None, "seatPlanSummary": ""}
+        labels = self._train_labels(chat_id)
+        trains = []
+        summaries = []
+        for train in plan.trains:
+            groups = _car_groups(train)
+            trains.append(
+                {
+                    "trainNo": train.train_no,
+                    "label": labels.get(train.train_no) or train.train_no,
+                    "seatClass": train.seat_class,
+                    "targets": groups,
+                }
+            )
+            summaries.append(_train_summary(train, groups))
+        return {"seatPlan": {"trains": trains}, "seatPlanSummary": _clipped_summary(summaries)}
+
+    def _train_labels(self, chat_id: int) -> dict[str, str]:
+        """Departure/arrival labels from the picker, when it is still around."""
+        session = self.storage.get_user_session(chat_id)
+        options = (session.train_info or {}).get("trainOptions") or [] if session else []
+        return {
+            str(option.get("no", "")): str(option.get("label") or "")
+            for option in options
+            if isinstance(option, dict)
         }
 
     def _scheduled(self, chat_id: int) -> dict | None:
