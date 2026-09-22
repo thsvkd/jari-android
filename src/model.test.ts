@@ -6,6 +6,7 @@ import {
   conditionsToDraft,
   deriveRadarView,
   normalizeCapabilities,
+  relativeTime,
 } from "./model";
 
 describe("booking payload", () => {
@@ -169,5 +170,22 @@ describe("honest radar state", () => {
       deriveRadarView({ running: { ...running, health: "error" }, connection: "online" }).animate,
     ).toBe(false);
     expect(deriveRadarView({ running, connection: "offline" }).kind).toBe("offline");
+  });
+});
+
+describe("relative check time", () => {
+  const base = Date.parse("2026-09-23T12:00:00Z");
+
+  it("says how long ago the last check was, and falls back to the date after a day", () => {
+    expect(relativeTime("2026-09-23T11:59:31Z", base)).toBe("방금");
+    expect(relativeTime("2026-09-23T11:57:00Z", base)).toBe("3분 전");
+    expect(relativeTime("2026-09-23T10:00:00Z", base)).toBe("2시간 전");
+    expect(relativeTime("2026-09-21T10:00:00Z", base)).toBe("9월 21일");
+  });
+
+  it("stays quiet without a usable timestamp", () => {
+    expect(relativeTime(null, base)).toBe("");
+    expect(relativeTime("", base)).toBe("");
+    expect(relativeTime("어제쯤", base)).toBe("");
   });
 });

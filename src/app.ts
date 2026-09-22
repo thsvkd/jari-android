@@ -7,6 +7,7 @@ import {
   conditionsToDraft,
   deriveRadarView,
   normalizeCapabilities,
+  relativeTime,
   type BookingDraft,
   type ConnectionState,
   type RadarKind,
@@ -1249,13 +1250,16 @@ export class JariApp {
     });
     // A search that is simply running says so in its pill; only a problem state earns the notice box.
     const running = state.running;
-    const checkLine = [radar.lastCheckedLabel ? `${radar.lastCheckedLabel} 확인` : "", `${running?.attemptCount ?? 0}회 조회`].filter(Boolean).join(" · ");
+    // 확인 시각은 여기 한 줄에만, 초 없는 상대 시각으로 적어요. 헤더는 시각이 아예 없을 때만 그렇다고 말해요.
+    const checkedAt = this.radarRunning(state)?.lastCheckedAt ?? null;
+    const sinceCheck = relativeTime(checkedAt, Date.now());
+    const checkLine = [sinceCheck ? `${sinceCheck} 확인` : "", `${running?.attemptCount ?? 0}회 조회`].filter(Boolean).join(" · ");
     const detail = radar.kind === "healthy" || radar.kind === "running-unverified"
       ? running?.attemptCount ? `<p class="center muted activity-check">${escapeHtml(checkLine)}</p>` : ""
       : `<div class="notice ${radar.kind === "error" || radar.kind === "stale" ? "warning" : "calm"}"><b>${escapeHtml(radar.title)}</b><p>${escapeHtml(radar.description)}</p></div>`;
     return `${this.renderSubhead("내 예약", "검색과 결제 상태")}
       ${this.renderPendingCard(false)}
-      ${running ? `<section class="card activity-card"><div class="row-between"><span class="status-pill status-${radar.kind}"><i></i>${escapeHtml(radar.eyebrow)}</span><small>${radar.lastCheckedLabel ? `${escapeHtml(radar.lastCheckedLabel)} 확인` : "최근 조회 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(running.srcLocate)}</span><i>→</i><span>${escapeHtml(running.dstLocate)}</span></div>${this.renderRunningConditions(running)}${detail}<button class="button danger" data-action="cancel-search">검색 중지</button></section>` : ""}
+      ${running ? `<section class="card activity-card"><div class="row-between"><span class="status-pill status-${radar.kind}"><i></i>${escapeHtml(radar.eyebrow)}</span><small>${sinceCheck ? "" : "확인 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(running.srcLocate)}</span><i>→</i><span>${escapeHtml(running.dstLocate)}</span></div>${this.renderRunningConditions(running)}${detail}<button class="button danger" data-action="cancel-search">검색 중지</button></section>` : ""}
       ${state.scheduled ? this.renderScheduledCard() : ""}
       ${!state.running && !state.scheduled && !state.pending.length ? `<div class="empty">${activityEmptyMark()}<h2>진행 중인 검색이 없어요</h2><p>새 여정을 등록하고 빈자리를 찾아보세요.</p><button class="button primary" data-action="new-journey">새 여정 찾기</button></div>` : ""}
       <section class="timeline status-guide-card"><h2>상태 안내</h2>${radar.kind === "healthy" || radar.kind === "running-unverified" ? "" : `<div><i></i><p><b>${escapeHtml(radar.title)}</b><span>${escapeHtml(radar.description)}</span></p></div>`}${state.running?.startedAt ? `<div><i></i><p><b>검색 시작</b><span>${escapeHtml(formatStamp(state.running.startedAt))}</span></p></div>` : ""}</section>`;

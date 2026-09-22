@@ -119,6 +119,17 @@ function formatActualCheck(instant: number): string {
   }).format(new Date(instant));
 }
 
+/** 초 단위 시각은 읽는 사람에게 의미가 없어요. "방금", "3분 전"처럼 지금과의 거리로 말해요. 시각이 없으면 빈 문자열이에요. */
+export function relativeTime(iso: string | null | undefined, now: number): string {
+  const instant = iso ? Date.parse(iso) : Number.NaN;
+  if (!Number.isFinite(instant)) return "";
+  const seconds = Math.max(0, Math.round((now - instant) / 1000));
+  if (seconds < 60) return "방금";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}분 전`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}시간 전`;
+  return new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric" }).format(new Date(instant));
+}
+
 export function deriveRadarView(input: {
   running: RunningSearch | null;
   connection: ConnectionState;

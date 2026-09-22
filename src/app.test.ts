@@ -1200,14 +1200,15 @@ it("keeps the route chips under the heading in every state, and drops the shelf 
   expect(bare.root.querySelector("[data-search-status]")?.textContent).toContain("찾는 중");
 });
 
-it("replaces the running notice in 검색 상세 with the check count, keeping the timestamp", async () => {
+it("prints the check time once in 검색 상세, as a relative time next to the count", async () => {
   const { app, root } = await mountLive();
   app.navigate("activity");
   const card = root.querySelector<HTMLElement>(".activity-card")!;
 
   expect(card.querySelector(".notice")).toBeNull();
-  expect(card.textContent).toContain("확인 · 18회 조회");
-  expect(card.querySelector(".row-between small")?.textContent).toMatch(/확인$/);
+  expect(card.querySelector(".activity-check")?.textContent).toBe("방금 확인 · 18회 조회");
+  // 헤더는 시각을 되풀이하지 않아요.
+  expect(card.querySelector(".row-between small")?.textContent).toBe("");
   // A search in trouble still explains itself.
   expect(root.querySelector(".status-guide-card")?.textContent).not.toContain("앱을 닫아도");
 });
