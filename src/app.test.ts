@@ -80,9 +80,9 @@ describe("concept C application shell", () => {
     if (scenario === "offline") vi.useFakeTimers();
     const { root } = await mountLive({ bootstrap: async () => state, ...(scenario === "offline" ? { status: async () => { throw new Error("network unavailable"); } } : {}) });
     if (scenario === "offline") await vi.advanceTimersByTimeAsync(30_000);
-    const wanted = { unavailable: "철도 조회를 완료하지 못했어요", stale: "한동안 조회 결과가 없어요", idle: "진행 중인 검색이 없어요", scheduled: "예약한 시각에 검색을 시작해요", pending: "빈자리를 찾았어요", offline: "현재 상태를 확인할 수 없어요" };
+    const wanted = { unavailable: "철도 조회를 완료하지 못했어요", stale: "한동안 조회 결과가 없어요", idle: "떠날 채비는 끝났어요", scheduled: "예약한 시각에 검색을 시작해요", pending: "빈자리를 찾았어요", offline: "현재 상태를 확인할 수 없어요" };
     expect(root.querySelector("[data-search-status]")?.textContent).toContain(wanted[scenario]);
-    if (scenario !== "idle") expect(root.querySelector("[data-search-status]")?.textContent).not.toContain("진행 중인 검색이 없어요");
+    if (scenario !== "idle") expect(root.querySelector("[data-search-status]")?.textContent).not.toContain("떠날 채비는 끝났어요");
   });
 
   it("keeps an unverified running search visible in the static status card", async () => {
@@ -1139,6 +1139,104 @@ it("reaches the confirm screen from the train list by clicks alone and saves a f
   expect(root.querySelector("[data-action='start-now']")).not.toBeNull();
   root.querySelector<HTMLButtonElement>("[data-action='save-favourite']")!.click();
   await vi.waitFor(() => expect(saveFavourite).toHaveBeenCalledOnce());
+});
+
+async function mountIdle(overrides: Partial<ReturnType<typeof createDemoApi>> = {}) {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running = null;
+  return mountLive({ bootstrap: async () => state, ...overrides });
+}
+
+it("offers the restored search and the favourites as dated shortcuts on the idle card", async () => {
+  const { root } = await mountIdle();
+  const chips = [...root.querySelectorAll<HTMLButtonElement>(".idle-chip")];
+
+  expect(root.querySelector("[data-search-status]")?.textContent).toContain("최근 구간 바로가기");
+  expect(chips.map((chip) => chip.dataset.routeChip)).toEqual(["recent", "demo-home"]);
+  expect(chips[0]!.textContent).toContain("최근 · 07:00–12:00");
+  expect(chips[1]!.textContent).toContain("주말에 집으로 · 14:00–18:00");
+  expect(root.querySelector(".idle-steps")).toBeNull();
+  // The card never repeats the full-width button below it.
+  expect(root.querySelectorAll("[data-action='new-journey']")).toHaveLength(1);
+});
+
+it("drops a favourite that repeats the restored route and window", async () => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running = null;
+  state.favourites[0]!.conditions = { ...state.draft!, dep_date: "" };
+  const { root } = await mountLive({ bootstrap: async () => state });
+
+  expect([...root.querySelectorAll<HTMLButtonElement>(".idle-chip")].map((chip) => chip.dataset.routeChip)).toEqual(["recent"]);
+});
+
+it("falls back to the three steps when there is no route to shortcut", async () => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running = null;
+  state.draft = null;
+  state.favourites = [];
+  const { root } = await mountLive({ bootstrap: async () => state });
+
+  expect(root.querySelector(".idle-shelf")).toBeNull();
+  expect([...root.querySelectorAll(".idle-step-label")].map((step) => step.textContent)).toEqual(["여정 정하기", "지켜보기", "알림 받기"]);
+});
+
+it.each([
+  ["1000", "2026-09-14"],
+  ["0900", "2026-09-15"],
+])("preselects the chip's date as today, or tomorrow once its window has passed (%s)", async (maxDepTime, expected) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-09-14T09:30:00+09:00"));
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running = null;
+  state.draft = { ...state.draft!, max_dep_time: maxDepTime };
+  const { root } = await mountLive({ bootstrap: async () => state });
+
+  root.querySelector<HTMLButtonElement>("[data-route-chip='recent']")!.click();
+
+  expect(root.querySelector(".action-sheet")?.textContent).toContain("언제 떠나세요?");
+  expect(root.querySelector<HTMLInputElement>("#sheet-date")!.value).toBe(expected);
+});
+
+it("searches the chip's trip on the chosen date and keeps the trains that still run", async () => {
+  const trains = vi.fn(createDemoApi().trains);
+  const { root } = await mountIdle({ trains });
+
+  root.querySelector<HTMLButtonElement>("[data-route-chip='demo-home']")!.click();
+  expect(root.querySelector(".action-sheet")?.textContent).toContain("인원 1명 · 14:00–18:00 · 고른 열차 3편");
+  root.querySelector<HTMLInputElement>("#sheet-date")!.value = "2026-10-03";
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector(".train-list")).not.toBeNull());
+  expect(trains.mock.calls[0]![0].conditions).toMatchObject({
+    dep_date: "20261003",
+    src_station: "서울",
+    dst_station: "부산",
+    dep_time: "1400",
+    max_dep_time: "1800",
+    passenger_count: 1,
+    train_type: "1",
+    seat_plan: undefined,
+  });
+  // 015 and 019 are listed again, 099 is not; the button counts only the two that survived.
+  expect(root.querySelector("[data-action='trains-next']")?.textContent).toContain("2편 선택");
+  expect([...root.querySelectorAll(".train-card.selected [data-train-toggle]")].map((train) => (train as HTMLElement).dataset.trainToggle)).toEqual(["015", "019"]);
+  expect(root.querySelector(".toast")?.textContent).toBe("3편 중 1편은 이 날 운행하지 않아 뺐어요.");
+});
+
+it("keeps the date sheet dismissable without starting a search", async () => {
+  const trains = vi.fn(createDemoApi().trains);
+  const { root } = await mountIdle({ trains });
+
+  root.querySelector<HTMLButtonElement>("[data-route-chip='recent']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-cancel']")!.click();
+
+  expect(root.querySelector(".action-sheet")).toBeNull();
+  expect(trains).not.toHaveBeenCalled();
+  expect(root.querySelector(".screen-home")).not.toBeNull();
 });
 
 it("asks in an in-app sheet instead of window.confirm, and only acts when it is confirmed", async () => {

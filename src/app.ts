@@ -90,6 +90,14 @@ interface SheetState {
   resolve: (value: string | null) => void;
 }
 
+// A shortcut on the idle home card: one route the user can put a new date on and search again.
+interface RouteChip {
+  key: string;
+  route: string;
+  when: string;
+  conditions: Conditions;
+}
+
 // Leave at least one car in the middle: a 3-car train allows 1, a 2-car train 0.
 const maxTrimCars = (cars: number): number => Math.max(0, Math.floor((cars - 1) / 2));
 // The cars "호차 앞뒤 제외" keeps: the formation minus that many cars at each end.
@@ -148,6 +156,14 @@ function formatWindow(conditions: Conditions | SearchDescription | null): string
   const start = "dep_time" in conditions ? conditions.dep_time : conditions.depTime;
   const end = "max_dep_time" in conditions ? conditions.max_dep_time : conditions.maxDepTime;
   return `${formatDate(date)} · ${clockFromCompact(start)}–${end === "2400" ? "마지막 열차" : clockFromCompact(end)}`;
+}
+
+function formatTimeWindow(conditions: Conditions): string {
+  return `${clockFromCompact(conditions.dep_time)}–${conditions.max_dep_time === "2400" ? "마지막 열차" : clockFromCompact(conditions.max_dep_time)}`;
+}
+
+function isoDate(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function favouriteEmptyMark(): string {
@@ -453,18 +469,21 @@ export class JariApp {
           ? { kind: "scheduled", title: "예약한 시각에 검색을 시작해요", description: `${formatStamp(state.scheduled.startAt)} 시작 예정` }
           : radar
       : radar;
-    return `<div class="home-layout"><div class="home-primary">
-      <section class="status-heading">
-        <div><p class="eyebrow">검색 현황</p><h1>내 검색 현황</h1></div>
-      </section>
-      <section class="card search-status-card" data-search-status data-state="${status.kind}" aria-label="검색 상태 요약">
+    const statusCard = status.kind === "idle"
+      ? this.renderIdleCard()
+      : `<section class="card search-status-card" data-search-status data-state="${status.kind}" aria-label="검색 상태 요약">
         <div class="search-status-title"><span class="search-status-icon">${status.kind === "reserved" ? "예약" : ["error", "stale", "offline"].includes(status.kind) ? "확인" : "대기"}</span><h2>${escapeHtml(status.title)}</h2></div>
         ${route}
         ${journey ? `<p class="search-conditions">${escapeHtml(journey.trainTypeShow)} · ${escapeHtml(seatLabels[journey.specialInfoShow] ?? journey.specialInfoShow)} · ${journey.passengerCount}명</p>` : ""}
         <p class="search-status-description">${escapeHtml(status.description)}</p>
         ${!paymentFirst && state.running && radar.lastCheckedLabel ? `<p class="search-last-check">마지막 조회 ${escapeHtml(radar.lastCheckedLabel)}</p>` : ""}
         ${state.running || state.scheduled || state.pending.length ? `<button class="button secondary" data-view="activity">${paymentFirst ? "예약 확인하기" : "검색 상세 보기"}<span>→</span></button>` : ""}
+      </section>`;
+    return `<div class="home-layout"><div class="home-primary">
+      <section class="status-heading">
+        <div><p class="eyebrow">검색 현황</p><h1>내 검색 현황</h1></div>
       </section>
+      ${statusCard}
       ${this.renderPendingCard(true)}
       ${state.scheduled ? this.renderScheduledCard() : ""}
       <button class="button primary roomy" data-action="new-journey" ${state.capabilities.korail ? "" : "disabled"}><span>${state.capabilities.korail ? "새 여정 찾기" : "예약 서버에 연결해 주세요"}</span><b>＋</b></button>
@@ -472,6 +491,40 @@ export class JariApp {
       <section class="section-head"><div><p class="eyebrow">빠른 실행</p><h2>자주 가는 구간</h2></div><button class="text-button" data-view="favourites">전체 보기</button></section>
       <div class="route-list">${state.favourites.length ? state.favourites.slice(0, 2).map((favourite) => this.renderFavouriteRow(favourite, true)).join("") : '<div class="empty compact"><p>아직 저장한 구간이 없어요.</p></div>'}</div>
       </aside></div>`;
+  }
+
+  // The shortcuts on the idle card: the search the server restored, then up to three favourites, never the same route and window twice.
+  private homeChips(): RouteChip[] {
+    const state = this.state!;
+    const chips: RouteChip[] = [];
+    const seen = new Set<string>();
+    const add = (key: string, when: string, conditions: Conditions) => {
+      const route = `${conditions.src_station} → ${conditions.dst_station}`;
+      const mark = `${route}|${formatTimeWindow(conditions)}`;
+      if (!conditions.src_station || !conditions.dst_station || seen.has(mark)) return;
+      seen.add(mark);
+      chips.push({ key, route, when, conditions });
+    };
+    if (state.draft) add("recent", `최근 · ${formatTimeWindow(state.draft)}`, state.draft);
+    for (const favourite of state.favourites.slice(0, 3)) {
+      add(favourite.id, `${favourite.name} · ${favourite.window}`, favourite.conditions);
+    }
+    return chips;
+  }
+
+  private renderIdleCard(): string {
+    const chips = this.homeChips();
+    const steps = ["여정 정하기", "지켜보기", "알림 받기"];
+    const shelf = chips.length
+      ? `<p class="idle-shelf-label" id="idle-shelf-label">최근 구간 바로가기</p>
+        <ul class="idle-shelf" aria-labelledby="idle-shelf-label">${chips.map((chip) => `<li><button type="button" class="idle-chip" data-route-chip="${escapeHtml(chip.key)}" aria-label="${escapeHtml(`${chip.route} ${chip.when} 구간으로 날짜 고르기`)}"><span class="idle-chip-route">${escapeHtml(chip.conditions.src_station)}<i aria-hidden="true">→</i>${escapeHtml(chip.conditions.dst_station)}</span><span class="idle-chip-when">${escapeHtml(chip.when)}</span></button></li>`).join("")}</ul>`
+      : `<ol class="idle-steps">${steps.map((label, index) => `<li ${index ? "" : 'aria-current="step"'}><span class="idle-step-num">${index + 1}</span><span class="idle-step-label">${label}</span></li>`).join("")}</ol>`;
+    return `<section class="card search-status-card" data-search-status data-state="idle" aria-label="검색 상태 요약">
+      <p class="idle-badge"><span class="idle-dot" aria-hidden="true"></span>대기 중</p>
+      <h2 class="idle-title">떠날 채비는 끝났어요</h2>
+      <p class="idle-body">구간만 정하면 빈자리가 나는 순간 알려드릴게요.</p>
+      ${shelf}
+    </section>`;
   }
 
   private renderPendingCard(compact: boolean): string {
@@ -1453,6 +1506,49 @@ export class JariApp {
     });
   }
 
+  // Today, or tomorrow when the chip's window has already gone by - the date the user would pick anyway.
+  private chipDefaultDate(conditions: Conditions, now = new Date()): string {
+    const endMinutes = Number(conditions.max_dep_time.slice(0, 2)) * 60 + Number(conditions.max_dep_time.slice(2, 4));
+    const passed = now.getHours() * 60 + now.getMinutes() >= endMinutes;
+    return isoDate(new Date(now.getTime() + (passed ? 86_400_000 : 0)));
+  }
+
+  // A chip carries the whole trip but not its day: ask for the date, then run the same search the journey form would.
+  private async searchFromChip(key: string): Promise<void> {
+    const source = key === "recent"
+      ? this.state?.draft
+      : this.state?.favourites.find((favourite) => favourite.id === key)?.conditions;
+    if (!source) return;
+    const wanted = source.trains?.map(String) ?? [];
+    const note = [`인원 ${source.passenger_count}명`, formatTimeWindow(source), wanted.length ? `고른 열차 ${wanted.length}편` : ""]
+      .filter(Boolean).join(" · ");
+    const picked = await this.openSheet({
+      title: "언제 떠나세요?",
+      content: `<label class="field"><span>출발 날짜</span><input id="sheet-date" type="date" value="${escapeHtml(this.chipDefaultDate(source))}"></label><p class="sheet-note">${escapeHtml(note)}</p>`,
+      confirmLabel: "이 날짜로 찾기",
+    });
+    if (!picked) return;
+    // Seats picked on a seat map belong to the day they were picked for; everything else about the trip carries over.
+    const conditions: Conditions = { ...source, dep_date: picked.replaceAll("-", ""), trains: undefined, seat_plan: undefined };
+    this.draft = conditionsToDraft(conditions);
+    this.conditions = conditions;
+    this.cancellationTargets = [];
+    this.selectedTrains = [];
+    await this.run(async (isCurrent) => {
+      const result = await this.api.trains({ conditions });
+      if (!isCurrent()) return;
+      this.trainOptions = result.trains;
+      this.trainListTruncated = result.truncated;
+      const kept = wanted.filter((number) => result.trains.some((train) => train.no === number));
+      this.cancellationTargets = kept.map((trainNo) => ({ trainNo, seatClass: this.wholeTrainSeatClass(), targets: [] }));
+      this.selectedTrains = kept;
+      if (kept.length < wanted.length) {
+        this.showToast(`${wanted.length}편 중 ${wanted.length - kept.length}편은 이 날 운행하지 않아 뺐어요.`);
+      }
+      this.navigate("trains");
+    });
+  }
+
   // The home card's "그만 찾기" and the detail screen's "검색 중지" ask differently but stop the same search.
   private async cancelSearch(fromHome: boolean): Promise<void> {
     const confirmed = fromHome
@@ -1623,6 +1719,11 @@ export class JariApp {
       this.authMode = authMode;
       this.error = "";
       this.render();
+      return;
+    }
+    const routeChip = button.dataset.routeChip;
+    if (routeChip) {
+      void this.searchFromChip(routeChip);
       return;
     }
     const favouriteId = button.dataset.useFavourite;
