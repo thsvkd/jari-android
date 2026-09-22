@@ -368,36 +368,44 @@ class KorailService(RailService):
         """Search rows made safe for the seat-map and reservation forms.
 
         Beyond the padding, the second unit of a coupled KTX-산천 (9069 listed
-        next to 069, same times and stations) arrives without h_trn_clsf_cd,
-        and the form check refuses the row before any request is sent. The
-        unit it runs coupled with names the class, so it is borrowed from
-        there; a row with no such sibling is left as it came.
+        next to 069) arrives without h_trn_clsf_cd, and the form check
+        refuses the row before any request is sent. The code is the class
+        (07 is KTX-산천 on every row), so any row of the same class name in
+        the result supplies it; a row with no such neighbour is left as it
+        came, and the seat-read log then shows the row.
         """
         trains = [cls._padded_train(train) for train in trains]
-        class_codes: dict[tuple, str] = {}
+        class_codes: dict[str, str] = {}
         for train in trains:
             if isinstance(train, TrainSummary) and train.train_class_code:
-                class_codes.setdefault(cls._service_key(train), train.train_class_code)
+                class_codes.setdefault(train.train_class_name or "", train.train_class_code)
         return [
             replace(train, train_class_code=class_codes[key])
             if isinstance(train, TrainSummary)
             and not train.train_class_code
-            and (key := cls._service_key(train)) in class_codes
+            and (key := train.train_class_name or "") in class_codes
             else train
             for train in trains
         ]
 
     @staticmethod
-    def _service_key(train) -> tuple:
-        return tuple(
-            getattr(train, name, None) or ""
+    def describe_train_row(train) -> str:
+        """The wire identity of one search row, for a log line about it."""
+        return " ".join(
+            f"{name}={getattr(train, name, None)!r}"
             for name in (
+                "train_no",
+                "train_class_name",
+                "train_class_code",
+                "train_group_code",
                 "departure_date",
+                "run_date",
                 "departure_time",
-                "arrival_time",
                 "departure_station_code",
                 "arrival_station_code",
-                "train_class_name",
+                "departure_run_order",
+                "arrival_run_order",
+                "seat_attribute_code",
             )
         )
 

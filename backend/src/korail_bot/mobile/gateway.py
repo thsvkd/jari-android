@@ -14,6 +14,7 @@ from korail_bot.models import OnboardedAccount, PaymentStatus, SeatPreference, S
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.access_service import AccessDecision, AccessLevel, AccessService
 from korail_bot.services.cancellation_wait_service import train_label
+from korail_bot.services.korail_service import KorailService
 from korail_bot.services.mini_app_gateway import MiniAppError, MiniAppGateway
 from korail_bot.services.mini_app_service import MiniAppDataError, MiniAppSubmission
 from korail_bot.services.seat_map_service import (
@@ -167,10 +168,11 @@ class MobileGateway(MiniAppGateway):
             # The message is safe to log here: no request on this path carries
             # the password, and a protocol error's text names the failing field.
             logger.error(
-                "Could not read Korail cars for chat_id=%s (%s: %s)",
+                "Could not read Korail cars for chat_id=%s (%s: %s) %s",
                 chat_id,
                 type(exc).__name__,
                 exc,
+                KorailService.describe_train_row(train),
             )
             raise MiniAppError(
                 "호차 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502
@@ -200,10 +202,11 @@ class MobileGateway(MiniAppGateway):
             raise MiniAppError(str(exc), 422) from exc
         except Exception as exc:
             logger.error(
-                "Could not read Korail seats for chat_id=%s (%s: %s)",
+                "Could not read Korail seats for chat_id=%s (%s: %s) %s",
                 chat_id,
                 type(exc).__name__,
                 exc,
+                KorailService.describe_train_row(train),
             )
             raise MiniAppError(
                 "좌석표를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502
@@ -229,10 +232,11 @@ class MobileGateway(MiniAppGateway):
             raise MiniAppError(str(exc), 422) from exc
         except Exception as exc:
             logger.error(
-                "Could not read Korail cars for chat_id=%s (%s: %s)",
+                "Could not read Korail cars for chat_id=%s (%s: %s) %s",
                 chat_id,
                 type(exc).__name__,
                 exc,
+                KorailService.describe_train_row(train),
             )
             raise MiniAppError(
                 "호차 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502
