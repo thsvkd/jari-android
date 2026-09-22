@@ -6,6 +6,7 @@ trains, and reserving one. The search loop that drives those calls is in
 """
 
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -29,6 +30,7 @@ from korail_mobile_api import (
     SeatCarListResponse,
     SeatInventoryResponse,
     TrainSearchQuery,
+    TrainSummary,
 )
 from korail_mobile_api.constants import KORAIL_STANDBY_WAIT_FLAG
 from korail_mobile_api.errors import KorailAppError
@@ -57,6 +59,23 @@ KORAIL_RESERVATION_DETAIL = f"{KORAIL_MOBILE}.certification.ReservationList"
 # and the post-hoc matcher is what honours it.
 _WINDOW_COLUMNS = frozenset({"A", "D"})
 _AISLE_COLUMNS = frozenset({"B", "C"})
+# Wire width of each fixed-width train field. Korail sometimes sends these
+# as JSON numbers, which drops the leading zeros ("0001" arrives as 1);
+# the seat-map form check then rejects the row before any request is
+# sent, and the sheet fails with "좌석표를 불러오지 못했어요" for that train
+# only. Widths follow korail_mobile_api.validate_seat_inventory_inputs.
+_TRAIN_FIELD_WIDTHS = {
+    "train_no": 3,
+    "train_group_code": 3,
+    "departure_station_code": 4,
+    "arrival_station_code": 4,
+    "departure_time": 6,
+    "arrival_time": 6,
+    "train_class_code": 2,
+    "departure_run_order": 6,
+    "arrival_run_order": 6,
+}
+
 _NO_REMAINING_SEATS_CODE = "ERI411321"
 
 # Re-exported: these used to be defined here, and half the codebase imports
@@ -331,7 +350,7 @@ class KorailService(RailService):
                 passengers=passenger_count,
             )
         )
-        trains = list(result.trains)
+        trains = [self._padded_train(train) for train in result.trains]
         if train_type == TrainType.KTX:
             trains = [train for train in trains if train.train_group_name == "KTX"]
         if max_dep_time != "2400":
@@ -342,6 +361,19 @@ class KorailService(RailService):
                 and int(str(train.departure_time)[:4]) < int(max_dep_time)
             ]
         return trains
+
+    @staticmethod
+    def _padded_train(train):
+        if not isinstance(train, TrainSummary):
+            return train
+        padded = {
+            name: value.zfill(width)
+            for name, width in _TRAIN_FIELD_WIDTHS.items()
+            if (value := getattr(train, name, None)) is not None
+            and value.isdigit()
+            and len(value) < width
+        }
+        return replace(train, **padded) if padded else train
 
     def search_selectable_trains(self, **kwargs) -> list:
         """Search using the same current API whose train objects seat reads require."""

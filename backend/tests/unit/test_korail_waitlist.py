@@ -112,3 +112,51 @@ def test_waitlist_cancels_the_hold_when_follow_up_fails():
         )
 
     service._modern_client.cancel_unpaid_hold.assert_called_once()
+
+
+def test_search_restores_leading_zeros_korail_drops_from_numeric_fields():
+    from korail_mobile_api import TrainSummary
+    from korail_mobile_api.errors import KorailProtocolError
+    from korail_mobile_api.payloads import validate_seat_inventory_inputs
+
+    service = service_with_modern_client()
+    # 서울(0001)→부산(0020), KTX-산천(07): the codes came as JSON numbers, so
+    # their leading zeros were gone before the row was parsed.
+    raw = TrainSummary.from_raw(
+        {
+            "h_trn_no": 69,
+            "h_trn_gp_cd": "100",
+            "h_dpt_rs_stn_cd": 1,
+            "h_arv_rs_stn_cd": 20,
+            "h_dpt_dt": "20260922",
+            "h_run_dt": "20260922",
+            "h_dpt_tm": 63000,
+            "h_arv_tm": "084300",
+            "h_trn_clsf_cd": 7,
+            "h_dpt_stn_run_ordr": 1,
+            "h_arv_stn_run_ordr": 14,
+        }
+    )
+    with pytest.raises(KorailProtocolError):
+        validate_seat_inventory_inputs(raw, 1)
+    service._modern_client.search_trains.return_value = SimpleNamespace(trains=(raw,))
+
+    (train,) = service.search_waitlist_trains(
+        dep_date="20260922",
+        src_locate="0001",
+        dst_locate="0020",
+        dep_time="060000",
+        max_dep_time="0700",
+        train_type=TrainType.ALL,
+        passenger_count=1,
+    )
+
+    validate_seat_inventory_inputs(train, 1)
+    assert (train.train_no, train.departure_station_code, train.arrival_station_code) == (
+        "069",
+        "0001",
+        "0020",
+    )
+    assert (train.departure_time, train.train_class_code) == ("063000", "07")
+    assert (train.departure_run_order, train.arrival_run_order) == ("000001", "000014")
+    assert train.arrival_time == "084300"
