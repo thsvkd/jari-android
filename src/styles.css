@@ -387,7 +387,8 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .action-sheet { width: min(100%, 520px); display: grid; gap: 11px; padding: 24px 20px max(20px, env(safe-area-inset-bottom)); border-radius: 24px 24px 0 0; background: var(--surface-raised); box-shadow: 0 -16px 60px rgb(0 0 0 / 25%); }
 .action-sheet h2 { margin: 0; font-size: 20px; letter-spacing: -.6px; }
 .action-sheet p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.action-sheet .sheet-note { color: var(--accent-ink); }
+.action-sheet .sheet-note { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; color: var(--accent-ink); }
+.action-sheet .sheet-chips { margin-bottom: 12px; }
 .action-sheet-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 5px; }
 /* The stacked-button rule below would push the second button down and stretch the first; side by side they share one height. */
 .action-sheet-actions .button { margin-top: 0; }

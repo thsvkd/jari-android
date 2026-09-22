@@ -1643,11 +1643,24 @@ export class JariApp {
     const wanted = source.trains?.map(String) ?? [];
     const note = [`인원 ${source.passenger_count}명`, formatTimeWindow(source), wanted.length ? `고른 열차 ${wanted.length}편` : ""]
       .filter(Boolean).join(" · ");
+    const today = isoDate(new Date());
+    const tomorrow = isoDate(new Date(Date.now() + 86_400_000));
+    const preset = this.chipDefaultDate(source);
+    const chip = (value: string, label: string) =>
+      `<button type="button" class="seat-chip ${value === preset ? "selected" : ""}" data-sheet-date="${value}" aria-pressed="${value === preset}">${label}</button>`;
     const picked = await this.openSheet({
       title: "언제 떠나세요?",
-      content: `<label class="field"><span>출발 날짜</span><input id="sheet-date" type="date" value="${escapeHtml(this.chipDefaultDate(source))}"></label><p class="sheet-note">${escapeHtml(note)}</p>`,
+      content: `<div class="seat-chips sheet-chips">${chip(today, "오늘")}${chip(tomorrow, "내일")}</div><label class="field"><span>출발 날짜</span><input id="sheet-date" type="date" value="${escapeHtml(preset)}"></label><p class="sheet-note">${escapeHtml(note)}<button type="button" class="text-button" data-action="sheet-edit">조건 수정</button></p>`,
       confirmLabel: "이 날짜로 찾기",
     });
+    // 날짜만 바꾸는 시트에서 조건 자체를 손보러 가는 길. 시트를 닫고 이 조건으로 채운 여정 폼을 연다.
+    if (picked === "edit") {
+      this.draft = conditionsToDraft(source);
+      this.conditions = null;
+      this.selectedTrains = wanted;
+      this.navigate("journey");
+      return;
+    }
     if (!picked) return;
     // Seats picked on a seat map belong to the day they were picked for; everything else about the trip carries over.
     const conditions: Conditions = { ...source, dep_date: picked.replaceAll("-", ""), trains: undefined, seat_plan: undefined };
@@ -1863,6 +1876,12 @@ export class JariApp {
       this.changeSeatFilter(button.dataset.seatFilter);
       return;
     }
+    if (button.dataset.sheetDate) {
+      const input = this.root.querySelector<HTMLInputElement>("#sheet-date");
+      if (input) input.value = button.dataset.sheetDate;
+      this.syncSheetDateChips();
+      return;
+    }
     const view = button.dataset.view as AppView | undefined;
     if (view) {
       this.navigate(view);
@@ -2038,6 +2057,9 @@ export class JariApp {
       case "sheet-cancel":
         this.closeSheet(null);
         break;
+      case "sheet-edit":
+        this.closeSheet("edit");
+        break;
       case "sheet-confirm":
         this.closeSheet(this.root.querySelector<HTMLInputElement>("#sheet-date")?.value ?? "");
         break;
@@ -2064,8 +2086,22 @@ export class JariApp {
     this.render();
   }
 
+  // 칩과 날짜 입력은 한 값을 가리켜요. 어느 쪽을 만지든 표시는 함께 움직여요.
+  private syncSheetDateChips(): void {
+    const value = this.root.querySelector<HTMLInputElement>("#sheet-date")?.value ?? "";
+    for (const chip of this.root.querySelectorAll<HTMLButtonElement>("[data-sheet-date]")) {
+      const on = chip.dataset.sheetDate === value;
+      chip.classList.toggle("selected", on);
+      chip.setAttribute("aria-pressed", String(on));
+    }
+  }
+
   private onChange(event: Event): void {
     const target = event.target as HTMLInputElement;
+    if (target.id === "sheet-date") {
+      this.syncSheetDateChips();
+      return;
+    }
     if (target.closest("#conditions-form")) {
       this.syncJourneyDraft();
       if (target.name === "unlimited_time" || target.name === "seat_grade_mode") this.render();

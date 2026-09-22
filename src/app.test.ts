@@ -1707,3 +1707,41 @@ it("shows the whole-train pick as a check mark that matches aria-pressed", async
   expect(card().getAttribute("aria-pressed")).toBe("true");
   expect(card().querySelector(".train-check")).not.toBeNull();
 });
+
+describe("날짜 시트", () => {
+  const openDateSheet = async () => {
+    const trains = vi.fn(async () => ({ trains: [], truncated: false, passengerCount: 1 }));
+    const mounted = await mountLive({ trains });
+    mounted.root.querySelector<HTMLButtonElement>("[data-route-chip='demo-home']")!.click();
+    await vi.waitFor(() => expect(mounted.root.querySelector("#sheet-date")).not.toBeNull());
+    return { ...mounted, trains };
+  };
+
+  it("offers 오늘 and 내일 as chips that drive the date input", async () => {
+    const { root } = await openDateSheet();
+    const input = () => root.querySelector<HTMLInputElement>("#sheet-date")!;
+    const chips = () => [...root.querySelectorAll<HTMLButtonElement>("[data-sheet-date]")];
+    expect(chips().map((chip) => chip.textContent)).toEqual(["오늘", "내일"]);
+
+    chips()[1]!.click();
+    expect(input().value).toBe(chips()[1]!.dataset.sheetDate);
+    expect(chips()[1]!.getAttribute("aria-pressed")).toBe("true");
+    expect(chips()[0]!.getAttribute("aria-pressed")).toBe("false");
+
+    // 날짜를 직접 고르면 어느 칩도 선택으로 남지 않아요.
+    input().value = "2030-01-01";
+    input().dispatchEvent(new Event("change", { bubbles: true }));
+    expect(chips().every((chip) => chip.getAttribute("aria-pressed") === "false")).toBe(true);
+  });
+
+  it("sends 조건 수정 to the journey form with the saved conditions, searching nothing", async () => {
+    const { root, trains } = await openDateSheet();
+    root.querySelector<HTMLButtonElement>("[data-action='sheet-edit']")!.click();
+
+    await vi.waitFor(() => expect(root.querySelector("#conditions-form")).not.toBeNull());
+    expect(root.querySelector(".action-sheet")).toBeNull();
+    expect(trains).not.toHaveBeenCalled();
+    expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value).toBe("14:00");
+    expect(root.querySelector<HTMLInputElement>("[name='max_dep_time']")!.value).toBe("18:00");
+  });
+});
