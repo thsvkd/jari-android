@@ -49,6 +49,8 @@ npm run build:demo
 
 Windows에서는 아래 명령으로 로컬 키와 환경 파일을 준비합니다. 키는 출력하지 않고,
 기존 키가 있으면 보존합니다. `.secrets`와 `.env`는 Git에서 제외됩니다.
+Firebase 키가 없으면 빈 `backend/.secrets/firebase-admin.json`을 만들어 두어 compose가
+기동하되 푸시는 꺼집니다. 실제 서비스 계정 키로 이 파일을 덮어쓰면 푸시가 켜집니다.
 
 ```powershell
 .\scripts\init-backend.ps1

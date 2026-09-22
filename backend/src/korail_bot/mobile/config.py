@@ -49,10 +49,16 @@ class MobileConfig:
         )
         if "*" in origins:
             raise ValueError("MOBILE_ORIGINS must list explicit origins")
+        fcm = os.environ.get("MOBILE_FCM_CREDENTIALS") or None
+        # compose mounts the Firebase key as a secret and refuses to start
+        # without the file, so init-backend.ps1 leaves an empty one until a
+        # real key exists. Empty means "no push", not a key to load.
+        if fcm and Path(fcm).is_file() and Path(fcm).stat().st_size == 0:
+            fcm = None
         return cls(
             str(data / "identity.sqlite3"),
             secret,
             None if auth_only else url,
-            os.environ.get("MOBILE_FCM_CREDENTIALS"),
+            fcm,
             origins,
         )

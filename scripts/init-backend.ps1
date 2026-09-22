@@ -12,6 +12,13 @@ if (-not (Test-Path -LiteralPath $secretPath)) {
 } else {
     Write-Output 'Existing mobile key preserved.'
 }
+# compose mounts this as a secret and will not start while the file is missing.
+# An empty file means "no push" to the server; replace it with the real key later.
+$firebasePath = Join-Path $secretDir 'firebase-admin.json'
+if (-not (Test-Path -LiteralPath $firebasePath)) {
+    [System.IO.File]::WriteAllText($firebasePath, '', (New-Object System.Text.UTF8Encoding $false))
+    Write-Output 'Created empty firebase-admin.json placeholder: push is off until a real key replaces it.'
+}
 $envPath = Join-Path $backendRoot '.env'
 if (-not (Test-Path -LiteralPath $envPath)) {
     Copy-Item -LiteralPath (Join-Path $backendRoot '.env.example') -Destination $envPath
