@@ -140,6 +140,11 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
         # Every public request arrives through the tunnel or Caddy, so
         # remote_addr is the proxy and would put all clients in one bucket.
         # Cloudflare overwrites CF-Connecting-IP; the API port is not public.
+        # Nothing here checks that, though, so a forged header must still not
+        # buy unlimited guesses: one bucket for every login attempt as well.
+        # ponytail: shared bucket, so an attacker can also lock everyone out
+        # of logging in for five minutes; a trusted-proxy list if that bites.
+        limited("auth-any", 60, 300)
         client = request.headers.get("CF-Connecting-IP") or request.remote_addr or "unknown"
         limited("auth-ip:" + client, 10, 300)
         payload = body()

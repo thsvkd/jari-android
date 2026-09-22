@@ -133,6 +133,12 @@ def test_tunnel_clients_and_seat_maps_have_their_own_limits(api):
     ]
     assert statuses == [200] * 10 + [429]
 
+    # A forged client address per attempt sidesteps the per-address bucket.
+    # It does not sidestep the one every login attempt shares.
+    statuses = [login(f"198.51.100.{index}", f"spray{index}") for index in range(60)]
+    assert statuses[0] != 429
+    assert statuses[-1] == 429
+
 
 def test_reading_a_whole_formation_costs_one_rail_slot(api):
     # The per-car route spends a slot per car and runs out partway through a
