@@ -1099,3 +1099,23 @@ it("offers the access request on the train list, where the error message points 
   await vi.waitFor(() => expect(root.querySelector("[data-action='request-access']")).not.toBeNull());
   expect(root.querySelector("[data-action='start-cancellation-wait'], .train-list")).not.toBeNull();
 });
+
+it("leaves the cars at each end out of a bulk apply when asked", async () => {
+  const seatInventories = vi.fn(async () => ({
+    inventories: [3, 4, 5].map((carNo) => makeCarInventory(carNo)),
+    failedCars: [5] as number[],
+    layoutReference: false,
+  }));
+  const { app, root } = await mountLive({ seatCars: threeCarSeatCars, seatInventory: seatInventoryFake, seatInventories });
+  await openThreeCarWaitDialog(root, app);
+
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='cars:+']")!.click();
+  expect(root.querySelector("[data-seat-filter='cars:+']")!.hasAttribute("disabled")).toBe(true); // 3 cars allow at most 1
+  expect(root.textContent).toContain("앞뒤 1개 제외");
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='apply-all-cars']")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-car='4'] em")?.textContent).toBe("2"));
+  expect(root.querySelector("[data-seat-car='5'] em")).toBeNull(); // the last car was left out
+  expect(root.textContent).not.toContain("5호차 좌석표를 불러오지 못해"); // and its failure is not reported either
+});

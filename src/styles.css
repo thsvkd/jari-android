@@ -263,7 +263,7 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .seat-dialog > :not(.seat-map-live) { flex-shrink: 0; }
 .seat-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .seat-dialog h2 { margin: 0; font-size: 23px; letter-spacing: -.7px; }
-.car-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 3px; scrollbar-width: none; }
+.car-tabs { display: flex; gap: 8px; overflow-x: auto; margin-top: -8px; padding: 8px 8px 3px 0; scrollbar-width: none; } /* room for the count badge that hangs outside each tab; overflow-x would clip it */
 .car-tabs::-webkit-scrollbar { display: none; }
 .car-tab { position: relative; min-width: 84px; min-height: 52px; display: grid; place-items: center; gap: 2px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
 .car-tab b { font-size: 14px; }
