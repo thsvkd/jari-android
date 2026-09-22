@@ -62,7 +62,8 @@ b, strong { font-weight: 760; }
 small { color: var(--muted); }
 
 #app { min-height: 100vh; }
-.app-shell { width: min(100%, 520px); min-height: 100vh; margin: 0 auto; position: relative; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px rgb(20 30 45 / 4%), 0 20px 80px rgb(27 36 51 / 12%); }
+/* clip, not hidden: hidden makes the shell a scroll container, and .sticky-action then sticks to a box that never scrolls. */
+.app-shell { width: min(100%, 520px); min-height: 100vh; margin: 0 auto; position: relative; overflow: clip; background: var(--bg); box-shadow: 0 0 0 1px rgb(20 30 45 / 4%), 0 20px 80px rgb(27 36 51 / 12%); }
 .screen { min-height: calc(100vh - 148px); padding: 22px 22px calc(112px + env(safe-area-inset-bottom)); }
 .topbar { display: flex; align-items: center; justify-content: space-between; height: calc(72px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 22px 0; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(18px); position: sticky; top: 0; z-index: 20; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0; background: transparent; text-align: left; }
@@ -224,6 +225,7 @@ small { color: var(--muted); }
 .train-card { min-height: 84px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 17px; background: var(--surface); text-align: left; }
 /* Chosen as a whole or with seats picked: the same look a selected column chip has. */
 .train-card.selected { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 4px 0 0 var(--accent); }
+.train-card.selected .seat-action:not(.selected) { background: var(--surface); } /* keeps the pill visible on the tinted card */
 /* The card's text is the button that takes the train as a whole; it keeps the card's typography. */
 .train-main { min-width: 0; display: grid; gap: 3px; padding: 0; background: transparent; color: inherit; text-align: left; font: inherit; }
 .train-main > small { font-size: 9px; }
@@ -536,7 +538,9 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
 .toast, .blocker b, .launch p, .fatal p { font-size: 14px; }
 
 @media (orientation: portrait) {
-  html, body, #app { width: 100%; min-height: 100%; overflow-x: hidden; }
+  /* Same trap as .screen below: hidden here made body and #app scroll containers, and the sticky train-list footer
+     stuck to #app's own (never-scrolling) box instead of the viewport. clip with the hidden fallback, as below. */
+  html, body, #app { width: 100%; min-height: 100%; overflow-x: hidden; overflow-x: clip; }
   body { padding: 0; }
   .app-shell {
     width: 100%; max-width: 520px; min-height: 100dvh; margin: 0 auto;
