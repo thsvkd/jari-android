@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { JariApp } from "./app";
 import { ApiError } from "./api";
@@ -1600,4 +1600,37 @@ describe("확인 화면의 좌석 지정", () => {
     expect((await withPlan([{ trainNo: "015", seatClass: "general", targets: [] }])).textContent).toContain("좌석 지정좌석 무관");
     expect((await withPlan(null)).textContent).not.toContain("좌석 지정");
   });
+});
+
+it("follows the system theme while none was chosen, and stops once one is", async () => {
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  const query = {
+    matches: false,
+    addEventListener: (_: string, listener: (event: MediaQueryListEvent) => void) => listeners.add(listener),
+    removeEventListener: (_: string, listener: (event: MediaQueryListEvent) => void) => listeners.delete(listener),
+  };
+  Object.defineProperty(window, "matchMedia", { value: () => query, configurable: true });
+  onTestFinished(() => {
+    Object.defineProperty(window, "matchMedia", { value: undefined, configurable: true });
+    window.localStorage.removeItem("jari.theme");
+  });
+  const flip = (matches: boolean) => {
+    for (const listener of listeners) listener({ matches } as MediaQueryListEvent);
+  };
+
+  const { app } = await mountLive();
+  expect(document.documentElement.dataset.theme).toBe("light");
+
+  flip(true);
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  flip(false);
+  expect(document.documentElement.dataset.theme).toBe("light");
+
+  // 사용자가 한 번 고르면 시스템이 바뀌어도 그대로 둬요.
+  window.localStorage.setItem("jari.theme", "light");
+  flip(true);
+  expect(document.documentElement.dataset.theme).toBe("light");
+
+  app.dispose();
+  expect(listeners.size).toBe(0);
 });

@@ -212,18 +212,22 @@ export class JariApp {
   // Consecutive status polls that could not reach the server. One miss is a phone waking up or hopping networks; two is offline.
   private pollMisses = 0;
   private theme: "light" | "dark";
+  private readonly themeQuery: MediaQueryList | null;
 
   constructor(root: HTMLElement, api: MobileApi, options: AppOptions) {
     this.root = root;
     this.api = api;
     this.options = options;
     const savedTheme = window.localStorage.getItem("jari.theme");
+    this.themeQuery = window.matchMedia?.("(prefers-color-scheme: dark)") ?? null;
     this.theme =
       savedTheme === "light" || savedTheme === "dark"
         ? savedTheme
-        : window.matchMedia?.("(prefers-color-scheme: dark)").matches
+        : this.themeQuery?.matches
           ? "dark"
           : "light";
+    this.onSystemTheme = this.onSystemTheme.bind(this);
+    this.themeQuery?.addEventListener("change", this.onSystemTheme);
     this.onClick = this.onClick.bind(this);
     this.onChange = this.onChange.bind(this);
     this.onSubmit = this.onSubmit.bind(this);
@@ -292,6 +296,7 @@ export class JariApp {
     this.root.removeEventListener("input", this.onChange);
     this.root.removeEventListener("submit", this.onSubmit);
     window.removeEventListener("keydown", this.onKeyDown);
+    this.themeQuery?.removeEventListener("change", this.onSystemTheme);
     if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
     if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
   }
@@ -2045,6 +2050,13 @@ export class JariApp {
 
   private onKeyDown(event: KeyboardEvent): void {
     if (event.key === "Escape" && this.sheet) this.closeSheet(null);
+  }
+
+  // 직접 고른 테마가 있으면 그게 우선이에요. 그 전까지는 시스템이 바뀌는 대로 따라가요.
+  private onSystemTheme(event: MediaQueryListEvent): void {
+    if (window.localStorage.getItem("jari.theme")) return;
+    this.theme = event.matches ? "dark" : "light";
+    this.render();
   }
 
   private onChange(event: Event): void {
