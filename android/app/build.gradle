@@ -21,6 +21,14 @@ android {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+        // The local end-to-end stack only. Installs beside the real app (its own id, storage and
+        // Keystore entry) and may speak plain HTTP to the PC's server over adb reverse, nothing else.
+        e2e {
+            initWith debug
+            applicationIdSuffix ".e2e"
+            versionNameSuffix "-e2e"
+            matchingFallbacks = ['debug']
+        }
     }
 }
 
@@ -48,6 +56,8 @@ try {
     def servicesJSON = file('google-services.json')
     if (servicesJSON.text) {
         apply plugin: 'com.google.gms.google-services'
+        // Firebase knows only com.jari.app, so the e2e variant (and its push) goes without it.
+        tasks.matching { it.name == 'processE2eGoogleServices' }.configureEach { enabled = false }
     }
 } catch(Exception e) {
     logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")

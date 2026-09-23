@@ -1,5 +1,9 @@
 node_modules/
 dist/
+dist-e2e/
+test-results/
+# 에이전트 도구가 만드는 작업 상태예요. 커밋하지 않아요.
+.omc/
 .vite/
 *.log
 artifacts/

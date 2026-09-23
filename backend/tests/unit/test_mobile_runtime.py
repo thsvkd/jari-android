@@ -205,3 +205,91 @@ def test_keys_under_the_old_namespace_are_adopted_once_without_overwriting():
     assert redis.get("runtime_owner") == "current"
     assert client.get("teum:mobile:v1:favourite:1:a") is None
     assert redis.adopt_legacy_keys() == 0
+
+
+def test_worker_writes_the_booked_train_down_before_the_app_is_told(tmp_path, monkeypatch):
+    # The app reads its status the moment the booking notice lands. A payment
+    # record written after that notice showed as an empty card in between.
+    import sys
+
+    from korail2.korail2 import Reservation
+
+    from korail_bot.mobile.config import MobileConfig
+    from korail_bot.mobile.runtime import MobileRuntime
+    from korail_bot.mobile.worker import MobileSearchProcess
+    from korail_bot.models import PaymentStatus
+    from korail_bot.telegramBot.telebotBackProcess import BackgroundReservationProcess
+
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = MobileRuntime(
+        MobileConfig(str(tmp_path / "identity.sqlite3"), "a" * 40, "redis://localhost:1/1"),
+        redis_client=client,
+    )
+    # An earlier booking the user already paid for must not swallow this one.
+    runtime.storage.save_payment_status(
+        PaymentStatus(chat_id=-100, completed=True, reminder_active=False, train_info="지난 표")
+    )
+    booked = Reservation(
+        {
+            "h_trn_clsf_nm": "KTX",
+            "h_trn_no": "00101",
+            "h_dpt_rs_stn_nm": "서울",
+            "h_arv_rs_stn_nm": "부산",
+            "h_run_dt": "20260924",
+            "h_dpt_tm": "131800",
+            "h_arv_tm": "155900",
+            "h_pnr_no": "R1",
+            "h_tot_seat_cnt": "001",
+            "h_ntisu_lmt_dt": "20260923",
+            "h_ntisu_lmt_tm": "033200",
+            "h_rsv_amt": "00078200",
+        }
+    )
+    rail = MagicMock()
+    rail.login.return_value = True
+    rail.search_and_reserve_loop.return_value = booked
+    rail.reservation_id.return_value = "R1"
+    rail.payment_due.return_value = ("20260923", "033200")
+    rail.describe_train.return_value = {"no": "00101", "dep_time": "131800"}
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "worker",
+            "20260924",
+            "서울",
+            "부산",
+            "130000",
+            "TrainType.KTX",
+            "ReserveOption.GENERAL_ONLY",
+            "-100",
+            "2400",
+        ],
+    )
+    monkeypatch.setattr(
+        MobileSearchProcess, "_read_credentials", staticmethod(lambda: ("01012345678", "pw", ""))
+    )
+    monkeypatch.setattr(
+        MobileSearchProcess,
+        "_runtime_services",
+        lambda self: (runtime.storage, runtime.notifications),
+    )
+    monkeypatch.setattr(MobileSearchProcess, "_build_rail_service", lambda self: rail)
+    worker = MobileSearchProcess()
+    seen = []
+    tell = worker._send_callback
+
+    def at_callback(message, **kwargs):
+        seen.append(runtime.storage.get_payment_status(-100))
+        tell(message, **kwargs)
+
+    worker._send_callback = at_callback
+    worker._watch_payment = lambda reservation: None
+
+    BackgroundReservationProcess.run(worker)
+
+    assert seen[0].train_info == "KTX 00101 서울 → 부산 · 9월 24일(목) 13:18→15:59"
+    assert seen[0].reservation_id == "R1" and not seen[0].completed
+    after = runtime.storage.get_payment_status(-100)
+    assert after.train_info == seen[0].train_info and after.reminder_active
+    runtime.storage.close()

@@ -334,7 +334,8 @@ class MobileGateway(MiniAppGateway):
             )
         expires_at = self._payment_deadline(rail, hold)
         train_info = train_label(train)
-        labels = [target.label for target in targets]
+        # 좌석표 예약과 취소표 대기가 같은 모양으로 적어요. 호차가 없으면 어느 칸인지 알 수 없어요.
+        labels = [f"{target.car_no}호차 {target.label}" for target in targets]
         status = PaymentStatus(
             chat_id=chat_id,
             completed=False,

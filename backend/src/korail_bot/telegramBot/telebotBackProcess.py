@@ -50,11 +50,15 @@ from korail_bot.utils.privacy import mask_phone
 from korail_bot.utils.timezone import (
     RAIL_TIMEZONE,
     as_utc,
-    format_railway_journey,
     utc_now,
 )
 
 logger = get_logger(__name__)
+
+# 좌석을 잡았을 때 앱 알림에 붙는 두 문장. 결제 기한과 결제 버튼은 앱의 결제 카드에 따로 있어요.
+PAY_WITHIN_DEADLINE = "결제 기한 안에 코레일에서 결제해 주세요."
+# 잘못 잡은 표는 결제 전에만 수수료 없이 돌려줄 수 있어요. 날짜가 가장 자주 틀려요.
+WRONG_TRAIN_HINT = "날짜나 열차가 다르면 결제하기 전에 내 예약에서 취소해 주세요. 수수료가 없어요."
 
 # Set recursion limit
 sys.setrecursionlimit(settings.RECURSION_LIMIT)
@@ -252,78 +256,9 @@ class BackgroundReservationProcess:
 
         return username, password, seat_plan
 
-    def _reservation_time_context(self, reservation) -> str:
-        """Show a reserved train on both the user's clock and the railway clock."""
-        journey = format_railway_journey(
-            str(
-                getattr(reservation, "dep_date", None)
-                or getattr(reservation, "departure_date", None)
-                or self.dep_date
-            ),
-            str(
-                getattr(reservation, "dep_time", None)
-                or getattr(reservation, "departure_time", None)
-                or self.dep_time
-            ),
-            str(
-                getattr(reservation, "arr_time", None)
-                or getattr(reservation, "arrival_time", None)
-                or ""
-            ),
-            self.storage.get_user_timezone(self.chat_id),
-        )
-        return f"🕒 {journey}" if journey else "🌐 열차 시각: KST (대한민국 철도 시각)"
-
     def _train_info_for_user(self, reservation) -> str:
-        """Reservation text plus an unambiguous local/Korean time translation."""
-        return f"{reservation}\n{self._reservation_time_context(reservation)}"
-
-    def _check_this_is_right(self, reservation) -> str:
-        """
-        The date and train spelled out, and the way out if they are wrong.
-
-        Placed after the seat is taken rather than before it. Asking first
-        was the obvious design and it does not work: a cancelled seat is gone
-        in seconds, and a confirmation prompt spends them. So the seat is
-        caught, and then the user is shown what was caught while there is
-        still time to hand it back for nothing.
-
-        The date leads because the date is what goes wrong. The train text
-        already carries the times and the stations, but a booking on the
-        right train on the wrong day reads as correct until the platform.
-
-        Best effort: this is decoration on a message that must go out
-        regardless, so anything unreadable is left out rather than raised.
-        """
-        hints = self._train_hints(reservation)
-
-        lines = []
-        date = hints["dep_date"]
-        if len(date) == 8 and date.isdigit():
-            try:
-                day = datetime.strptime(date, "%Y%m%d")
-                weekday = "월화수목금토일"[day.weekday()]
-                lines.append(f"   📅 {day.year}년 {day.month}월 {day.day}일 ({weekday})")
-            except ValueError:
-                lines.append(f"   📅 {date}")
-
-        if hints["train_no"]:
-            lines.append(f"   🚆 열차번호 {hints['train_no']}")
-
-        if self.passenger_count:
-            lines.append(f"   👤 {self.passenger_count}명")
-
-        if not lines:
-            return ""
-
-        joined = "\n".join(lines)
-        return f"""
-🔍 이 표가 맞는지 확인해주세요
-{joined}
-
-❗ 날짜나 열차가 다르다면 지금 바로 /tickets 에서 놓아주세요.
-   결제 전이라 수수료 없이 되돌릴 수 있습니다. 결제한 뒤에는
-   환불 수수료가 붙고, 그건 코레일톡에서만 됩니다."""
+        """The booked train on one line; the app shows the deadline on its own."""
+        return train_label(reservation)
 
     @property
     def payment_url(self) -> str:
@@ -559,23 +494,12 @@ class BackgroundReservationProcess:
                             for i, res in enumerate(all_reservations)
                         ]
                     )
-                    message = f"""
-🎉 열차 예약에 성공했습니다!!
-
-총 {total_seats}명의 좌석이 개별적으로 예약되었습니다.
-(랜덤 배치 옵션: 좌석이 떨어져 있을 수 있습니다)
-
-예약에 성공한 열차 정보는 다음과 같습니다.
-===================
-{reservation_details}
-===================
-
-⚠️ 중요: {settings.PAYMENT_TIMEOUT_MINUTES}분내에 사이트에서 결제를 완료하지 않으면 예약이 취소됩니다!
-
-💡 결제하시면 봇이 직접 확인해서 알려드립니다. 따로 답장하실 필요 없습니다.
-🔕 재촉 알림만 끄시려면 /notify_off
-🔗 결제 링크: {self.payment_url}
-"""
+                    message = (
+                        f"🎉 {total_seats}석을 따로따로 잡았어요\n"
+                        "좌석이 떨어져 있을 수 있어요.\n\n"
+                        f"{reservation_details}\n\n"
+                        f"{PAY_WITHIN_DEADLINE}\n{WRONG_TRAIN_HINT}"
+                    )
 
                     # Create MultiReservationStatus for smart reminders
                     try:
@@ -588,24 +512,25 @@ class BackgroundReservationProcess:
                         # Continue with callback
 
                 else:
-                    seats_text = f"{self.passenger_count}명" if self.passenger_count > 1 else ""
-                    consecutive_text = " (연속된 좌석)" if self.passenger_count > 1 else ""
-                    message = f"""
-🎉 열차 예약에 성공했습니다!!
+                    seats = (
+                        f"\n{self.passenger_count}명 · 연속 좌석"
+                        if self.passenger_count > 1
+                        else ""
+                    )
+                    message = (
+                        "🎉 좌석을 잡았어요\n"
+                        f"{self._train_info_for_user(reservation)}{seats}\n\n"
+                        f"{PAY_WITHIN_DEADLINE} 결제하면 앱이 확인해 알려드려요.\n"
+                        f"{WRONG_TRAIN_HINT}"
+                    )
 
-{seats_text}{consecutive_text}
-
-예약에 성공한 열차 정보는 다음과 같습니다.
-===================
-{self._train_info_for_user(reservation)}
-==================={self._check_this_is_right(reservation)}
-
-⚠️ 중요: {settings.PAYMENT_TIMEOUT_MINUTES}분내에 사이트에서 결제를 완료하지 않으면 예약이 취소됩니다!
-
-💡 결제하시면 봇이 직접 확인해서 알려드립니다. 따로 답장하실 필요 없습니다.
-🔕 재촉 알림만 끄시려면 /notify_off
-🔗 결제 링크: {self.payment_url}
-"""
+                # 알림보다 먼저 적어 둬요. 알림을 받은 앱이 상태를 읽을 때 결제 카드가 비어 있으면 안 돼요.
+                if not (is_random and total_seats > 1):
+                    rsv_id = self.rail.reservation_id(reservation)
+                    if rsv_id:
+                        self._record_pending_payment(
+                            reservation, rsv_id, self._payment_deadline(reservation)
+                        )
 
                 # Send callback with reservation metadata
                 self._send_callback(
@@ -634,7 +559,8 @@ class BackgroundReservationProcess:
 
 [문제가 없는데 계속 반복되는 경우, 이미 해당 열차가 예매가 되었을 수 있습니다. 사이트를 확인해주세요.]
 """
-                self._send_callback(message, status=0)
+                # 좌석을 잡지 못한 실패예요. 성공(0)으로 보내면 빈 결제 기록이 생겨요.
+                self._send_callback(message, status=1)
 
         except Exception as e:
             logger.error(f"Error in reservation process: {e}", exc_info=True)
@@ -754,9 +680,7 @@ class BackgroundReservationProcess:
 
             deadline = self._payment_deadline(capture.hold)
             hints = self._train_hints(capture.hold)
-            train_info = (
-                f"{train_label(capture.train)}\n{self._reservation_time_context(capture.train)}"
-            )
+            train_info = train_label(capture.train)
             labels = [f"{target.car_no}호차 {target.label}" for target in capture.targets]
             info = SingleReservationInfo(
                 reservation_id=reservation_id,
@@ -804,7 +728,7 @@ class BackgroundReservationProcess:
                 f"취소표 {secured}/{plan.passenger_count}석을 잡았어요.\n\n"
                 f"{train_info}\n"
                 f"좌석: {', '.join(labels)}\n\n"
-                f"결제만 하면 예약이 확정돼요: {self.payment_url}"
+                f"{PAY_WITHIN_DEADLINE}\n{WRONG_TRAIN_HINT}"
             )
             self._send_callback(
                 message,
@@ -953,16 +877,17 @@ class BackgroundReservationProcess:
         that has either: the main app deletes the credentials the moment the
         reservation lands, and never sees the reservation itself.
 
-        Written after the callback, which is what creates the record. Best
-        effort: the seat is already booked and the user already told, so
+        Written before the callback: the app reads its status the moment the
+        booking notice lands, and a record without the train on it shows as an
+        empty payment card. Best effort: the seat is already booked, so
         nothing here is worth failing the watch over.
         """
         try:
             status = self.storage.get_payment_status(self.chat_id)
-            if not status:
-                # The callback did not get as far as creating one. A record
-                # with the reservation on it beats no record at all.
-                status = PaymentStatus(chat_id=self.chat_id, completed=False, reminder_active=False)
+            if not status or status.completed or status.cancelled:
+                # A new seat. An earlier paid or cancelled record is history,
+                # not something to write this booking over.
+                status = PaymentStatus(chat_id=self.chat_id, completed=False, reminder_active=True)
 
             status.reservation_id = rsv_id
             status.train_info = self._train_info_for_user(reservation)
@@ -1542,22 +1467,13 @@ class BackgroundReservationProcess:
         self, seat_index: int, total_seats: int, reservation
     ) -> str:
         """Build message for partial reservation success."""
-        return f"""
-🎉 {seat_index + 1}/{total_seats}번째 좌석 예약 성공!
-
-━━━━━━━━━━━━━━━━━━━━
-{self._train_info_for_user(reservation)}
-━━━━━━━━━━━━━━━━━━━━{self._check_this_is_right(reservation)}
-
-⏰ 예약 후 {settings.PAYMENT_TIMEOUT_MINUTES}분 이내 결제하세요!
-🔗 결제: {self.payment_url}
-
-💡 결제가 확인되면 다음 좌석 예약이 자동으로 시작됩니다.
-🔕 재촉 알림만 끄시려면 /notify_off
-
-⚠️ 결제가 확인되지 않아도 10분 뒤에는 다음 좌석 예약을 진행합니다.
-   지금 바로 넘어가려면 아무 메시지나 보내주세요.
-"""
+        return (
+            f"🎉 {seat_index + 1}/{total_seats}번째 좌석을 잡았어요\n"
+            f"{self._train_info_for_user(reservation)}\n\n"
+            f"{PAY_WITHIN_DEADLINE} 결제가 확인되면 다음 좌석을 찾아요.\n"
+            "결제가 없어도 10분 뒤에는 다음 좌석을 찾아요.\n"
+            f"{WRONG_TRAIN_HINT}"
+        )
 
     def _build_final_random_message(self, all_reservations: list, total_seats: int) -> str:
         """Build final message for all random reservations complete."""
@@ -1565,24 +1481,12 @@ class BackgroundReservationProcess:
             [f"좌석 {i + 1}: {r.get('train_info', 'N/A')}" for i, r in enumerate(all_reservations)]
         )
 
-        return f"""
-🎉🎉 모든 좌석 예약 완료! 🎉🎉
-
-총 {total_seats}명의 좌석이 개별적으로 예약되었습니다.
-(랜덤 배치: 좌석이 떨어져 있을 수 있습니다)
-
-━━━━━━━━━━━━━━━━━━━━
-{reservation_details}
-━━━━━━━━━━━━━━━━━━━━
-
-⚠️ 중요 안내:
-• 모든 좌석을 {settings.PAYMENT_TIMEOUT_MINUTES}분 내 결제해야 합니다!
-• 미결제 시 자동 취소됩니다!
-
-🔗 결제 링크: {self.payment_url}
-
-✅ 축하합니다! 🎊
-"""
+        return (
+            f"🎉 {total_seats}석을 모두 잡았어요\n"
+            "좌석이 떨어져 있을 수 있어요.\n\n"
+            f"{reservation_details}\n\n"
+            f"{PAY_WITHIN_DEADLINE}\n{WRONG_TRAIN_HINT}"
+        )
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import {
   conditionsToDraft,
   deriveRadarView,
   normalizeCapabilities,
+  paymentTimeLeft,
   relativeTime,
 } from "./model";
 
@@ -171,6 +172,18 @@ describe("honest radar state", () => {
       deriveRadarView({ running: { ...running, health: "error" }, connection: "online" }).animate,
     ).toBe(false);
     expect(deriveRadarView({ running, connection: "offline" }).kind).toBe("offline");
+  });
+});
+
+describe("payment time left", () => {
+  const base = Date.parse("2026-09-23T12:00:00Z");
+
+  it("counts down in minutes and seconds, rounding down, and warns in the last five minutes", () => {
+    expect(paymentTimeLeft("2026-09-23T12:12:34.900Z", base)).toEqual({ text: "12:34 남음", urgent: false });
+    expect(paymentTimeLeft("2026-09-23T12:05:00Z", base)).toEqual({ text: "5:00 남음", urgent: true });
+    expect(paymentTimeLeft("2026-09-23T13:05:00Z", base)).toEqual({ text: "1시간 5분 남음", urgent: false });
+    expect(paymentTimeLeft("2026-09-23T12:00:00Z", base)).toEqual({ text: "기한 지남", urgent: true });
+    expect(paymentTimeLeft("not a date", base)).toEqual({ text: "", urgent: false });
   });
 });
 

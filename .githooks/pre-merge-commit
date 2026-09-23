@@ -1,0 +1,17 @@
+#!/bin/sh
+# npm run verify 를 통과한 바로 그 내용만 커밋할 수 있어요.
+# 검증이 스테이징된 트리의 해시에 도장을 찍고, 여기서는 지금 커밋하려는 트리와 같은지만 봐요.
+stamp="$(git rev-parse --git-dir)/jari-verified"
+tree="$(git write-tree)"
+if [ -f "$stamp" ] && grep -q "\"tree\": \"$tree\"" "$stamp"; then
+  exit 0
+fi
+cat >&2 <<MSG
+커밋하려는 내용이 전체 검증을 통과하지 않았어요.
+  1. 커밋할 변경을 모두 git add 해요(스테이징하지 않은 변경·추적하지 않는 파일이 없어야 해요).
+  2. npm run verify 로 유닛·통합·e2e·레이아웃·실기기 검증을 돌려요.
+  3. 통과하면 그대로 다시 커밋해요. 한 글자라도 바뀌면 다시 검증해야 해요.
+병합은 git merge --no-commit 으로 합친 뒤 같은 순서로 검증하고 커밋해요.
+rebase·cherry-pick 은 이 훅을 거치지 않아요. main 에 들어가기 전 GitHub Actions 검증이 마지막 관문이에요.
+MSG
+exit 1

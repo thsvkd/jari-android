@@ -18,7 +18,9 @@ from korail_bot.telegramBot.telebotBackProcess import (
 
 def apply_result(storage, notifications, owner, message, status=0, seat_strategy="consecutive"):
     """No network callback: the child already has its own private storage scope."""
-    notifications.publish(owner, message, kind="error" if status == 1 else "booking")
+    # 앱은 종류로 알림 앞 표시를 정해요: 좌석을 잡음 / 문제 / 찾는 중 소식.
+    kind = {0: "reservation", 1: "error"}.get(status, "search")
+    notifications.publish(owner, message, kind=kind)
     if status == 0 and seat_strategy != "random":
         existing = storage.get_payment_status(owner)
         if not existing or existing.completed or existing.cancelled:

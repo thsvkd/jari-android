@@ -130,6 +130,18 @@ export function relativeTime(iso: string | null | undefined, now: number): strin
   return new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric" }).format(new Date(instant));
 }
 
+/** 결제 기한까지 남은 시간. 내림으로 세서 실제보다 넉넉해 보이지 않게 하고, 5분 이하면 급하다고 표시해요. */
+export function paymentTimeLeft(iso: string, now: number): { text: string; urgent: boolean } {
+  const left = Date.parse(iso) - now;
+  if (!Number.isFinite(left)) return { text: "", urgent: false };
+  if (left <= 0) return { text: "기한 지남", urgent: true };
+  const seconds = Math.floor(left / 1000);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const text = hours ? `${hours}시간 ${minutes}분 남음` : `${minutes}:${String(seconds % 60).padStart(2, "0")} 남음`;
+  return { text, urgent: left <= 5 * 60_000 };
+}
+
 export function deriveRadarView(input: {
   running: RunningSearch | null;
   connection: ConnectionState;

@@ -179,6 +179,9 @@ describe("designated reservation conflict caches the fresh inventory", () => {
     await vi.waitFor(() => expect(root.querySelector("[data-seat-no='3-1-A']")).not.toBeNull());
     root.querySelector<HTMLButtonElement>("[data-seat-no='3-1-A']")!.click();
     root.querySelector<HTMLButtonElement>("[data-action='confirm-seat-dialog']")!.click();
+    // 실제 예약이라 확인 시트에서 한 번 더 눌러요.
+    await vi.waitFor(() => expect(root.querySelector("[data-action='sheet-confirm']")).not.toBeNull());
+    root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
     await vi.waitFor(() => expect(root.textContent).toContain("선택한 좌석이 방금 판매됐어요"));
     expect(seatInventory).toHaveBeenCalledTimes(2); // initial car 3 load + the 409 refetch
 

@@ -25,6 +25,14 @@
   --danger: #bd4b50;
   --danger-soft: #fceded;
   --shadow: 0 12px 35px rgb(24 35 54 / 7%);
+  /* 토스트처럼 화면 위에 뜨는 반전 표면(Material 3 inverse surface). */
+  --inverse-surface: #2b3140;
+  --inverse-text: #f1f3f8;
+  --inverse-accent: #aebcff;
+  /* 채운 색 위의 글자. 다크의 밝은 파랑·빨강·주황 위에는 흰 글자가 읽히지 않아 어두운 글자를 써요. */
+  --on-accent: #fff;
+  --on-danger: #fff;
+  --on-warning: #fff;
   color-scheme: light;
 }
 
@@ -47,6 +55,12 @@
   --danger: #f09497;
   --danger-soft: #48292e;
   --shadow: 0 12px 35px rgb(0 0 0 / 22%);
+  --inverse-surface: #e7eaf3;
+  --inverse-text: #1a202a;
+  --inverse-accent: #3f56c1;
+  --on-accent: #11162a;
+  --on-danger: #2a1113;
+  --on-warning: #2b1d08;
   color-scheme: dark;
 }
 
@@ -75,13 +89,13 @@ small { color: var(--muted); }
 .brand-mark path { fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; }
 .brand > span:last-child { display: grid; gap: 1px; }
 .brand b { font-size: 18px; letter-spacing: -.8px; }
-.brand small { font-size: 9px; letter-spacing: .08em; }
+.brand small { font-size: 12px; letter-spacing: .08em; }
 .icon-button { display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); font-size: 19px; }
 .icon-button.danger { color: var(--danger); }
 
-.demo-banner, .offline-banner { min-height: 30px; display: flex; align-items: center; justify-content: center; gap: 9px; padding: 6px 14px; background: #24325f; color: #fff; font-size: 10px; letter-spacing: .02em; }
-.demo-banner b { padding: 2px 6px; border: 1px solid #ffffff70; border-radius: 4px; font-size: 9px; letter-spacing: .1em; }
-.offline-banner { background: var(--warning); color: #fff; }
+.demo-banner, .offline-banner { min-height: 30px; display: flex; align-items: center; justify-content: center; gap: 9px; padding: 6px 14px; background: #24325f; color: #fff; font-size: 12px; letter-spacing: .02em; }
+.demo-banner b { padding: 2px 6px; border: 1px solid #ffffff70; border-radius: 4px; font-size: 12px; letter-spacing: .1em; }
+.offline-banner { background: var(--warning); color: var(--on-warning); }
 
 /* Android WebViews can report zero insets while drawing under the status bar.
    Use the larger inset, never their sum; only the first banner owns this space. */
@@ -96,10 +110,9 @@ small { color: var(--muted); }
   padding-top: 0;
 }
 
-.eyebrow { margin: 0 0 6px; color: var(--accent); font-size: 9px; font-weight: 850; letter-spacing: .16em; }
-.status-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
-.status-heading h1, .subhead h1 { margin: 0; font-size: 23px; line-height: 1.25; letter-spacing: -1px; }
-.status-pill { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 7px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); font-size: 10px; font-weight: 760; }
+.eyebrow { margin: 0 0 6px; color: var(--accent); font-size: 12px; font-weight: 850; letter-spacing: .16em; }
+.subhead h1 { margin: 0; font-size: 23px; line-height: 1.25; letter-spacing: -1px; }
+.status-pill { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 7px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); font-size: 12px; font-weight: 760; }
 .status-pill i, .card-label i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .status-pill.status-error, .status-pill.status-stale, .status-pill.status-offline { background: var(--warning-soft); color: var(--warning); }
 .status-pill.status-idle, .status-pill.status-running-unverified { background: color-mix(in srgb, var(--muted) 13%, var(--surface)); color: var(--muted); }
@@ -112,35 +125,30 @@ small { color: var(--muted); }
 .search-status-card .route-title { justify-content: flex-start; margin-top: 24px; flex-wrap: wrap; }
 .search-status-card .route-title strong { overflow-wrap: anywhere; }
 .search-status-card .route-meta { margin-top: 12px; line-height: 1.8; }
-.search-conditions { color: var(--muted); font-size: 11px; line-height: 1.8; margin: 2px 0 0; }
+.search-conditions { color: var(--muted); font-size: 12px; line-height: 1.8; margin: 2px 0 0; }
 .search-status-description { color: var(--muted); font-size: 12px; line-height: 1.8; margin: 20px 0 0; }
-.search-last-check { color: var(--muted); font-size: 10px; margin: 8px 0 0; }
+.search-last-check { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
 .search-status-card .button { margin-top: 20px; }
 
 /* 대기 중 홈 카드("최근 구간 바로가기" 시안 이식): 배지·제목·한 줄 설명 아래에 구간 칩을 가로로 두고,
    저장한 구간이 하나도 없으면 같은 자리에 3단계 안내를 보여줘요. */
 .search-status-card[data-state="idle"] { padding: 22px 22px 18px; }
-.idle-badge { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 5px 11px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; font-weight: 700; line-height: 1; }
+.idle-badge { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 5px 11px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); font-size: 12px; font-weight: 700; line-height: 1; }
 .idle-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .55; }
-.idle-shelf-label { margin: 18px 0 0; color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+.idle-shelf-label { margin: 18px 0 0; color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .08em; }
 .idle-shelf { display: flex; gap: 8px; list-style: none; margin: 10px -22px 0; padding: 4px 22px 2px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; }
 .idle-shelf::-webkit-scrollbar { width: 0; height: 0; }
 .idle-shelf > li { flex: 0 0 auto; scroll-snap-align: start; }
 .idle-chip { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-height: 52px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface-raised); color: var(--text); text-align: left; transition: transform .16s ease, background-color .16s ease, border-color .16s ease; }
 .idle-chip-route { display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 700; line-height: 1.3; white-space: nowrap; }
 .idle-chip-route i { color: var(--accent); font-style: normal; font-weight: 850; }
-.idle-chip-when { max-width: 22ch; overflow: hidden; color: var(--accent-ink); font-size: 11px; font-weight: 500; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.idle-chip-when { max-width: 22ch; overflow: hidden; color: var(--accent-ink); font-size: 12px; font-weight: 500; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
 .idle-chip:active { transform: scale(.97); border-color: var(--accent); background: var(--accent-soft); }
 @media (prefers-reduced-motion: no-preference) {
   .idle-dot { animation: idle-breathe 1.8s ease-in-out infinite; }
-  .idle-chip { animation: idle-rise .42s ease-out backwards; }
-  .idle-shelf > li:nth-child(2) .idle-chip { animation-delay: .07s; }
-  .idle-shelf > li:nth-child(3) .idle-chip { animation-delay: .14s; }
-  .idle-shelf > li:nth-child(4) .idle-chip { animation-delay: .21s; }
 }
 @media (prefers-reduced-motion: reduce) { .idle-chip { transition: none; } }
 @keyframes idle-breathe { 0%, 100% { opacity: .35; transform: scale(1); } 50% { opacity: 1; transform: scale(1.3); } }
-@keyframes idle-rise { from { opacity: 0; transform: translateY(6px); } }
 
 /* 홈의 "그만 찾기"처럼 카드 안에서 오른쪽에 붙는 글자 버튼. */
 .card-action-row { display: flex; justify-content: flex-end; margin-top: 6px; }
@@ -165,54 +173,58 @@ small { color: var(--muted); }
 .route-title { display: flex; align-items: center; justify-content: center; gap: 15px; }
 .route-title strong { font-size: 24px; letter-spacing: -1px; }
 .route-title span { color: var(--hint); }
-.route-meta { margin: 7px 0 0; color: var(--muted); font-size: 11px; }
+.route-meta { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
 .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 24px 0 18px; padding: 16px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: center; }
 .stats > div { min-width: 0; padding: 0 5px; }
 .stats > div + div { border-left: 1px solid var(--line); }
 .stats b { display: block; overflow: hidden; margin-bottom: 5px; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
-.stats small { display: block; font-size: 9px; }
+.stats small { display: block; font-size: 12px; }
 
 .button { width: 100%; min-height: 52px; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 13px 17px; border-radius: 15px; font-size: 13px; font-weight: 760; text-align: center; }
-.button.primary { background: var(--accent-strong); color: #fff; box-shadow: 0 9px 20px color-mix(in srgb, var(--accent) 23%, transparent); }
-:root[data-theme="dark"] .button.primary { color: #11162a; }
+.button.primary { background: var(--accent-strong); color: var(--on-accent); box-shadow: 0 9px 20px color-mix(in srgb, var(--accent) 23%, transparent); }
 .button.secondary { background: var(--accent-soft); color: var(--accent-ink); }
 .button.ghost { border: 1px solid var(--line); background: var(--surface); color: var(--text); box-shadow: none; }
 .button.danger, .text-button.danger { color: var(--danger); }
 /* 되돌리기 어려운 동작은 꽉 찬 빨간 버튼으로. ghost와 함께 쓰면 지금처럼 테두리 버튼으로 남아요. */
-.button.danger:not(.ghost) { background: var(--danger); color: #fff; box-shadow: 0 9px 20px color-mix(in srgb, var(--danger) 23%, transparent); }
-:root[data-theme="dark"] .button.danger:not(.ghost) { color: #2a1113; }
+.button.danger:not(.ghost) { background: var(--danger); color: var(--on-danger); box-shadow: 0 9px 20px color-mix(in srgb, var(--danger) 23%, transparent); }
 .button.roomy { margin-top: 28px; justify-content: space-between; min-height: 59px; padding-inline: 20px; }
 .button.roomy b { font-size: 21px; font-weight: 400; }
-.text-button { padding: 8px 0; background: transparent; color: var(--accent-ink); font-size: 11px; font-weight: 700; }
+.text-button { padding: 8px 0; background: transparent; color: var(--accent-ink); font-size: 12px; font-weight: 700; }
 .section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 15px; margin: 31px 0 8px; }
 .section-head h2 { margin: 0; font-size: 16px; }
 
 .card { margin: 16px 0; padding: 18px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
 .compact-card { margin-top: 25px; }
-.card-label { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-ink); font-size: 10px; font-weight: 760; }
+.card-label { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-ink); font-size: 12px; font-weight: 760; }
 .card-label.warning { background: var(--warning-soft); color: var(--warning); }
 .payment-row { display: grid; gap: 7px; padding: 15px 0; }
 .payment-row + .payment-row { border-top: 1px solid var(--line); }
 .payment-row div { display: grid; gap: 5px; min-width: 0; overflow-wrap: anywhere; }
 .payment-row strong { font-size: 14px; }
-.payment-row small { font-size: 10px; }
-.payment-row > b { color: var(--warning); font-size: 11px; }
+.payment-row small { font-size: 12px; }
+.payment-row > b { color: var(--warning); font-size: 12px; }
+.time-left { font-variant-numeric: tabular-nums; }
+.time-left.urgent { color: var(--danger); }
 .payment-card .button + .text-button, .payment-card .button + .button { margin-top: 10px; }
 .scheduled-card .route-line { display: grid; gap: 6px; margin: 14px 0 5px; }
-.route-line span { color: var(--muted); font-size: 11px; }
+.route-line span { color: var(--muted); font-size: 12px; }
 
-.route-list { display: grid; }
-.favourite-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.route-list, .favourite-list { display: grid; gap: 10px; }
+.favourite-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; padding: 10px 12px 10px 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow); }
+/* 즐겨찾기가 적어도 추가 버튼은 화면 아래에, 많으면 내비게이션 위에 붙어 있어요. */
+.screen-favourites { display: flex; flex-direction: column; }
+.favourite-add { margin-top: auto; }
+.favourite-list { margin-bottom: 18px; }
 .favourite-row .text-button { padding-inline: 8px; }
 .favourite-row.compact { display: block; }
 .favourite-main { width: 100%; min-height: 48px; display: flex; align-items: center; gap: 12px; padding: 0; background: transparent; text-align: left; }
 .favourite-main > span:last-child { min-width: 0; display: grid; gap: 4px; }
 .favourite-main b { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.favourite-main small { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.favourite-main small { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .route-symbol { display: grid; place-items: center; flex: 0 0 auto; width: 34px; height: 34px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); }
 
 .bottom-nav { position: fixed; bottom: 0; z-index: 30; width: min(100%, 520px); height: var(--nav-height); display: grid; grid-template-columns: repeat(4, 1fr); padding: 8px 10px env(safe-area-inset-bottom); border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent); background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(22px); }
-.bottom-nav button { display: grid; place-items: center; align-content: center; gap: 3px; background: transparent; color: var(--muted); font-size: 9px; }
+.bottom-nav button { display: grid; place-items: center; align-content: center; gap: 3px; background: transparent; color: var(--muted); font-size: 12px; }
 .bottom-nav b { font-size: 19px; font-weight: 400; line-height: 1; }
 .bottom-nav button.active { color: var(--accent); font-weight: 760; }
 
@@ -222,55 +234,55 @@ small { color: var(--muted); }
 .form-card { margin: 0; box-shadow: none; }
 .form-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 17px; }
 .form-section-head > div { display: flex; align-items: center; gap: 9px; }
-.form-section-head span { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 9px; font-weight: 800; }
+.form-section-head span { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 800; }
 .form-section-head h2 { margin: 0; font-size: 15px; letter-spacing: -.3px; }
-.field { display: grid; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 650; }
+.field { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 650; }
 .field input, .field select { width: 100%; min-width: 0; min-height: 48px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 13px; outline: none; background: var(--bg); color: var(--text); font-size: 13px; }
 .field input:focus, .field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
 .station-grid { display: grid; grid-template-columns: 1fr 24px 1fr; align-items: end; gap: 8px; }
 .route-arrow { display: grid; place-items: center; height: 48px; color: var(--accent); }
 .two-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .choice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 17px 0 0; padding: 0; border: 0; }
-.choice-grid legend, .advanced legend { grid-column: 1 / -1; margin-bottom: 7px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.choice-grid legend, .advanced legend { grid-column: 1 / -1; margin-bottom: 7px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .choice-card input { position: absolute; opacity: 0; pointer-events: none; }
 .choice-card span, .choice-disabled { min-height: 57px; display: grid; align-content: center; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); text-align: left; }
 .choice-card b, .choice-disabled b { font-size: 12px; }
-.choice-card small, .choice-disabled small { font-size: 9px; }
+.choice-card small, .choice-disabled small { font-size: 12px; }
 .choice-card input:checked + span { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); box-shadow: inset 0 0 0 1px var(--accent); }
 .choice-disabled { color: var(--muted); opacity: .58; }
-.availability { margin: 9px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.availability { margin: 9px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .availability.center { text-align: center; }
-.check-row { display: flex; align-items: flex-start; gap: 10px; margin: 15px 0 0; font-size: 11px; }
+.check-row { display: flex; align-items: flex-start; gap: 10px; margin: 15px 0 0; font-size: 12px; }
 .check-row input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--accent); }
 .check-row span { display: grid; gap: 3px; }
-.check-row small { font-size: 9px; }
+.check-row small { font-size: 12px; }
 .unavailable-control { padding: 12px; border-radius: 12px; background: color-mix(in srgb, var(--muted) 8%, transparent); }
 .passenger-row { display: flex; align-items: center; justify-content: space-between; margin-top: 19px; }
 .passenger-row > span { display: grid; gap: 3px; font-size: 12px; }
-.passenger-row small { font-size: 9px; }
+.passenger-row small { font-size: 12px; }
 .stepper { display: flex; align-items: center; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; }
 .stepper button { width: 39px; min-height: 40px; background: var(--accent-soft); color: var(--accent-ink); font-size: 18px; }
-.stepper output { min-width: 50px; text-align: center; font-size: 11px; }
+.stepper output { min-width: 50px; text-align: center; font-size: 12px; }
 .advanced { margin-top: 18px; border-top: 1px solid var(--line); }
-.advanced summary { display: flex; justify-content: space-between; padding: 16px 0; color: var(--text); cursor: pointer; font-size: 11px; font-weight: 700; }
+.advanced summary { display: flex; justify-content: space-between; padding: 16px 0; color: var(--text); cursor: pointer; font-size: 12px; font-weight: 700; }
 .advanced summary span { color: var(--muted); font-weight: 500; }
 .advanced fieldset { margin: 4px 0 14px; padding: 0; border: 0; }
 .seat-map { display: grid; grid-template-columns: 1fr 1fr 30px 1fr 1fr; gap: 5px; }
 .seat-column input { position: absolute; opacity: 0; }
 .seat-column span { min-height: 54px; display: grid; place-items: center; align-content: center; gap: 2px; border: 1px solid var(--line); border-radius: 10px; }
 .seat-column b { font-size: 13px; }
-.seat-column small { font-size: 8px; }
+.seat-column small { font-size: 12px; }
 .seat-column input:checked + span { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
-.aisle { display: grid; place-items: center; color: var(--hint); font-size: 8px; writing-mode: vertical-rl; }
+.aisle { display: grid; place-items: center; color: var(--hint); font-size: 12px; writing-mode: vertical-rl; }
 .row-range { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; gap: 8px; }
 .row-range > span { display: grid; place-items: center; height: 48px; color: var(--hint); }
-.field-note { margin: 11px 0 0; color: var(--muted); font-size: 9px; line-height: 1.6; }
-.form-error { margin: 0; padding: 12px 14px; border-radius: 12px; background: var(--danger-soft); color: var(--danger); font-size: 11px; line-height: 1.55; }
+.field-note { margin: 11px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.form-error { margin: 0; padding: 12px 14px; border-radius: 12px; background: var(--danger-soft); color: var(--danger); font-size: 12px; line-height: 1.55; }
 
 .context-line { display: grid; gap: 5px; padding: 15px; border-radius: 15px; background: var(--accent-soft); }
 .context-line b { font-size: 14px; }
-.context-line span { color: var(--muted); font-size: 10px; }
-.intro { color: var(--muted); font-size: 11px; line-height: 1.65; }
+.context-line span { color: var(--muted); font-size: 12px; }
+.intro { color: var(--muted); font-size: 12px; line-height: 1.65; }
 /* 아래 여백은 붙박이 버튼의 높이만큼. 마지막 카드가 버튼 뒤에 가려진 채 끝나지 않게 해요. */
 .train-list { display: grid; gap: 9px; margin: 18px 0; padding-bottom: 88px; }
 .train-card { min-height: 84px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 17px; background: var(--surface); text-align: left; }
@@ -279,26 +291,27 @@ small { color: var(--muted); }
 .train-card.selected .seat-action:not(.selected) { background: var(--surface); } /* keeps the pill visible on the tinted card */
 /* The card's text is the button that takes the train as a whole; it keeps the card's typography.
    체크 표시가 앞에 붙어 카드를 누른 것이 곧 "이 열차의 어떤 자리든" 고른 것임을 보여줘요. */
-.train-main { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; padding: 0; background: transparent; color: inherit; text-align: left; font: inherit; }
+.train-main { min-width: 0; min-height: 48px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; padding: 0; background: transparent; color: inherit; text-align: left; font: inherit; }
 .train-main-text { min-width: 0; display: grid; gap: 3px; }
 .train-check { display: grid; place-items: center; width: 22px; height: 22px; border: 1.5px solid var(--line); border-radius: 7px; color: transparent; font-size: 12px; line-height: 1; }
-.train-main[aria-pressed="true"] .train-check { border-color: var(--accent); background: var(--accent); color: #fff; }
-.train-main-text > small { font-size: 9px; }
+.train-main[aria-pressed="true"] .train-check { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.train-main-text > small { font-size: 12px; }
 .train-main-text > b { font-size: 17px; white-space: nowrap; }
-.train-main-text b i { margin: 0 5px; color: var(--hint); font-size: 11px; font-style: normal; }
-.seat-badge { padding: 5px 7px; border-radius: 7px; font-size: 8px; font-weight: 760; }
+.train-main-text b i { margin: 0 5px; color: var(--hint); font-size: 12px; font-style: normal; }
+.seat-badge { padding: 5px 7px; border-radius: 7px; font-size: 12px; font-weight: 760; }
 .seat-badge.soldout { background: var(--danger-soft); color: var(--danger); }
 .seat-badge.available { background: var(--success-soft); color: var(--success); }
-.seat-badge.chosen { background: var(--accent); color: #fff; }
+.seat-badge.chosen { background: var(--accent); color: var(--on-accent); }
 .train-actions { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.train-actions .button { min-height: 46px; padding: 10px; font-size: 13px; }
+.train-actions .button { min-height: 48px; padding: 10px; font-size: 13px; }
 .train-actions .button + .button { margin-top: 0; }
-.train-actions .text-button { grid-column: 1 / -1; min-height: 44px; }
+.train-actions .text-button { grid-column: 1 / -1; min-height: 48px; }
 .seat-action { position: relative; border: 1px solid transparent; background: var(--accent-soft); color: var(--accent-ink); }
-.seat-action:hover { background: color-mix(in srgb, var(--accent-soft) 76%, var(--accent)); }
-.seat-action.selected { background: var(--accent); color: #fff; box-shadow: 0 7px 18px color-mix(in srgb, var(--accent) 24%, transparent); }
+/* 손가락에는 hover 가 남아 눌린 뒤에도 색이 바뀐 채로 있어요. 마우스가 있을 때만 써요. */
+@media (hover: hover) { .seat-action:hover { background: color-mix(in srgb, var(--accent-soft) 76%, var(--accent)); } }
+.seat-action.selected { background: var(--accent); color: var(--on-accent); box-shadow: 0 7px 18px color-mix(in srgb, var(--accent) 24%, transparent); }
 /* A corner badge that hangs off the button's top-right, the way the car-tab count does, so the label never wraps the button text. */
-.seat-action em { position: absolute; top: -9px; right: -4px; display: inline-flex; padding: 3px 7px; border-radius: 999px; border: 1.5px solid var(--surface); background: var(--success-soft); color: var(--success); font-size: 10px; font-style: normal; font-weight: 800; line-height: 1.2; white-space: nowrap; }
+.seat-action em { position: absolute; top: -9px; right: -4px; display: inline-flex; padding: 3px 7px; border-radius: 999px; border: 1.5px solid var(--surface); background: var(--success-soft); color: var(--success); font-size: 12px; font-style: normal; font-weight: 800; line-height: 1.2; white-space: nowrap; }
 .sticky-action { position: sticky; bottom: calc(82px + env(safe-area-inset-bottom)); z-index: 5; }
 
 .grade-picker { display: grid; gap: 9px; margin: 0; padding: 0; border: 0; }
@@ -325,19 +338,19 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .car-tabs::-webkit-scrollbar { display: none; }
 .car-tab { position: relative; min-width: 84px; min-height: 52px; display: grid; place-items: center; gap: 2px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
 .car-tab b { font-size: 14px; }
-.car-tab small { font-size: 11px; }
+.car-tab small { font-size: 12px; }
 /* A car holding picked seats looks like a selected column chip; the car on screen is told apart by a heavier outline. */
 .car-tab.picked { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
 .car-tab.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-ink); }
 .car-tab.trimmed { opacity: .38; border-style: dashed; }
 .car-tab.trimmed b { text-decoration: line-through; }
-.car-tab em { position: absolute; top: -6px; right: -6px; display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; background: var(--accent-strong); color: #fff; font-size: 10px; font-style: normal; font-weight: 800; }
+.car-tab em { position: absolute; top: -6px; right: -6px; display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; background: var(--accent-strong); color: var(--on-accent); font-size: 12px; font-style: normal; font-weight: 800; }
 .seat-filter { display: grid; gap: 8px; padding: 10px; border-radius: 14px; background: var(--bg); }
 .seat-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
-.seat-filter-row > span { flex: none; width: 28px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.seat-filter-row > span { flex: none; width: 28px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .seat-chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .seat-chips > i { flex: none; width: 1px; height: 20px; margin-inline: 1px; background: var(--line); }
-.seat-chip { flex: 1 1 auto; min-width: 0; min-height: 48px; padding: 0 6px; white-space: nowrap; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); font-size: 13px; font-weight: 700; }
+.seat-chip { flex: 1 1 auto; min-width: 48px; min-height: 48px; padding: 0 6px; white-space: nowrap; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); font-size: 13px; font-weight: 700; }
 .seat-chip.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
 .seat-stepper { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); overflow: hidden; }
 .seat-stepper button { flex: none; width: 48px; height: 48px; padding: 0; background: transparent; color: var(--accent-ink); font-size: 18px; }
@@ -346,7 +359,7 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .seat-steppers { align-items: flex-start; }
 .seat-stepper-block { flex: 1; display: grid; justify-items: center; gap: 3px; }
 .seat-stepper-block > .seat-stepper { justify-self: stretch; }
-.seat-stepper-block > small { color: var(--muted); font-size: 11px; font-weight: 700; }
+.seat-stepper-block > small { color: var(--muted); font-size: 12px; font-weight: 700; }
 .seat-steppers .seat-switch { min-height: 48px; }
 .seat-switch { display: inline-flex; align-items: center; gap: 8px; min-height: 48px; padding: 0; background: transparent; font-size: 13px; font-weight: 700; }
 .seat-switch > span { position: relative; width: 36px; height: 22px; border-radius: 11px; background: var(--line); transition: background .15s; }
@@ -357,23 +370,23 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .seat-selection { display: flex; align-items: center; gap: 12px; min-height: 40px; }
 .seat-selection p { flex: 1; min-width: 0; }
 .seat-filter-clear { flex: none; min-height: 48px; padding: 0 4px; background: transparent; color: var(--accent-ink); font-size: 12px; font-weight: 700; }
-.seat-legend { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: 11px; }
+.seat-legend { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: 12px; }
 .seat-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .seat-legend i { width: 13px; height: 13px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
 .seat-legend i.occupied { background: color-mix(in srgb, var(--muted) 16%, var(--surface)); }
 .seat-legend i.selected { border-color: var(--accent); background: var(--accent); }
 .seat-map-live { min-height: 160px; flex: 1 1 160px; overflow-y: auto; padding: 16px 12px; border: 1px solid var(--line); border-radius: 23px; background: var(--bg); box-shadow: inset 0 0 0 5px var(--surface); }
 .seat-row { display: grid; grid-template-columns: 23px 1fr; align-items: center; gap: 8px; margin: 7px 0; }
-.seat-row > span { color: var(--muted); font-size: 11px; text-align: center; }
+.seat-row > span { color: var(--muted); font-size: 12px; text-align: center; }
 .seat-row-track { display: flex; align-items: stretch; gap: 7px; }
 .seat-row-track .seat-cell { min-width: 0; flex: 1 1 0; }
-.train-aisle { display: grid; place-items: center; flex: 0 0 30px; color: var(--hint); font-size: 10px; writing-mode: vertical-rl; letter-spacing: .12em; }
+.train-aisle { display: grid; place-items: center; flex: 0 0 30px; color: var(--hint); font-size: 12px; writing-mode: vertical-rl; letter-spacing: .12em; }
 .seat-cell { min-height: 52px; display: grid; place-items: center; align-content: center; gap: 2px; padding: 5px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
 .seat-cell b { font-size: 14px; }
 .seat-cell small { font-size: 12px; }
 .seat-cell.occupied { background: color-mix(in srgb, var(--muted) 13%, var(--surface)); color: var(--muted); }
-.seat-cell.selected { border-color: var(--accent); background: var(--accent); color: #fff; box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 24%, transparent); }
-.seat-cell.selected small { color: #fff; }
+.seat-cell.selected { border-color: var(--accent); background: var(--accent); color: var(--on-accent); box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 24%, transparent); }
+.seat-cell.selected small { color: var(--on-accent); }
 .seat-loading { min-height: 180px; display: grid; place-items: center; align-content: center; gap: 10px; color: var(--muted); }
 .seat-loading .spinner { border-color: color-mix(in srgb, var(--accent) 20%, transparent); border-top-color: var(--accent); }
 .seat-dialog-error { min-height: 180px; display: grid; place-items: center; align-content: center; gap: 8px; padding: 20px; color: var(--muted); text-align: center; }
@@ -383,8 +396,78 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .seat-dialog > footer { display: grid; gap: 9px; }
 .seat-dialog > footer p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 
+/* 날짜 선택기: 폼에서는 입력칸처럼 생긴 버튼을 눌러 그 자리에 펼치고, 날짜 시트에서는 늘 펼쳐 둬요.
+   칸은 48px 터치 영역 안에 40px 원을 그려요. 고른 날은 주요 버튼과 같은 색, 오늘은 테두리만. */
+.date-picker { display: grid; gap: 10px; color: var(--text); font-size: 15px; font-weight: 400; }
+.date-field { width: 100%; min-height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border: 1px solid var(--line); border-radius: 13px; background: var(--bg); color: var(--text); font-size: 16px; text-align: left; }
+.date-field b { flex: 1; min-width: 0; font-weight: 650; }
+.date-field em { padding: 3px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); font-size: 12px; font-style: normal; font-weight: 760; }
+.date-field svg { flex: none; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.date-field .date-field-icon { color: var(--accent); }
+.date-field > svg:last-child { color: var(--muted); transition: transform .2s ease; }
+.date-picker.open .date-field, .time-picker.open .date-field { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+.date-picker.open .date-field > svg:last-child, .time-picker.open .date-field > svg:last-child { transform: rotate(180deg); }
+.date-calendar { padding: 6px 0 8px; border-radius: 18px; background: var(--bg); }
+/* 7칸 날짜가 48px 터치 영역을 갖도록 카드 안쪽 여백까지 써요. */
+.form-card .date-calendar, .action-sheet .date-calendar, .schedule-panel .date-calendar { margin-inline: -10px; }
+.date-calendar-head { display: grid; grid-template-columns: 48px 1fr 48px; align-items: center; }
+.date-calendar-head h3 { margin: 0; font-size: 17px; font-weight: 760; letter-spacing: -.3px; text-align: center; font-variant-numeric: tabular-nums; }
+.date-nav { display: grid; place-items: center; width: 48px; height: 48px; padding: 0; border-radius: 50%; background: transparent; color: var(--accent-ink); }
+.date-nav svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.date-nav:not(:disabled):active { background: var(--accent-soft); }
+.date-nav:disabled { opacity: .3; }
+.date-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.date-grid th { height: 30px; padding: 0; color: var(--muted); font-size: 12px; font-weight: 700; }
+.date-grid td { padding: 0; text-align: center; }
+.date-grid .sun { color: var(--danger); }
+.date-grid .sat { color: var(--accent-ink); }
+.date-day { width: 100%; height: 48px; display: grid; place-items: center; padding: 0; background: transparent; color: var(--text); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.date-day > span { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; transition: background-color .15s ease, color .15s ease; }
+.date-day:not(:disabled):not(.selected):active > span { background: var(--accent-soft); }
+.date-day.today > span { box-shadow: inset 0 0 0 1.5px var(--accent); color: var(--accent-ink); font-weight: 800; }
+.date-day.selected > span { background: var(--accent-strong); color: var(--on-accent); font-weight: 800; box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 28%, transparent); }
+.date-day:disabled { opacity: 1; color: var(--hint); font-weight: 500; }
+.date-day:disabled > span { opacity: .55; }
+/* 칸 전체가 아니라 원에 초점 고리를 그려 옆 칸을 덮지 않아요. */
+.date-day:focus-visible { outline: none; }
+.date-day:focus-visible > span { outline: 3px solid color-mix(in srgb, var(--accent) 68%, transparent); outline-offset: 2px; }
+@media (hover: hover) { .date-day:not(:disabled):not(.selected):hover > span, .date-nav:not(:disabled):hover { background: var(--accent-soft); } }
+@media (prefers-reduced-motion: no-preference) {
+  .date-calendar.entering { animation: date-open .22s cubic-bezier(.2, 0, 0, 1) both; }
+}
+@keyframes date-open { from { opacity: 0; transform: translateY(-6px); } }
+
+/* 시간 선택기: 날짜 칸과 같은 칸을 눌러 그 자리에 펼쳐요. 시는 오전·오후로 나눈 4칸 칩, 분은 10분 단위 한 줄이에요.
+   판은 달력처럼 카드 안쪽 여백까지 써서 360dp 폰에서도 분 칸이 48px 을 넘어요. */
+.time-picker { display: grid; gap: 10px; color: var(--text); font-size: 15px; font-weight: 400; }
+.time-field b { font-variant-numeric: tabular-nums; }
+.time-field:disabled { color: var(--muted); }
+.time-panel { display: grid; gap: 6px; margin-inline: -10px; padding: 4px 8px 10px; border-radius: 18px; background: var(--bg); }
+.time-panel > p { margin: 6px 2px 0; color: var(--muted); font-size: 12px; font-weight: 700; }
+.time-hours { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.time-panel .seat-chip { min-width: 0; padding: 0; font-size: 15px; font-variant-numeric: tabular-nums; }
+.time-panel .seat-chip.selected { border-color: var(--accent-strong); background: var(--accent-strong); color: var(--on-accent); font-weight: 800; box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 24%, transparent); }
+/* 분은 붙은 한 줄(세그먼트)이라 시 칩과 다른 무리로 읽혀요. */
+.time-minutes { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
+.time-minutes .seat-chip { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.time-minutes .seat-chip + .seat-chip { border-left: 1px solid var(--line); }
+.time-minutes .seat-chip:first-child { border-radius: 12px 0 0 12px; }
+.time-minutes .seat-chip:last-child { border-radius: 0 12px 12px 0; }
+.time-minutes .seat-chip:focus-visible { outline-offset: -3px; }
+.time-minutes .seat-chip.selected { box-shadow: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .time-panel.entering { animation: date-open .22s cubic-bezier(.2, 0, 0, 1) both; }
+}
+/* 나란한 두 시간 칸: 이름·칸은 제자리에 두고, 펼친 판만 두 칸 아래에 카드 폭으로 깔려요. */
+.time-range { row-gap: 8px; }
+.time-range > .field, .time-range .time-picker { display: contents; }
+.time-range > .field > span { grid-row: 1; }
+.time-range .time-field { grid-row: 2; gap: 8px; padding-inline: 12px; }
+.time-range .time-field > svg:last-child { display: none; }
+.time-range .time-panel { grid-row: 3; grid-column: 1 / -1; }
+
 /* 확인 시트와 날짜 시트: 좌석 시트와 같은 바텀 시트 모양이지만 내용만큼만 높이를 써요. */
-.action-sheet { width: min(100%, 520px); display: grid; gap: 11px; padding: 24px 20px max(20px, env(safe-area-inset-bottom)); border-radius: 24px 24px 0 0; background: var(--surface-raised); box-shadow: 0 -16px 60px rgb(0 0 0 / 25%); }
+.action-sheet { width: min(100%, 520px); max-height: calc(100dvh - var(--sheet-top)); overflow-y: auto; display: grid; gap: 11px; padding: 24px 20px max(20px, env(safe-area-inset-bottom)); border-radius: 24px 24px 0 0; background: var(--surface-raised); box-shadow: 0 -16px 60px rgb(0 0 0 / 25%); }
 .action-sheet h2 { margin: 0; font-size: 20px; letter-spacing: -.6px; }
 .action-sheet p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .action-sheet .sheet-note { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; color: var(--accent-ink); }
@@ -399,22 +482,22 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .route-hero i { color: var(--accent); font-style: normal; }
 .route-hero.small { margin: 16px -18px 0; padding: 22px 18px; }
 .route-hero.small span { font-size: 20px; }
-.summary-card dl { display: grid; grid-template-columns: 88px 1fr; gap: 14px 10px; margin: 0; padding: 19px; font-size: 11px; }
+.summary-card dl { display: grid; grid-template-columns: 88px 1fr; gap: 14px 10px; margin: 0; padding: 19px; font-size: 12px; }
 .summary-card dt { color: var(--muted); }
 .summary-card dd { margin: 0; text-align: right; font-weight: 650; }
-.notice { margin: 14px 0; padding: 14px; border-radius: 14px; background: var(--accent-soft); font-size: 11px; line-height: 1.6; }
+.notice { margin: 14px 0; padding: 14px; border-radius: 14px; background: var(--accent-soft); font-size: 12px; line-height: 1.6; }
 .notice p { margin: 5px 0 0; color: var(--muted); }
 .notice.warning { background: var(--warning-soft); color: var(--warning); }
 .notice.calm { background: var(--success-soft); color: var(--success); }
 .notice.calm p { color: color-mix(in srgb, var(--success) 76%, var(--muted)); }
 .favourite-name { margin: 20px 0 14px; }
-.favourite-name span small { margin-left: 5px; font-size: 8px; }
+.favourite-name span small { margin-left: 5px; font-size: 12px; }
 .button + .button { margin-top: 9px; }
 .schedule-panel { margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); }
 .schedule-panel .button { margin-top: 12px; }
 .split-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.activity-card > .muted { font-size: 10px; }
+.activity-card > .muted { font-size: 12px; }
 .activity-check { margin: 14px 0; }
 /* 검색 상세: what the worker is waiting for, one label/value per row; the trains list sits full width under its row. */
 .activity-conditions { display: grid; grid-template-columns: 60px 1fr; gap: 10px 12px; margin: 18px 0 4px; font-size: 12px; }
@@ -435,32 +518,32 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .empty-mark svg .filled { fill: currentColor; stroke: none; }
 .empty-mark svg .signal { stroke: var(--surface); stroke-width: 1.8; }
 .empty h2 { margin: 8px 0 0; font-size: 16px; }
-.empty p { max-width: 280px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.empty p { max-width: 280px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .empty .button { margin-top: 12px; }
 .notification { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 15px 0; border-bottom: 1px solid var(--line); }
 .notification-icon { display: grid; place-items: center; width: 37px; height: 37px; border-radius: 13px; background: var(--accent-soft); color: var(--accent); }
 .notification div { display: grid; gap: 6px; }
-.notification b { font-size: 11px; line-height: 1.55; }
-.notification small { font-size: 9px; }
+.notification b { font-size: 12px; line-height: 1.55; white-space: pre-line; }
+.notification small { font-size: 12px; }
 
 .profile-card { display: flex; align-items: center; gap: 13px; padding: 18px; border-radius: 18px; background: var(--accent-soft); }
 .profile-avatar { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%; background: var(--accent); color: var(--surface); font-weight: 800; }
 .profile-card div { display: grid; gap: 4px; }
 .profile-card b { font-size: 15px; }
-.profile-card small { font-size: 9px; }
+.profile-card small { font-size: 12px; }
 .settings-section { margin: 27px 0; }
 .settings-row { width: 100%; min-height: 61px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; }
 .settings-section > .settings-row:last-child { border-bottom: 0; }
 .settings-row > span { display: grid; gap: 4px; }
 .settings-row b { font-size: 12px; }
-.settings-row small { font-size: 9px; }
-.settings-row em { color: var(--accent); font-size: 10px; font-style: normal; }
+.settings-row small { font-size: 12px; }
+.settings-row em { color: var(--accent); font-size: 12px; font-style: normal; }
 .settings-row.disabled { color: var(--muted); opacity: .68; }
 .settings-row.static { cursor: default; }
 .settings-section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .settings-section-title .eyebrow { margin-bottom: 0; }
-.settings-section-copy { margin: 10px 0 4px; color: var(--muted); font-size: 10px; line-height: 1.6; }
-.admin-only-badge, .integrated-badge { display: inline-flex; align-items: center; min-height: 26px; padding: 5px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); font-size: 9px; font-style: normal; font-weight: 800; }
+.settings-section-copy { margin: 10px 0 4px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.admin-only-badge, .integrated-badge { display: inline-flex; align-items: center; min-height: 26px; padding: 5px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); font-size: 12px; font-style: normal; font-weight: 800; }
 .integrated-badge { background: var(--success-soft); color: var(--success); }
 .rail-merge-note { margin: 11px 0 0; }
 .stepper.small button { width: 32px; min-height: 34px; font-size: 15px; }
@@ -469,7 +552,7 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .account-state > span { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: var(--success-soft); color: var(--success); }
 .account-state div { display: grid; gap: 4px; }
 .account-state b { font-size: 13px; }
-.account-state small { font-size: 9px; }
+.account-state small { font-size: 12px; }
 
 .auth-shell { min-height: 100vh; display: grid; grid-template-rows: minmax(230px, 37vh) 1fr; background: var(--bg); }
 .auth-shell.with-demo { grid-template-rows: auto minmax(230px, 34vh) 1fr; }
@@ -481,9 +564,9 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .orbit.two { width: 390px; height: 180px; transform: rotate(-15deg); }
 .auth-card { margin-top: -22px; padding: 29px 24px calc(30px + env(safe-area-inset-bottom)); border-radius: 25px 25px 0 0; position: relative; z-index: 3; background: var(--bg); }
 .auth-card h1 { margin-bottom: 10px; font-size: 28px; line-height: 1.35; letter-spacing: -1.7px; white-space: pre-line; }
-.auth-card > p:not(.eyebrow, .auth-note) { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.auth-card > p:not(.eyebrow, .auth-note) { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .segmented { display: grid; grid-template-columns: 1fr 1fr; margin: 22px 0 18px; padding: 4px; border-radius: 13px; background: color-mix(in srgb, var(--muted) 11%, transparent); }
-.segmented button { min-height: 38px; border-radius: 10px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 650; }
+.segmented button { min-height: 38px; border-radius: 10px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 650; }
 .segmented button.active { background: var(--surface); color: var(--text); box-shadow: 0 3px 12px rgb(20 30 45 / 8%); }
 .gate-list { display: grid; gap: 10px; margin: 22px 0 8px; }
 .gate-card {
@@ -492,28 +575,46 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
   box-shadow: 0 8px 24px rgb(20 30 45 / 6%);
 }
 .gate-card b { font-size: 16px; letter-spacing: -.4px; }
-.gate-card small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.gate-card small { color: var(--muted); font-size: 12px; line-height: 1.45; }
 .invite-card { margin: 10px 0 0; padding: 14px; border-radius: 14px; background: var(--accent-soft); }
-.invite-card p { margin: 0 0 10px; color: var(--accent-ink); font-size: 11px; line-height: 1.5; }
+.invite-card p { margin: 0 0 10px; color: var(--accent-ink); font-size: 12px; line-height: 1.5; }
 .invite-card code { display: block; padding: 10px; border-radius: 10px; background: var(--surface); font-size: 12px; word-break: break-all; }
 .invite-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
-.auth-note { margin: 21px 0 0; color: var(--muted); font-size: 9px; line-height: 1.65; text-align: center; }
+.auth-note { margin: 21px 0 0; color: var(--muted); font-size: 12px; line-height: 1.65; text-align: center; }
 .demo-enter { display: block; margin: 12px auto 0; }
 
 .blocker { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; align-content: center; gap: 12px; background: rgb(17 22 30 / 52%); color: #fff; backdrop-filter: blur(3px); }
-.blocker b { font-size: 11px; }
+.blocker b { font-size: 12px; }
 .spinner { width: 31px; height: 31px; border: 3px solid #ffffff48; border-top-color: #fff; border-radius: 50%; animation: spin .75s linear infinite; }
 .inline-spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid color-mix(in srgb, var(--accent) 24%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: spin .75s linear infinite; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; margin: -1px; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 @keyframes spin { to { transform: rotate(360deg); } }
-/* 상단바 바로 밑에 떠요. 화면 아래는 주요 버튼의 자리라 토스트가 덮으면 안 돼요.
-   상단바(72px + 안전영역) 아래 10px에서 시작하고, 앞선 배너와 넓은 화면의 여백은 그만큼 더 내려요. */
-.toast { position: fixed; right: 20px; top: calc(82px + env(safe-area-inset-top) + var(--toast-shell-gap, 0px) + var(--toast-banner, 0px)); left: 20px; z-index: 90; max-width: 470px; margin: auto; padding: 13px 16px; border-radius: 13px; background: var(--text); color: var(--bg); box-shadow: 0 12px 34px rgb(0 0 0 / 25%); font-size: 11px; text-align: center; }
-:is(.demo-banner, .offline-banner) ~ .toast { --toast-banner: 30px; }
+/* Material 3 스낵바 자리: 하단 탭바 바로 위, 화면 안쪽 여백과 같은 가장자리. 엄지가 닿는 곳에서 읽고 밀어서 치워요.
+   붙박이 버튼(.sticky-action)이 있는 화면에서는 그 버튼이 가장 높이 올라갈 수 있는 자리(화면 아래 여백 끝)보다 위에 떠요.
+   시트·좌석표가 열려 있으면 그 뒤에 머물러 시트의 버튼을 가리지 않아요(z-index 80 아래). */
+.toast {
+  --toast-lift: 0px;
+  position: fixed; right: 20px; left: 20px; z-index: 70;
+  bottom: calc(var(--nav-height) + var(--toast-shell-gap, 0px) + 10px + var(--toast-lift));
+  max-width: 480px; min-height: 48px; margin: auto;
+  display: flex; align-items: center; gap: 10px; padding: 13px 18px;
+  border-radius: 15px; background: var(--inverse-surface); color: var(--inverse-text);
+  box-shadow: 0 10px 28px rgb(15 20 29 / 24%), 0 2px 6px rgb(15 20 29 / 14%);
+  font-size: 14px; font-weight: 600; line-height: 1.45; text-align: left;
+  touch-action: pan-y; user-select: none; cursor: pointer;
+  animation: toast-in .24s cubic-bezier(.2, 0, 0, 1) var(--toast-age, 0ms) both;
+}
+.toast::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--inverse-accent); }
+/* 버튼 높이(54px) + 화면 아래 여백(탭바 + 여유)만큼. 목록 끝까지 내려 버튼이 가장 높이 올라와도 겹치지 않아요. */
+.toast.above-action { --toast-lift: calc(var(--nav-clearance) + 54px); }
+.toast.leaving { animation: toast-out .18s cubic-bezier(.3, 0, .8, .15) var(--toast-age, 0ms) both; }
+.toast.dragging { animation: none; transition: none; }
 .toast:empty { display: none; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(14px) scale(.98); } }
+@keyframes toast-out { to { opacity: 0; transform: translateY(8px); } }
 .launch, .fatal { min-height: 100vh; display: grid; place-items: center; align-content: center; gap: 13px; padding: 30px; text-align: center; }
-.launch span, .fatal > span { display: grid; place-items: center; width: 68px; height: 68px; border-radius: 22px; background: var(--accent); color: #fff; font-size: 29px; font-weight: 900; letter-spacing: -3px; }
-.launch p, .fatal p { color: var(--muted); font-size: 11px; }
+.launch span, .fatal > span { display: grid; place-items: center; width: 68px; height: 68px; border-radius: 22px; background: var(--accent); color: var(--on-accent); font-size: 29px; font-weight: 900; letter-spacing: -3px; }
+.launch p, .fatal p { color: var(--muted); font-size: 12px; }
 .fatal h1 { margin: 7px 0 0; font-size: 21px; }
 .fatal code { padding: 2px 4px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-ink); }
 
@@ -541,7 +642,7 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 body { font-size: 16px; }
 small { font-size: 14px; line-height: 1.45; }
 .eyebrow { margin-bottom: 7px; font-size: 12px; letter-spacing: .08em; }
-.status-heading h1, .subhead h1 { font-size: 28px; letter-spacing: -1.1px; }
+.subhead h1 { font-size: 28px; letter-spacing: -1.1px; }
 .header-action, .back-button, .text-button {
   min-height: 48px; display: inline-flex; align-items: center; justify-content: center;
   padding: 0 14px; border-radius: 12px; background: transparent; color: var(--accent-ink);
@@ -603,7 +704,7 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
 .gate-card { min-height: 72px; }
 .gate-card b { font-size: 19px; }
 .gate-card small { font-size: 14px; }
-.toast, .blocker b, .launch p, .fatal p { font-size: 14px; }
+.blocker b, .launch p, .fatal p { font-size: 14px; }
 
 @media (orientation: portrait) {
   :root { --nav-height: calc(58px + env(safe-area-inset-bottom)); --nav-clearance: 32px; }
@@ -661,7 +762,7 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
   .form-section-head > div { min-width: 0; }
   .form-section-head h2 { white-space: nowrap; }
   .form-section-head > .text-button {
-    flex: 0 0 100%; justify-content: flex-end; min-height: 44px; margin-top: -4px;
+    flex: 0 0 100%; justify-content: flex-end; min-height: 48px; margin-top: -4px;
   }
   .station-grid { grid-template-columns: minmax(0, 1fr) 42px minmax(0, 1fr); gap: 8px; }
   .route-arrow { width: 42px; min-height: 52px; align-self: end; }
@@ -693,15 +794,44 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
   .auth-card h1 { font-size: 31px; }
   .auth-card .form-stack { display: grid; gap: 14px; }
   .sticky-action { bottom: calc(66px + env(safe-area-inset-bottom)); }
-  .toast { right: 18px; left: 18px; }
 }
 
 @media (orientation: portrait) and (max-width: 370px) {
   .screen { padding-inline: 16px; }
   .topbar { padding-inline: 16px; }
   .bottom-nav button { font-size: 12px; }
-  .status-heading h1, .subhead h1 { font-size: 24px; }
+  .subhead h1 { font-size: 24px; }
   .station-grid { grid-template-columns: 1fr; }
   .route-arrow { width: 100%; height: 42px; min-height: 42px; transform: rotate(90deg); }
   .choice-grid { grid-template-columns: 1fr; }
 }
+
+/* ---- 누른 순간·키보드 초점·고르는 방식 ----
+   탭 하이라이트를 껐으니(맨 위 *) 누른 순간은 여기서 보여 줘요. 모든 누르는 요소가 같은 반응을 해요. */
+:is(.button, .text-button, .icon-button, .back-button, .header-action, .settings-row, .gate-card, .favourite-main, .train-main, .car-tab, .seat-chip, .stepper button, .seat-stepper button) {
+  transition: transform .08s ease, filter .12s ease, background-color .16s ease;
+}
+:is(.button, .icon-button, .back-button, .header-action, .gate-card, .car-tab, .seat-chip, .stepper button, .seat-stepper button):not(:disabled):active { transform: scale(.97); }
+:is(.button.primary, .button.danger, .button.secondary, .button.seat-action):not(:disabled):active { filter: brightness(.93); }
+:is(.text-button, .settings-row:not(.static), .favourite-main, .train-main):not(:disabled):active { background-color: color-mix(in srgb, var(--accent) 10%, transparent); }
+.choice-card:active > span, .grade-picker .check-row:active { transform: scale(.985); }
+@media (prefers-reduced-motion: reduce) {
+  :is(.button, .icon-button, .back-button, .header-action, .gate-card, .car-tab, .seat-chip, .stepper button, .seat-stepper button, .choice-card > span, .grade-picker .check-row):active { transform: none; }
+}
+/* 숨긴 입력의 키보드 초점을 보이는 타일에 그려요. */
+.choice-card input:focus-visible + span { outline: 3px solid color-mix(in srgb, var(--accent) 68%, transparent); outline-offset: 2px; }
+/* 하나만 고르는 타일은 동그라미, 여러 개 고르는 타일은 네모. 같은 폼에서도 고르는 방식을 알아볼 수 있어요. */
+.choice-card > span { position: relative; padding-right: 38px; }
+.choice-card > span::after {
+  content: ""; position: absolute; top: 12px; right: 12px; width: 20px; height: 20px;
+  display: grid; place-items: center; border: 2px solid var(--line); border-radius: 50%;
+  color: var(--on-accent); font-size: 13px; font-weight: 800; line-height: 1;
+}
+.choice-card input[type="checkbox"] + span::after { border-radius: 6px; }
+.choice-card input[type="radio"]:checked + span::after { border-color: var(--accent-strong); background: var(--accent-strong); box-shadow: inset 0 0 0 4px var(--surface); }
+.choice-card input[type="checkbox"]:checked + span::after { content: "✓"; border-color: var(--accent-strong); background: var(--accent-strong); }
+/* 두 칸 격자 안에서는 버튼 사이 세로 여백이 필요 없어요(두 번째 버튼만 내려가던 문제). */
+.invite-actions .button + .button { margin-top: 0; }
+
+/* 키보드가 가린 만큼 아래 여백을 둬서 가려진 버튼까지 스크롤할 수 있어요(src/platform.ts followKeyboard). */
+body::after { content: ""; display: block; height: var(--keyboard-inset, 0px); }

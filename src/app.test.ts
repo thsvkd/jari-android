@@ -55,10 +55,11 @@ describe("concept C application shell", () => {
     }
     state.pending = [{ reservationId: "TEST", trainInfo: "KTX 015 서울 → 부산", expiresAt: null, seatNumber: null }];
     const { root } = await mountLive({ bootstrap: async () => state });
-    const card = root.querySelector("[data-search-status]");
-    expect(card?.textContent).toContain("빈자리를 찾았어요");
-    expect(card?.textContent).toContain("예약 확인하기");
-    expect(card?.textContent).not.toContain("광명");
+    // The payment card is the status now; a second "found a seat" card only repeated it.
+    expect(root.querySelector("[data-search-status]")).toBeNull();
+    const payment = root.querySelector(".payment-card")?.textContent;
+    expect(payment).toContain("KTX 015 서울 → 부산");
+    expect(payment).not.toContain("광명");
   });
 
   it("groups route, window and details navigation in the chosen status card", async () => {
@@ -71,18 +72,17 @@ describe("concept C application shell", () => {
     expect(root.querySelector("[data-action='cancel-search']")).not.toBeNull();
   });
 
-  it.each(["unavailable", "stale", "idle", "scheduled", "pending", "offline"] as const)("keeps %s distinguishable in the status card", async (scenario) => {
+  it.each(["unavailable", "stale", "idle", "scheduled", "offline"] as const)("keeps %s distinguishable in the status card", async (scenario) => {
     const demo = createDemoApi();
     const state = await demo.bootstrap();
     if (scenario === "unavailable" || scenario === "stale") state.running!.health = scenario;
     if (scenario === "scheduled") state.scheduled = { startAt: "2026-09-19T00:00:00Z", timeZone: "Asia/Seoul", search: state.running! };
-    if (scenario === "pending") state.pending = [{ reservationId: "TEST", trainInfo: "KTX 015 서울 → 부산", expiresAt: null, seatNumber: null }];
-    if (["idle", "scheduled", "pending"].includes(scenario)) state.running = null;
+    if (["idle", "scheduled"].includes(scenario)) state.running = null;
     if (scenario === "offline") vi.useFakeTimers();
     const { root } = await mountLive({ bootstrap: async () => state, ...(scenario === "offline" ? { status: async () => { throw new Error("network unavailable"); } } : {}) });
     // A miss is confirmed by a second poll five seconds later before the card calls it offline.
     if (scenario === "offline") await vi.advanceTimersByTimeAsync(35_000);
-    const wanted = { unavailable: "철도 조회를 완료하지 못했어요", stale: "한동안 조회 결과가 없어요", idle: "대기 중인 항목이 없어요", scheduled: "정한 시각에 찾기 시작해요", pending: "빈자리를 찾았어요", offline: "현재 상태를 확인할 수 없어요" };
+    const wanted = { unavailable: "철도 조회를 완료하지 못했어요", stale: "한동안 조회 결과가 없어요", idle: "대기 중인 항목이 없어요", scheduled: "정한 시각에 찾기 시작해요", offline: "현재 상태를 확인할 수 없어요" };
     expect(root.querySelector("[data-search-status]")?.textContent).toContain(wanted[scenario]);
     if (scenario !== "idle") expect(root.querySelector("[data-search-status]")?.textContent).not.toContain("대기 중인 항목이 없어요");
   });
@@ -568,6 +568,49 @@ describe("editable form rerender regressions", () => {
     expect(root.querySelector<HTMLInputElement>("#favourite-name")!.value).toBe("private route");
     expect(root.querySelector<HTMLInputElement>("#schedule-at")!.value).toBe("2026-09-20T13:00");
   });
+
+  it("picks journey times with the themed picker and keeps them through a rerender", async () => {
+    // 밤 10시가 넘으면 기본값이 "마지막 열차까지"라 끝 시각이 꺼져요. 낮으로 고정해요.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 8, 23, 10));
+    const { app, root } = await mountLive();
+    app.navigate("journey");
+    const picker = (id: string) => root.querySelector<HTMLElement>(`[data-time-picker='${id}']`)!;
+    picker("max-dep-time").querySelector<HTMLButtonElement>("[data-tp='toggle']")!.click();
+    picker("max-dep-time").querySelector<HTMLButtonElement>("[data-tp-hour='18']")!.click();
+    picker("max-dep-time").querySelector<HTMLButtonElement>("[data-tp-minute='30']")!.click();
+    picker("dep-time").querySelector<HTMLButtonElement>("[data-tp='toggle']")!.click();
+    picker("dep-time").querySelector<HTMLButtonElement>("[data-tp-hour='13']")!.click();
+    app.notify("background update");
+    expect(root.querySelector<HTMLInputElement>("[name='max_dep_time']")!.value).toBe("18:30");
+    expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value.slice(0, 3)).toBe("13:");
+    // 시만 고른 칸은 펼친 채로 다시 그려져요.
+    expect(picker("dep-time").querySelector(".time-panel")).not.toBeNull();
+    root.querySelector<HTMLInputElement>("[name='unlimited_time']")!.click();
+    expect(picker("max-dep-time").querySelector<HTMLButtonElement>("[data-tp='toggle']")!.disabled).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("combines the scheduled date and time into #schedule-at, empty until a time is picked", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 8, 23, 10));
+    const { app, root } = await mountLive();
+    app.navigate("confirm");
+    root.querySelector<HTMLButtonElement>("[data-action='schedule-toggle']")!.click();
+    const scheduleAt = () => root.querySelector<HTMLInputElement>("#schedule-at")!.value;
+    expect(root.querySelector<HTMLInputElement>("#schedule-date")!.value).toBe("2026-09-23");
+    expect(scheduleAt()).toBe("");
+    root.querySelector<HTMLButtonElement>("[data-date-picker='schedule-date'] [data-dp='toggle']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-dp-day='2026-09-25']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-time-picker='schedule-time'] [data-tp='toggle']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-time-picker='schedule-time'] [data-tp-hour='0']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-time-picker='schedule-time'] [data-tp-minute='20']")!.click();
+    expect(scheduleAt()).toBe("2026-09-25T00:20");
+    app.notify("background update");
+    expect(scheduleAt()).toBe("2026-09-25T00:20");
+    expect(root.querySelector("[data-time-picker='schedule-time'] .time-field")?.textContent).toContain("오전 12:20");
+    vi.useRealTimers();
+  });
 });
 
 it.each(["success", "auth", "offline"] as const)("ignores deferred A polling %s after account B starts", async (outcome) => {
@@ -701,6 +744,10 @@ it("loads the live seat map and submits an exact designated seat", async () => {
   await vi.waitFor(() => expect(root.querySelector("[data-seat-no='demo-1-A']")).not.toBeNull());
   root.querySelector<HTMLButtonElement>("[data-seat-no='demo-1-A']")!.click();
   root.querySelector<HTMLButtonElement>("[data-action='confirm-seat-dialog']")!.click();
+  // 실제 예약이라 확인 시트에서 한 번 더 눌러요.
+  await vi.waitFor(() => expect(root.querySelector("[data-action='sheet-confirm']")).not.toBeNull());
+  expect(root.querySelector(".action-sheet")?.textContent).toContain("3호차 1A");
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
 
   await vi.waitFor(() => expect(reserveDesignated).toHaveBeenCalledOnce());
   expect(reserveDesignated.mock.calls[0]![0]).toMatchObject({
@@ -1008,6 +1055,9 @@ it("refreshes the seat map when a chosen seat loses a reservation race", async (
   await vi.waitFor(() => expect(root.querySelector("[data-seat-no='demo-1-A']")).not.toBeNull());
   root.querySelector<HTMLButtonElement>("[data-seat-no='demo-1-A']")!.click();
   root.querySelector<HTMLButtonElement>("[data-action='confirm-seat-dialog']")!.click();
+  // 실제 예약이라 확인 시트에서 한 번 더 눌러요.
+  await vi.waitFor(() => expect(root.querySelector("[data-action='sheet-confirm']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
 
   await vi.waitFor(() => expect(seatInventory).toHaveBeenCalledTimes(2));
   expect(root.querySelector("[role='dialog']")).not.toBeNull();
@@ -1087,7 +1137,7 @@ it("shows approved empty-state copy and illustrated SVG marks", async () => {
   app.navigate("favourites");
   expect(root.textContent).toContain("즐겨찾기가 없어요");
   expect(root.textContent).toContain("자주 가는 구간을 저장해 두면 다음 찾기가 더 빨라져요.");
-  expect(root.textContent).toContain("새 즐겨찾기 만들기");
+  expect(root.textContent).toContain("새 즐겨찾기 추가");
   expect(root.querySelector(".empty-mark svg")).not.toBeNull();
 
   app.navigate("activity");
@@ -1352,12 +1402,13 @@ it("asks in an in-app sheet instead of window.confirm, and only acts when it is 
   await vi.waitFor(() => expect(cancelSearch).toHaveBeenCalledOnce());
 });
 
-it("stops a search from 검색 상세 with a solid danger button", async () => {
+it("keeps solid red for the last confirmation only; the screen's own stop button is outlined", async () => {
   const { app, root } = await mountLive();
   app.navigate("activity");
 
-  expect(root.querySelector("[data-action='cancel-search']")?.className).toBe("button danger");
-  expect(root.querySelector("[data-action='cancel-search'].ghost")).toBeNull();
+  expect(root.querySelector("[data-action='cancel-search']")?.className).toBe("button ghost danger");
+  root.querySelector<HTMLButtonElement>("[data-action='cancel-search']")!.click();
+  expect(root.querySelector("[data-action='sheet-confirm']")?.className).toBe("button danger");
 });
 
 it("asks nothing through the browser's own dialog any more", async () => {
@@ -1744,4 +1795,138 @@ describe("날짜 시트", () => {
     expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value).toBe("14:00");
     expect(root.querySelector<HTMLInputElement>("[name='max_dep_time']")!.value).toBe("18:00");
   });
+});
+
+it("counts the payment deadline down every second without redrawing the screen", async () => {
+  vi.useFakeTimers({ now: new Date("2026-09-23T12:00:00Z"), toFake: ["Date", "setInterval", "clearInterval"] });
+  const state = await createDemoApi().bootstrap();
+  state.pending = [{ reservationId: "TEST", trainInfo: "KTX 015 서울 → 부산", expiresAt: "2026-09-23T12:05:02Z", seatNumber: null }];
+  const { root } = await mountLive({ bootstrap: async () => state });
+  const left = root.querySelector<HTMLElement>("[data-deadline]")!;
+  expect(left.textContent).toBe("5:02 남음");
+  expect(left.classList.contains("urgent")).toBe(false);
+
+  vi.advanceTimersByTime(3_000);
+  expect(root.querySelector("[data-deadline]")).toBe(left);
+  expect(left.textContent).toBe("4:59 남음");
+  expect(left.classList.contains("urgent")).toBe(true);
+});
+
+it("opens the tabs without a back button and keeps logout last in settings", async () => {
+  const { app, root } = await mountLive();
+  for (const view of ["activity", "favourites", "settings"] as const) {
+    app.navigate(view);
+    expect(root.querySelector(".subhead"), view).toBeNull();
+  }
+  const buttons = root.querySelectorAll(".screen-settings button");
+  expect(buttons[buttons.length - 1]?.getAttribute("data-action")).toBe("app-logout");
+});
+
+describe("테마 날짜 선택기와 토스트", () => {
+  it("replaces the native date input in the journey form and keeps the picked day through rerenders", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-14T10:00:00+09:00"));
+    const { app, root } = await mountLive();
+    app.navigate("journey");
+    expect(root.querySelector("input[type='date']")).toBeNull();
+
+    root.querySelector<HTMLButtonElement>("[data-dp='toggle']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-dp-day='2026-09-20']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-action='passenger-plus']")!.click();
+    app.notify("background");
+
+    expect(root.querySelector<HTMLInputElement>("[name='dep_date']")!.value).toBe("2026-09-20");
+    expect(root.querySelector("[data-dp='toggle']")?.textContent).toContain("9월 20일 (일)");
+  });
+
+  it("moves the date sheet's calendar with the 오늘·내일 chips", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T09:00:00+09:00"));
+    const { root } = await mountIdle();
+    root.querySelector<HTMLButtonElement>("[data-route-chip='recent']")!.click();
+    expect(root.querySelector(".action-sheet input[type='date']")).toBeNull();
+
+    root.querySelector<HTMLButtonElement>("[data-sheet-date='2026-10-01']")!.click();
+    expect(root.querySelector(".action-sheet h3")?.textContent).toBe("2026년 10월");
+    root.querySelector<HTMLButtonElement>("[data-dp-day='2026-10-09']")!.click();
+    expect(root.querySelector<HTMLInputElement>("#sheet-date")!.value).toBe("2026-10-09");
+    expect([...root.querySelectorAll("[data-sheet-date][aria-pressed='true']")]).toHaveLength(0);
+  });
+
+  it("continues the toast's entrance instead of replaying it when the screen is redrawn", async () => {
+    const { app, root } = await mountLive();
+    vi.useFakeTimers();
+    app.notify("즐겨찾기에 저장했어요.");
+    const first = root.querySelector(".toast")!;
+    expect(first.getAttribute("style")).toBe("--toast-age: -0ms");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    app.navigate("activity");
+    const redrawn = root.querySelector(".toast")!;
+    expect(redrawn).not.toBe(first);
+    expect(Number(/-(\d+)ms/.exec(redrawn.getAttribute("style")!)![1])).toBeGreaterThanOrEqual(1_000);
+    expect(redrawn.classList.contains("leaving")).toBe(false);
+  });
+
+  it("stays at least four seconds, then fades out and empties", async () => {
+    const { app, root } = await mountLive();
+    vi.useFakeTimers();
+    app.notify("저장했어요.");
+    await vi.advanceTimersByTimeAsync(3_900);
+    expect(root.querySelector(".toast")?.textContent).toBe("저장했어요.");
+    // 4초 + 글자당 60ms 뒤에 사라지기 시작해요.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(root.querySelector(".toast")?.classList.contains("leaving")).toBe(true);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(root.querySelector(".toast")?.textContent).toBe("");
+    expect(app).toMatchObject({ toast: "" });
+  });
+
+  it("dismisses on tap", async () => {
+    const { app, root } = await mountLive();
+    vi.useFakeTimers();
+    app.notify("저장했어요.");
+    root.querySelector<HTMLElement>(".toast")!.click();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(root.querySelector(".toast")?.textContent).toBe("");
+  });
+
+  it("rises above a sticky action button and sits right over the tab bar elsewhere", async () => {
+    const { app, root } = await mountLive();
+    app.notify("저장했어요.");
+    expect(root.querySelector(".toast")?.classList.contains("above-action")).toBe(false);
+    app.navigate("trains");
+    expect(root.querySelector(".screen .sticky-action")).not.toBeNull();
+    expect(root.querySelector(".toast")?.classList.contains("above-action")).toBe(true);
+    const css = await readFile("src/styles.css", "utf8");
+    expect(css).toContain(".toast.above-action { --toast-lift: calc(var(--nav-clearance) + 54px); }");
+    expect(css).toContain("bottom: calc(var(--nav-height) + var(--toast-shell-gap, 0px) + 10px + var(--toast-lift));");
+  });
+});
+
+it("says the rest of a split booking is still being searched only while the search is healthy", async () => {
+  for (const [health, expected] of [["healthy", "1/2석 확보 · 나머지 찾는 중"], ["error", "1/2석 확보 · 나머지 찾기: 조회 문제"]] as const) {
+    const state = await createDemoApi().bootstrap();
+    state.running!.passengerCount = 2;
+    state.running!.health = health;
+    state.running!.lastCheckedAt = new Date().toISOString();
+    state.pending = [{ reservationId: "TEST", trainInfo: "KTX 015 서울 → 부산", expiresAt: null, seatNumber: null }];
+    const { root } = await mountLive({ bootstrap: async () => state });
+    expect(root.querySelector(".payment-card .card-label")?.textContent).toContain(expected);
+  }
+});
+
+it("closes an open sheet on Android back before leaving the screen", async () => {
+  const { app, root } = await mountIdle();
+  app.navigate("favourites");
+  app.navigate("home");
+  root.querySelector<HTMLButtonElement>("[data-route-chip='recent']")!.click();
+  expect(root.querySelector(".action-sheet")).not.toBeNull();
+
+  expect(app.back()).toBe(true);
+  expect(root.querySelector(".action-sheet")).toBeNull();
+  expect(root.querySelector(".screen-home")).not.toBeNull();
+
+  expect(app.back()).toBe(true);
+  expect(root.querySelector(".screen-favourites")).not.toBeNull();
 });

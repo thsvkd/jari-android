@@ -8,6 +8,7 @@ import { createDemoApi } from "./demo";
 import {
   applyStatusBarStyle,
   clearToken,
+  followKeyboard,
   initializePlatform,
   readToken,
   writeToken,
@@ -18,6 +19,7 @@ document.documentElement.classList.toggle("native-platform", Capacitor.isNativeP
 const root = document.querySelector<HTMLElement>("#app");
 if (!root) throw new Error("앱을 표시할 영역을 찾을 수 없어요.");
 const rootElement = root;
+followKeyboard(rootElement);
 
 const query = new URLSearchParams(window.location.search);
 const demoMode = query.get("demo") === "1" || import.meta.env.VITE_DEMO_MODE === "true";

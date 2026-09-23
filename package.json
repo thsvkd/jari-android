@@ -9,7 +9,10 @@
     "build:demo": "tsc --noEmit && vite build --mode demo",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "verify": "node scripts/verify.mjs",
+    "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
     "@capacitor/android": "7.6.9",
@@ -20,6 +23,8 @@
   },
   "devDependencies": {
     "@capacitor/cli": "7.6.9",
+    "@playwright/test": "1.63.0",
+    "@types/node": "22.20.2",
     "jsdom": "26.1.0",
     "typescript": "5.9.2",
     "vite": "7.3.6",

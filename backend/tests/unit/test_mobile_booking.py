@@ -484,10 +484,10 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
     assert reserved.status_code == 200, reserved.json
     assert reserved.json["reserved"] is True
     assert reserved.json["pending"][0]["reservationId"] == "R1"
-    assert reserved.json["pending"][0]["seatLabels"] == ["5A"]
+    assert reserved.json["pending"][0]["seatLabels"] == ["3호차 5A"]
     status = runtime.storage.get_payment_status(owner)
     assert status.reservation_id == "R1"
-    assert status.seat_labels == ["5A"]
+    assert status.seat_labels == ["3호차 5A"]
     assert runtime.notifications.items(owner)[0]["kind"] == "payment"
     assert rail.seat_inventory.call_count == 2
     runtime.storage.close()

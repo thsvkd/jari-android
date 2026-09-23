@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from korail2 import ReserveOption
 
@@ -20,14 +21,36 @@ SOLD_OUT_NAME = "매진"
 
 
 def train_label(train) -> str:
-    """A current-API train as people read it. Its repr is not display text."""
-    name = getattr(train, "train_class_name", None) or "KTX"
-    no = str(getattr(train, "train_no", "") or "")
-    src = getattr(train, "departure_station_name", None) or "출발역"
-    dst = getattr(train, "arrival_station_name", None) or "도착역"
-    dep = str(getattr(train, "departure_time", "") or "")
-    clock = f"{dep[:2]}:{dep[2:4]}" if len(dep) >= 4 else ""
-    return f"{name} {no} {src} → {dst} {clock}".strip()
+    """
+    A current-API train or a korail2 reservation as people read it, on one
+    line: ``KTX 015 서울 → 부산 · 9월 24일(목) 13:18→15:59``.
+
+    Neither repr is display text, and a reservation's str also carries the
+    price and payment deadline, which the app already shows on their own.
+    """
+
+    def pick(*names: str) -> str:
+        return next((str(v).strip() for n in names if (v := getattr(train, n, None))), "")
+
+    def clock(value: str) -> str:
+        return f"{value[:2]}:{value[2:4]}" if len(value) >= 4 else ""
+
+    name = pick("train_class_name", "train_type_name") or "KTX"
+    # korail2 keeps the station names in dep_name/arr_name; the current API spells them out.
+    src = pick("departure_station_name", "dep_name") or "출발역"
+    dst = pick("arrival_station_name", "arr_name") or "도착역"
+    label = f"{name} {pick('train_no')} {src} → {dst}".replace("  ", " ")
+
+    date = pick("departure_date", "dep_date")
+    try:
+        day = datetime.strptime(date, "%Y%m%d")
+        when = f"{day.month}월 {day.day}일({'월화수목금토일'[day.weekday()]})"
+    except ValueError:
+        when = ""
+    dep = clock(pick("departure_time", "dep_time"))
+    arr = clock(pick("arrival_time", "arr_time"))
+    detail = " ".join(filter(None, [when, f"{dep}→{arr}" if dep and arr else dep]))
+    return f"{label} · {detail}" if detail else label
 
 
 @dataclass(frozen=True)

@@ -50,8 +50,6 @@ class PendingReservation:
 
         seat = f"좌석 {self.seat_number}: " if self.seat_number is not None else ""
         train = self.train_info or "예약 정보 없음"
-        if self.train_info and "한국 철도 시각" not in self.train_info:
-            train += "\n   🌐 열차 정보 시각: KST (대한민국 철도 시각)"
         deadline = (
             f"\n   ⏳ 결제 기한: {format_user_datetime(self.expires_at, timezone_name)}"
             if self.expires_at

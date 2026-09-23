@@ -212,7 +212,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
         trainInfo: "체험 데이터 · KTX 025 서울 → 부산",
         expiresAt: new Date(clock().getTime() + 600_000).toISOString(),
         seatNumber: null,
-        seatLabels: payload.seats.map((seat) => seat.label),
+        seatLabels: payload.seats.map((seat) => `${seat.carNo}호차 ${seat.label}`),
         seatClass: payload.seatClass,
       }];
       return { reserved: true, pending, paymentUrl: "https://www.letskorail.com/" };

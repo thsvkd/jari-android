@@ -56,7 +56,7 @@ class FakeJava {
         param([string]$Name, [string]$FailCommand, [string]$ExpectedCommands,
             [bool]$ExpectSuccess = $false, [string]$JavaVersion = '21.0.12',
             [switch]$DefaultSdk, [switch]$SkipWebBuild, [string]$JavaHome = $fakeJdk,
-            [string]$ExpectedError, [switch]$MissingPushConfig, [switch]$MissingApiUrl)
+            [string]$ExpectedError, [switch]$MissingPushConfig, [switch]$MissingApiUrl, [int]$E2ePort = 0, [switch]$LeftoverE2eBundle)
         if ($MissingPushConfig) {
             Remove-Item "$fixture/android/app/google-services.json" -Force -ErrorAction SilentlyContinue
         } else {
@@ -67,6 +67,11 @@ class FakeJava {
         } else {
             Set-Content "$fixture/.env.production.local" 'VITE_API_BASE_URL=https://jari.example.test' -Encoding Ascii
         }
+        Remove-Item "$fixture/dist" -Recurse -Force -ErrorAction SilentlyContinue
+        if ($LeftoverE2eBundle) {
+            New-Item -ItemType Directory -Path "$fixture/dist/assets" -Force | Out-Null
+            Set-Content "$fixture/dist/assets/index.js" 'const base="http://127.0.0.1:18281";' -Encoding Ascii
+        }
         $env:JAVA_HOME = $JavaHome
         $env:ANDROID_HOME = if ($DefaultSdk) { $null } else { "$testRoot/local/Android/Sdk" }
         $env:JARI_TEST_FAIL = $FailCommand
@@ -74,6 +79,7 @@ class FakeJava {
         Set-Content $env:JARI_TEST_LOG ''
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$fixture/scripts/build-android.ps1")
         if ($SkipWebBuild) { $arguments += '-SkipWebBuild' }
+        if ($E2ePort) { $arguments += @('-E2ePort', $E2ePort) }
         # Windows PowerShell exposes native stderr as error records. Capture these
         # without letting the test runner stop before it can assert the exit code.
         $ErrorActionPreference = 'Continue'
@@ -104,6 +110,9 @@ class FakeJava {
     Test-Pipeline -Name 'later JDK is supported' -JavaVersion '25.0.1' -ExpectedCommands 'npm run build|npx cap sync android|gradlew assembleDebug' -ExpectSuccess $true
     Test-Pipeline -Name 'Gradle failure has no success output' -FailCommand gradlew -ExpectedCommands 'npm run build|npx cap sync android|gradlew assembleDebug'
     Test-Pipeline -Name 'SkipWebBuild still checks sync failure' -SkipWebBuild -FailCommand npx -ExpectedCommands 'npx cap sync android'
+    Test-Pipeline -Name 'e2e build needs neither Firebase nor the production URL' -E2ePort 18281 -MissingPushConfig -MissingApiUrl -ExpectedCommands 'npm run build|npx cap sync android|gradlew assembleE2e' -ExpectSuccess $true
+    Test-Pipeline -Name 'e2e build refuses a stale web bundle' -E2ePort 18281 -SkipWebBuild -ExpectedCommands '' -ExpectedError 'SkipWebBuild'
+    Test-Pipeline -Name 'release build refuses a leftover e2e bundle' -SkipWebBuild -LeftoverE2eBundle -ExpectedCommands '' -ExpectedError 'e2e'
     Test-Pipeline -Name 'SkipWebBuild succeeds with sync and Gradle' -SkipWebBuild -ExpectedCommands 'npx cap sync android|gradlew assembleDebug' -ExpectSuccess $true
     if ($RealJavaHome) {
         Test-Pipeline -Name "installed JDK validates: $RealJavaHome" -JavaHome $RealJavaHome -ExpectedCommands 'npm run build|npx cap sync android|gradlew assembleDebug' -ExpectSuccess $true

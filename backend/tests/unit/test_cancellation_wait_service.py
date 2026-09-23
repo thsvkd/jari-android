@@ -8,6 +8,7 @@ from korail_bot.models import CancellationWaitPlan, ReservationOutcome, SeatTarg
 from korail_bot.services.cancellation_wait_service import (
     CancellationWaitService,
     DesignatedCapture,
+    train_label,
 )
 from korail_bot.telegramBot.telebotBackProcess import BackgroundReservationProcess
 from korail_bot.utils.timezone import utc_now
@@ -378,6 +379,32 @@ def test_background_independent_wait_persists_and_notifies_each_capture(monkeypa
     assert [call.kwargs["status"] for call in process._send_callback.call_args_list] == [2, 0]
     assert process.storage.save_multi_reservation_status.call_count == 2
     saved = str(process.storage.save_multi_reservation_status.call_args)
-    assert "KTX 015 서울 → 부산 09:00" in saved
+    assert "KTX 015 서울 → 부산 · 9월 20일(일) 09:00" in saved
     assert "namespace(" not in saved
     process.storage.wait_for_payment.assert_not_called()
+
+
+def test_train_label_reads_a_real_korail2_reservation_without_price_or_deadline():
+    # The library's own class from Korail's wire fields, not a stand-in: a
+    # hand-made object once let this label read "출발역 → 도착역" unnoticed.
+    from korail2.korail2 import Reservation
+
+    reservation = Reservation(
+        {
+            "h_trn_clsf_nm": "KTX",
+            "h_trn_no": "00101",
+            "h_dpt_rs_stn_nm": "서울",
+            "h_arv_rs_stn_nm": "부산",
+            "h_run_dt": "20260924",
+            "h_dpt_tm": "131800",
+            "h_arv_tm": "155900",
+            "h_pnr_no": "R1",
+            "h_tot_seat_cnt": "001",
+            "h_ntisu_lmt_dt": "20260923",
+            "h_ntisu_lmt_tm": "033200",
+            "h_rsv_amt": "00078200",
+        }
+    )
+
+    assert str(reservation).startswith("[KTX] 9월 24일, 서울~부산(13:18~15:59), 78200원")
+    assert train_label(reservation) == "KTX 00101 서울 → 부산 · 9월 24일(목) 13:18→15:59"

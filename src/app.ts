@@ -1,4 +1,8 @@
 import { ApiError } from "./api";
+import { button, chip as chipButton, choice, linkButton, stepper } from "./ui/components";
+import { esc as escapeHtml } from "./ui/html";
+import { DatePicker, departureRange, localIso } from "./date-picker";
+import { TimePicker } from "./time-picker";
 import appPackage from "../package.json";
 import {
   buildBookingPayload,
@@ -7,6 +11,7 @@ import {
   conditionsToDraft,
   deriveRadarView,
   normalizeCapabilities,
+  paymentTimeLeft,
   relativeTime,
   type BookingDraft,
   type ConnectionState,
@@ -118,23 +123,14 @@ const SEAT_OPTIONS: Record<string, string> = {
 
 const NOTIFY_STEPS = [0, 1, 3, 5, 10, 15, 30, 60, 120, 180];
 
-function escapeHtml(value: unknown): string {
-  return String(value ?? "").replace(/[&<>"']/g, (character) => {
-    const entities: Record<string, string> = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;",
-    };
-    return entities[character] ?? character;
-  });
-}
 
 // True when a seat's label is the real seat number rather than the synthetic column letter the grid uses to lay it out (e.g. 무궁화 "23" vs KTX "3A").
 function isNumericSeatLabel(seat: SeatMapSeat): boolean {
   return Boolean(seat.column) && !seat.label.endsWith(seat.column);
 }
+
+// 서버 알림 종류마다 앞에 붙는 두 글자. 그 밖의 소식은 "찾기"예요.
+const NOTICE_MARKS: Record<string, string> = { reservation: "예약", payment: "결제", error: "문제" };
 
 function formatStamp(value: string | null | undefined): string {
   if (!value) return "시각 정보 없음";
@@ -202,13 +198,23 @@ export class JariApp {
   private inviteLoading = false;
   private notifySaveVersion = 0;
   private scheduleOpen = false;
+  // 찾기 시작 시각은 날짜와 시각을 따로 골라 #schedule-at 하나(YYYY-MM-DDTHH:MM)로 합쳐요.
+  private scheduleDate = "";
+  private scheduleTime = "";
   private accessRequired = false;
   private accessRequestPending = false;
   private busy = false;
   private error = "";
   private toast = "";
   private toastTimer: number | null = null;
+  // 토스트는 화면을 다시 그릴 때마다 새 요소로 태어나요. 떠오른 시각을 기억해 두고 애니메이션을 그만큼 앞당겨 이어 가요.
+  private toastShownAt = 0;
+  private toastLeavingAt = 0;
+  private toastSwipe: { pointerId: number; x: number } | null = null;
+  private readonly datePicker: DatePicker;
+  private readonly timePicker: TimePicker;
   private pollTimer: number | null = null;
+  private deadlineTimer: number | null = null;
   // Consecutive status polls that could not reach the server. One miss is a phone waking up or hopping networks; two is offline.
   private pollMisses = 0;
   private theme: "light" | "dark";
@@ -232,10 +238,14 @@ export class JariApp {
     this.onChange = this.onChange.bind(this);
     this.onSubmit = this.onSubmit.bind(this);
     this.onKeyDown = this.onKeyDown.bind(this);
+    this.onToastPointer = this.onToastPointer.bind(this);
+    this.datePicker = new DatePicker(root);
+    this.timePicker = new TimePicker(root);
     this.root.addEventListener("click", this.onClick);
     this.root.addEventListener("change", this.onChange);
     this.root.addEventListener("input", this.onChange);
     this.root.addEventListener("submit", this.onSubmit);
+    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"]) this.root.addEventListener(type, this.onToastPointer as EventListener);
     // On the window: the sheet's Escape must work wherever the focus sits, including before anything inside it is focused.
     window.addEventListener("keydown", this.onKeyDown);
   }
@@ -243,8 +253,10 @@ export class JariApp {
   private resetSession(): void {
     this.generation += 1;
     if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
+    if (this.deadlineTimer !== null) window.clearInterval(this.deadlineTimer);
     if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
     this.pollTimer = null;
+    this.deadlineTimer = null;
     this.toastTimer = null;
     this.state = null;
     this.view = "auth";
@@ -273,6 +285,10 @@ export class JariApp {
     this.busy = false;
     this.error = "";
     this.toast = "";
+    this.toastLeavingAt = 0;
+    this.toastSwipe = null;
+    this.datePicker.reset();
+    this.timePicker.reset();
     // Remove old form values before rendering can preserve any editable controls.
     this.root.replaceChildren();
   }
@@ -295,6 +311,9 @@ export class JariApp {
     this.root.removeEventListener("change", this.onChange);
     this.root.removeEventListener("input", this.onChange);
     this.root.removeEventListener("submit", this.onSubmit);
+    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"]) this.root.removeEventListener(type, this.onToastPointer as EventListener);
+    this.datePicker.dispose();
+    this.timePicker.dispose();
     window.removeEventListener("keydown", this.onKeyDown);
     this.themeQuery?.removeEventListener("change", this.onSystemTheme);
     if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
@@ -315,6 +334,8 @@ export class JariApp {
   }
 
   back(): boolean {
+    // Android 뒤로가기는 떠 있는 창부터 닫아요. 창이 떠 있는 채로 뒤 화면이 바뀌거나 앱이 나가지 않아요.
+    if (this.closeTopOverlay()) return true;
     this.syncJourneyDraft();
     const previous = this.history.pop();
     if (!previous) return false;
@@ -365,6 +386,7 @@ export class JariApp {
   private startPolling(): void {
     if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
     this.pollTimer = window.setInterval(() => void this.pollStatus(), 30_000);
+    this.deadlineTimer ??= window.setInterval(() => this.tickDeadlines(), 1_000);
   }
 
   private async pollStatus(): Promise<void> {
@@ -447,9 +469,14 @@ export class JariApp {
         ${this.renderSeatDialog()}
         ${this.renderSheet()}
         ${this.busy ? '<div class="blocker" role="status"><span class="spinner"></span><b>잠시만 기다려 주세요</b></div>' : ""}
-        <div class="toast" role="status" aria-live="polite">${escapeHtml(this.toast)}</div>
+        ${this.renderToast()}
       </div>`;
     restoreFields();
+    this.datePicker.refresh();
+    this.timePicker.refresh();
+    this.syncSheetDateChips();
+    // 붙박이 버튼이 있는 화면에서는 그 위로 올라가요. 스낵바가 주요 동작을 가리면 안 돼요.
+    this.root.querySelector(".toast")?.classList.toggle("above-action", Boolean(this.root.querySelector(".screen .sticky-action")));
   }
 
   private renderView(): string {
@@ -490,40 +517,36 @@ export class JariApp {
          <p class="route-meta">${escapeHtml(formatWindow(journey))}</p>`
       : "";
     const seatLabels: Record<string, string> = { GENERAL_FIRST: "일반실 우선", GENERAL_ONLY: "일반실만", SPECIAL_FIRST: "특실 우선", SPECIAL_ONLY: "특실만" };
-    const status = this.connection === "online"
-      ? state.pending.length
-        ? { kind: "reserved", title: "빈자리를 찾았어요", description: "아래 예약 내역에서 결제 기한을 확인하세요." }
-        : !state.running && state.scheduled
-          ? { kind: "scheduled", title: "정한 시각에 찾기 시작해요", description: `${formatStamp(state.scheduled.startAt)} 시작 예정` }
-          : radar
+    const status = this.connection === "online" && !state.running && state.scheduled
+      ? { kind: "scheduled", title: "정한 시각에 찾기 시작해요", description: `${formatStamp(state.scheduled.startAt)} 시작 예정` }
       : radar;
     // 찾는 중인 검색은 배지·구간·조건 한 줄이면 충분해요. 설명과 마지막 조회 시각은 검색 상세의 몫이에요.
     const busy = Boolean(state.running || state.scheduled || state.pending.length);
-    const statusCard = status.kind === "idle"
+    // 결제할 예약이 있으면 결제 카드가 곧 상태예요. 연결이 끊겼을 때만 그 사실을 따로 알려요.
+    const statusCard = paymentFirst && this.connection === "online"
+      ? ""
+      : status.kind === "idle"
       ? this.renderIdleCard()
       : (status.kind === "healthy" || status.kind === "running-unverified") && journey
         ? this.renderRunningCard(status.kind, journey)
         : `<section class="card search-status-card" data-search-status data-state="${status.kind}" aria-label="자리 찾기 상태 요약">
-        <div class="search-status-title"><span class="search-status-icon">${status.kind === "reserved" ? "예약" : ["error", "stale", "offline"].includes(status.kind) ? "!" : "대기"}</span><h2>${escapeHtml(status.title)}</h2></div>
+        <div class="search-status-title"><span class="search-status-icon">${["error", "stale", "offline"].includes(status.kind) ? "!" : "대기"}</span><h2>${escapeHtml(status.title)}</h2></div>
         ${route}
         ${journey ? `<p class="search-conditions">${escapeHtml(journey.trainTypeShow)} · ${escapeHtml(seatLabels[journey.specialInfoShow] ?? journey.specialInfoShow)} · ${journey.passengerCount}명</p>` : ""}
-        ${["reserved", "scheduled", "error", "stale", "offline"].includes(status.kind) ? `<p class="search-status-description">${escapeHtml(status.description)}</p>` : ""}
+        ${["scheduled", "error", "stale", "offline"].includes(status.kind) ? `<p class="search-status-description">${escapeHtml(status.description)}</p>` : ""}
         ${!paymentFirst && state.running && radar.lastCheckedLabel ? `<p class="search-last-check">마지막 조회 ${escapeHtml(radar.lastCheckedLabel)}</p>` : ""}
-        ${busy ? `<button class="button secondary" data-view="activity">${paymentFirst ? "예약 확인하기" : "자세히 보기"}<span>→</span></button>` : ""}
+        ${busy ? `${button({ variant: "secondary", view: "activity", content: `${paymentFirst ? "예약 확인하기" : "자세히 보기"}<span>→</span>` })}` : ""}
       </section>`;
-    // 바로가기는 대기 여부와 상관없이 제목 바로 밑 한 자리에만 둬요. 대기 카드는 그 아래에서 조용히 비어 있어요.
+    // 바로가기는 대기 여부와 상관없이 맨 위 한 자리에만 둬요. 대기 카드는 그 아래에서 조용히 비어 있어요.
     const chips = this.homeChips();
     return `<div class="home-layout"><div class="home-primary">
-      <section class="status-heading">
-        <div><h1>내 자리 찾기</h1></div>
-      </section>
       ${chips.length ? `<section class="chip-shelf">${this.renderChipShelf(chips)}</section>` : ""}
       ${statusCard}
       ${this.renderPendingCard(true)}
       ${state.scheduled ? this.renderScheduledCard() : ""}
-      <button class="button primary roomy" data-action="new-journey" ${state.capabilities.korail ? "" : "disabled"}><span>${state.capabilities.korail ? "새 여정 찾기" : "예약 서버에 연결해 주세요"}</span><b>＋</b></button>
+      ${button({ roomy: true, action: "new-journey", disabled: !state.capabilities.korail, content: `<span>${state.capabilities.korail ? "새 여정 찾기" : "예약 서버에 연결해 주세요"}</span><b>＋</b>` })}
       </div><aside class="home-secondary">
-      <section class="section-head"><div><p class="eyebrow">빠른 실행</p><h2>자주 가는 구간</h2></div><button class="text-button" data-view="favourites">전체 보기</button></section>
+      <section class="section-head"><div><p class="eyebrow">빠른 실행</p><h2>자주 가는 구간</h2></div>${button({ variant: "text", view: "favourites", label: "전체 보기" })}</section>
       <div class="route-list">${state.favourites.length ? state.favourites.slice(0, 2).map((favourite) => this.renderFavouriteRow(favourite, true)).join("") : '<div class="empty compact"><p>아직 저장한 구간이 없어요.</p></div>'}</div>
       </aside></div>`;
   }
@@ -562,7 +585,7 @@ export class JariApp {
       <p class="idle-badge"><span class="idle-dot" aria-hidden="true"></span>찾는 중${since ? ` · ${escapeHtml(since)}` : ""}</p>
       <div class="route-title"><strong>${escapeHtml(journey.srcLocate)}</strong><span>→</span><strong>${escapeHtml(journey.dstLocate)}</strong></div>
       <p class="route-meta">${escapeHtml(formatWindow(journey))} · ${journey.passengerCount}명</p>
-      <div class="card-action-row split"><button class="text-button" data-view="activity">자세히 보기 →</button><button class="text-button danger" data-action="stop-search">그만 찾기</button></div>
+      <div class="card-action-row split">${button({ variant: "text", view: "activity", label: "자세히 보기 →" })}${button({ variant: "text-danger", action: "stop-search", label: "그만 찾기" })}</div>
     </section>`;
   }
 
@@ -579,22 +602,41 @@ export class JariApp {
     </section>`;
   }
 
+  // 남은 시간은 1초마다 tickDeadlines 가 글자만 바꿔요. 화면 전체를 다시 그리면 스크롤과 입력이 흔들려요.
+  private renderTimeLeft(expiresAt: string): string {
+    const left = paymentTimeLeft(expiresAt, Date.now());
+    return left.text ? ` · <span class="time-left ${left.urgent ? "urgent" : ""}" data-deadline="${escapeHtml(expiresAt)}">${left.text}</span>` : "";
+  }
+
+  private tickDeadlines(): void {
+    for (const node of this.root.querySelectorAll<HTMLElement>("[data-deadline]")) {
+      const left = paymentTimeLeft(node.dataset.deadline!, Date.now());
+      node.textContent = left.text;
+      node.classList.toggle("urgent", left.urgent);
+    }
+  }
+
   private renderPendingCard(compact: boolean): string {
     const pending = this.state!.pending;
     if (!pending.length) return "";
     const total = this.state!.running?.passengerCount ?? pending.length;
-    const progress = total > pending.length ? ` · ${pending.length}/${total}석 확보` : "";
+    // 남은 자리를 찾는 중이라고는 조회가 정상일 때만 말해요. 실패·지연이면 그 상태를 그대로 적어요.
+    const radar = this.state!.running
+      ? deriveRadarView({ running: this.radarRunning(this.state!), connection: this.connection })
+      : null;
+    const rest = radar ? (radar.kind === "healthy" ? " · 나머지 찾는 중" : ` · 나머지 찾기: ${radar.eyebrow}`) : "";
+    const progress = total > pending.length ? ` · ${pending.length}/${total}석 확보${rest}` : "";
     return `<section class="card payment-card ${compact ? "compact-card" : ""}">
       <div class="card-label warning"><i></i>결제가 필요한 예약 ${pending.length}건${progress}</div>
-      ${pending.map((item) => `<div class="payment-row"><div><strong>${escapeHtml(item.trainInfo)}</strong><small>${item.seatClass ? `${item.seatClass === "general" ? "일반실" : "특실"} · ` : ""}${item.seatLabels?.length ? `${escapeHtml(item.seatLabels.join(", "))} · ` : item.seatNumber !== null ? `좌석 ${escapeHtml(item.seatNumber)} · ` : ""}${item.reservationId ? `예약번호 ${escapeHtml(item.reservationId)}` : "예약번호 정보 없음"}</small></div><b>${item.expiresAt ? `${escapeHtml(formatStamp(item.expiresAt))}까지` : "결제 기한 정보 없음"}</b></div>`).join("")}
-      <a class="button primary" href="${escapeHtml(this.state!.paymentUrl)}" target="_blank" rel="noreferrer">코레일에서 결제하기 <span>↗</span></a>
-      ${compact ? '<button class="text-button danger" data-view="activity">예약 관리</button>' : '<button class="button ghost danger" data-action="cancel-pending">예약 전체 취소</button>'}
+      ${pending.map((item) => `<div class="payment-row"><div><strong>${escapeHtml(item.trainInfo)}</strong><small>${item.seatClass ? `${item.seatClass === "general" ? "일반실" : "특실"} · ` : ""}${item.seatLabels?.length ? `${escapeHtml(item.seatLabels.join(", "))} · ` : item.seatNumber !== null ? `좌석 ${escapeHtml(item.seatNumber)} · ` : ""}${item.reservationId ? `예약번호 ${escapeHtml(item.reservationId)}` : "예약번호 정보 없음"}</small></div><b>${item.expiresAt ? `${escapeHtml(formatStamp(item.expiresAt))}까지${this.renderTimeLeft(item.expiresAt)}` : "결제 기한 정보 없음"}</b></div>`).join("")}
+      ${linkButton({ label: "코레일에서 결제하기", trailing: "↗", href: this.state!.paymentUrl })}
+      ${compact ? button({ variant: "text", view: "activity", label: "예약 관리" }) : button({ variant: "ghost-danger", action: "cancel-pending", label: "예약 전체 취소" })}
     </section>`;
   }
 
   private renderScheduledCard(): string {
     const scheduled = this.state!.scheduled!;
-    return `<section class="card scheduled-card"><div class="card-label"><i></i>예약된 자리 찾기</div><div class="route-line"><strong>${escapeHtml(scheduled.search.srcLocate)} → ${escapeHtml(scheduled.search.dstLocate)}</strong><span>${escapeHtml(formatStamp(scheduled.startAt))} 시작</span></div><button class="text-button danger" data-action="cancel-search">예약 취소</button></section>`;
+    return `<section class="card scheduled-card"><div class="card-label"><i></i>예약된 자리 찾기</div><div class="route-line"><strong>${escapeHtml(scheduled.search.srcLocate)} → ${escapeHtml(scheduled.search.dstLocate)}</strong><span>${escapeHtml(formatStamp(scheduled.startAt))} 시작</span></div>${button({ variant: "text-danger", action: "cancel-search", label: "예약 취소" })}</section>`;
   }
 
   private renderJourney(): string {
@@ -606,7 +648,7 @@ export class JariApp {
     return `${this.renderSubhead("새 여정", "여행 조건을 알려 주세요")}
       <form id="conditions-form" class="form-stack">
         <section class="card form-card">
-          <div class="form-section-head"><div><span>01</span><h2>어디로 떠나세요?</h2></div><button class="text-button" type="button" data-action="swap">출발·도착 바꾸기 ⇄</button></div>
+          <div class="form-section-head"><div><span>01</span><h2>어디로 떠나세요?</h2></div>${button({ variant: "text", action: "swap", label: "출발·도착 바꾸기 ⇄" })}</div>
           <div class="station-grid">
             <label class="field"><span>출발역</span><input name="src_station" list="stations" value="${escapeHtml(this.draft.srcStation)}" required autocomplete="off"></label>
             <span class="route-arrow">→</span>
@@ -621,29 +663,29 @@ export class JariApp {
         </section>
         <section class="card form-card">
           <div class="form-section-head"><div><span>02</span><h2>언제 떠나세요?</h2></div></div>
-          <label class="field"><span>출발 날짜</span><input name="dep_date" type="date" value="${escapeHtml(this.draft.depDate)}" required></label>
-          <div class="two-columns">
-            <label class="field"><span>이 시간부터</span><input name="dep_time" type="time" value="${escapeHtml(this.draft.depTime)}" required></label>
-            <label class="field"><span>이 시간까지</span><input name="max_dep_time" type="time" value="${escapeHtml(this.draft.maxDepTime)}" ${this.draft.unlimitedTime ? "disabled" : "required"}></label>
+          <div class="field"><span>출발 날짜</span>${this.datePicker.render({ id: "dep-date", name: "dep_date", value: this.draft.depDate, label: "출발 날짜", collapsible: true, ...departureRange() })}</div>
+          <div class="two-columns time-range">
+            <div class="field"><span>이 시간부터</span>${this.timePicker.render({ id: "dep-time", name: "dep_time", value: this.draft.depTime, label: "이 시간부터" })}</div>
+            <div class="field"><span>이 시간까지</span>${this.timePicker.render({ id: "max-dep-time", name: "max_dep_time", value: this.draft.maxDepTime, label: "이 시간까지", disabled: this.draft.unlimitedTime })}</div>
           </div>
-          <label class="check-row"><input name="unlimited_time" type="checkbox" ${this.draft.unlimitedTime ? "checked" : ""}><span><b>마지막 열차까지 찾기</b><small>자정 전 마지막 열차까지 찾아요</small></span></label>
+          ${choice({ type: "checkbox", look: "row", name: "unlimited_time", title: "마지막 열차까지 찾기", hint: "자정 전 마지막 열차까지 찾아요", checked: this.draft.unlimitedTime })}
         </section>
         <section class="card form-card">
           <div class="form-section-head"><div><span>03</span><h2>어떤 좌석이 좋으세요?</h2></div></div>
           <fieldset class="grade-picker"><legend>좌석 등급</legend>
-            <label class="check-row grade-any"><input type="radio" name="seat_grade_mode" value="any" ${this.draft.seatGradeMode !== "specific" ? "checked" : ""}><span><b>좌석 등급 상관없음</b><small>가능한 좌석을 가장 빠르게 예약해요</small></span></label>
-            <label class="check-row"><input type="radio" name="seat_grade_mode" value="specific" ${this.draft.seatGradeMode === "specific" ? "checked" : ""}><span><b>좌석 등급 지정</b><small>열차 조회 후 실제 좌석표에서 자리를 골라요</small></span></label>
+            ${choice({ type: "radio", look: "row", className: "grade-any", name: "seat_grade_mode", value: "any", title: "좌석 등급 상관없음", hint: "가능한 좌석을 가장 빠르게 예약해요", checked: this.draft.seatGradeMode !== "specific" })}
+            ${choice({ type: "radio", look: "row", name: "seat_grade_mode", value: "specific", title: "좌석 등급 지정", hint: "열차 조회 후 실제 좌석표에서 자리를 골라요", checked: this.draft.seatGradeMode === "specific" })}
           </fieldset>
           ${this.draft.seatGradeMode === "specific" ? `<fieldset class="choice-grid seat-class-picker"><legend>찾을 좌석 등급</legend>
-            <label class="choice-card"><input type="checkbox" name="seat_class" value="general" ${(this.draft.seatClasses ?? []).includes("general") ? "checked" : ""}><span><b>일반실</b><small>일반 좌석</small></span></label>
-            <label class="choice-card"><input type="checkbox" name="seat_class" value="special" ${(this.draft.seatClasses ?? []).includes("special") ? "checked" : ""}><span><b>특실</b><small>넓은 좌석</small></span></label>
+            ${choice({ type: "checkbox", look: "tile", name: "seat_class", value: "general", title: "일반실", hint: "일반 좌석", checked: (this.draft.seatClasses ?? []).includes("general") })}
+            ${choice({ type: "checkbox", look: "tile", name: "seat_class", value: "special", title: "특실", hint: "넓은 좌석", checked: (this.draft.seatClasses ?? []).includes("special") })}
           </fieldset><div class="notice calm seat-detail-note"><b>세부 좌석은 다음 단계에서 골라요.</b><p>열차별 실제 좌석표에서 맨 앞·맨 뒤·4인 동반석·원하는 자리를 선택할 수 있어요.</p></div>` : ""}
-          <div class="passenger-row"><span><b>인원</b><small>최대 9명</small></span><div class="stepper"><button type="button" data-action="passenger-minus">−</button><output>${this.draft.passengerCount}명</output><button type="button" data-action="passenger-plus">＋</button></div></div>
+          <div class="passenger-row"><span><b>인원</b><small>최대 9명</small></span>${stepper({ label: "인원", value: `${this.draft.passengerCount}명`, decrease: "passenger-minus", increase: "passenger-plus", atMin: this.draft.passengerCount <= 1, atMax: this.draft.passengerCount >= 9 })}</div>
           ${this.draft.passengerCount > 1 ? `<fieldset class="choice-grid"><legend>좌석 배치</legend>${this.radioCard("seat_strategy", "1", "연속 좌석", "같은 열차·호차에서 붙은 자리만", this.draft.seatStrategy === "1")}${this.radioCard("seat_strategy", "2", "따로 앉아도 괜찮아요", "한 자리만 잡혀도 바로 알려드려요", this.draft.seatStrategy === "2")}</fieldset>` : ""}
         </section>
         ${this.renderError()}
         ${capabilities.korail ? "" : '<p class="availability center">예약 서버가 연결되지 않아 현재 앱 계정 기능만 사용할 수 있어요.</p>'}
-        <button class="button primary" type="submit" ${capabilities.korail ? "" : "disabled"}>열차 조회하기 <span>→</span></button>
+        ${button({ type: "submit", label: "열차 조회하기", trailing: "→", disabled: !capabilities.korail })}
       </form>`;
   }
 
@@ -654,7 +696,7 @@ export class JariApp {
     hint: string,
     checked: boolean,
   ): string {
-    return `<label class="choice-card"><input type="radio" name="${name}" value="${value}" ${checked ? "checked" : ""}><span><b>${title}</b><small>${hint}</small></span></label>`;
+    return choice({ type: "radio", look: "tile", name, value, title, hint, checked });
   }
 
   private renderTrains(): string {
@@ -673,7 +715,13 @@ export class JariApp {
               const selectedCount = this.cancellationTargets
                 .find((target) => target.trainNo === train.no && target.seatClass === seatClass)
                 ?.targets.length ?? 0;
-              return `<button class="button seat-action ${selectedCount ? "selected" : ""}" type="button" data-seat-map="${escapeHtml(train.trainKey || "")}" data-train-no="${escapeHtml(train.no)}" data-seat-class="${seatClass}" data-seat-mode="${available ? "immediate" : "wait"}" ${train.trainKey ? "" : "disabled"}><span>${available ? `${label} · 지금 예약할 좌석` : `${label} · 기다릴 좌석 고르기`}</span>${selectedCount ? `<em>선택 완료 · ${selectedCount}석</em>` : ""}</button>`;
+              return button({
+                variant: "seat",
+                className: selectedCount ? "selected" : undefined,
+                disabled: !train.trainKey,
+                attrs: { "data-seat-map": train.trainKey || "", "data-train-no": train.no, "data-seat-class": seatClass, "data-seat-mode": available ? "immediate" : "wait" },
+                content: `<span>${available ? `${label} · 지금 예약할 좌석` : `${label} · 기다릴 좌석 고르기`}</span>${selectedCount ? `<em>선택 완료 · ${selectedCount}석</em>` : ""}`,
+              });
             };
             const classButtons = configuredClasses.map((seatClass) =>
               seatButton(seatClass, seatClass === "general" ? train.generalAvailable : train.specialAvailable),
@@ -682,10 +730,10 @@ export class JariApp {
             const anyAction = this.draft.seatGradeMode === "specific"
               ? classButtons
               : anyAvailable
-                ? `<button class="button seat-action" type="button" data-immediate-any="${escapeHtml(train.no)}">바로 예약</button>`
+                ? `${button({ variant: "seat", label: "바로 예약", attrs: { "data-immediate-any": train.no } })}`
                 : (["general", "special"] as SeatClass[]).map((seatClass) => seatButton(seatClass, false)).join("");
             const official = train.waitlistEligible
-              ? `<button class="text-button" type="button" data-official-waitlist="${escapeHtml(train.no)}">코레일 예약 대기</button>`
+              ? `${button({ variant: "text", label: "코레일 예약 대기", attrs: { "data-official-waitlist": train.no } })}`
               : "";
             const targets = this.cancellationTargets.filter((target) => target.trainNo === train.no);
             const selectedCount = targets.reduce((sum, target) => sum + target.targets.length, 0);
@@ -701,7 +749,7 @@ export class JariApp {
       <div class="train-list">${list}</div>
       ${this.renderError()}
       ${this.renderAccessRequest()}
-      <button class="button primary sticky-action" data-action="trains-next">${this.cancellationTargets.length ? `${new Set(this.cancellationTargets.map((target) => target.trainNo)).size}편 선택 · 다음: 조건 확인` : "다음: 조건 확인"} <span>→</span></button>`;
+      ${button({ action: "trains-next", className: "sticky-action", label: this.cancellationTargets.length ? `${new Set(this.cancellationTargets.map((target) => target.trainNo)).size}편 선택 · 다음: 조건 확인` : "다음: 조건 확인", trailing: "→" })}`;
   }
 
   private renderSeatDialog(): string {
@@ -751,7 +799,7 @@ export class JariApp {
           ? '<div class="seat-dialog-error" role="alert"><b>이 열차의 좌석표 형식을 아직 읽지 못했어요.</b><p>다른 호차를 선택하거나 나중에 다시 시도해 주세요.</p></div>'
           : "")
       : dialog.error
-        ? `<div class="seat-dialog-error" role="alert"><b>좌석표를 불러오지 못했어요.</b><p>${escapeHtml(dialog.error)}</p><button type="button" class="button seat-action" data-action="retry-seat-dialog">다시 시도</button></div>`
+        ? `<div class="seat-dialog-error" role="alert"><b>좌석표를 불러오지 못했어요.</b><p>${escapeHtml(dialog.error)}</p>${button({ variant: "seat", action: "retry-seat-dialog", label: "다시 시도" })}</div>`
         : '<div class="seat-loading"><span class="spinner"></span><p>실제 좌석표를 불러오고 있어요.</p></div>';
     const selectedLabels = dialog.selected.length > 6
       ? `${new Set(dialog.selected.map((seat) => seat.carNo)).size}개 호차 · ${dialog.selected.length}석`
@@ -765,13 +813,13 @@ export class JariApp {
       ? dialog.selected.length !== passengerCount
       : dialog.selected.length === 0);
     return `<div class="modal-backdrop" role="presentation"><section class="seat-dialog" role="dialog" aria-modal="true" aria-labelledby="seat-dialog-title">
-      <header><div><p class="eyebrow">${escapeHtml(`${dialog.train.name || "열차"} ${dialog.train.no}`)} · ${classLabel}</p><h2 id="seat-dialog-title">${title}</h2></div><button type="button" class="icon-button" data-action="close-seat-dialog" aria-label="좌석 선택 닫기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
+      <header><div><p class="eyebrow">${escapeHtml(`${dialog.train.name || "열차"} ${dialog.train.no}`)} · ${classLabel}</p><h2 id="seat-dialog-title">${title}</h2></div>${button({ variant: "icon", action: "close-seat-dialog", ariaLabel: "좌석 선택 닫기", content: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>' })}</header>
       <div class="car-tabs" aria-label="호차 선택">${cars}</div>
       ${dialog.inventory ? this.renderSeatFilter(dialog, dialog.inventory.seats) : ""}
       <div class="seat-legend">${dialog.layoutReference ? "" : '<span><i class="available"></i>현재 예약 가능</span>'}<span><i class="occupied"></i>${dialog.mode === "wait" ? "취소표 대기 가능" : "선택 불가"}</span><span><i class="selected"></i>선택</span></div>
       <div class="seat-map-live">${rows}</div>
       ${dialog.inventory && dialog.error ? `<p class="notice warning seat-inline-error" role="alert">${escapeHtml(dialog.error)}</p>` : ""}
-      <footer><div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || dialog.filter.columns.length || dialog.filter.trimRows || dialog.filter.excludeFamily ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div><button type="button" class="button primary" data-action="confirm-seat-dialog" ${confirmDisabled ? "disabled" : ""}>${confirmText}</button></footer>
+      <footer><div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || dialog.filter.columns.length || dialog.filter.trimRows || dialog.filter.excludeFamily ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div>${button({ action: "confirm-seat-dialog", content: confirmText, disabled: confirmDisabled })}</footer>
     </section></div>`;
   }
 
@@ -782,7 +830,7 @@ export class JariApp {
       <h2 id="action-sheet-title">${escapeHtml(sheet.title)}</h2>
       ${sheet.body ? `<p>${escapeHtml(sheet.body)}</p>` : ""}
       ${sheet.content}
-      <div class="action-sheet-actions"><button type="button" class="button ghost" data-action="sheet-cancel">취소</button><button type="button" class="button ${sheet.danger ? "danger" : "primary"}" data-action="sheet-confirm">${escapeHtml(sheet.confirmLabel)}</button></div>
+      <div class="action-sheet-actions">${button({ variant: "ghost", action: "sheet-cancel", label: "취소" })}${button({ variant: sheet.danger ? "danger" : "primary", action: "sheet-confirm", label: sheet.confirmLabel })}</div>
     </section></div>`;
   }
 
@@ -799,6 +847,25 @@ export class JariApp {
       };
       this.render();
     });
+  }
+
+  /** 떠 있는 창을 위에서부터 하나 닫아요(시트 → 좌석표). 닫은 게 있으면 true. */
+  private closeTopOverlay(): boolean {
+    if (this.sheet) {
+      this.closeSheet(null);
+      return true;
+    }
+    if (this.seatDialog) {
+      this.closeSeatDialog();
+      return true;
+    }
+    return false;
+  }
+
+  private closeSeatDialog(): void {
+    this.seatDialog = null;
+    this.error = "";
+    this.render();
   }
 
   private closeSheet(value: string | null): void {
@@ -823,7 +890,7 @@ export class JariApp {
     const placedSeats = seats.filter((seat) => seat.row !== null);
     const numericLabels = placedSeats.length > 0 && placedSeats.every((seat) => isNumericSeatLabel(seat));
     const chip = (action: string, label: string, on: boolean) =>
-      `<button type="button" class="seat-chip ${on ? "selected" : ""}" data-seat-filter="${escapeHtml(action)}" aria-pressed="${on}" ${locked ? "disabled" : ""}>${escapeHtml(label)}</button>`;
+      chipButton({ label, pressed: on, disabled: locked, attrs: { "data-seat-filter": action } });
     const allOn = (columns: string[]) => columns.length > 0 && columns.every((column) => filter.columns.includes(column));
     const columnChips = numericLabels ? "" : sets.columns.map((column) => chip(`col:${column}`, column, filter.columns.includes(column))).join("");
     const trimLabel = `${filter.trimRows}줄`;
@@ -838,7 +905,7 @@ export class JariApp {
       ? stepper("cars", "호차 앞뒤 제외", `${dialog.trimCars}개`, dialog.trimCars <= 0, dialog.trimCars >= maxTrimCars(dialog.cars.length))
       : "";
     const applyAll = multiCar
-      ? `<button type="button" class="button ghost seat-apply-all" data-action="apply-all-cars" ${locked ? "disabled" : ""}>${locked ? "모든 호차 확인 중…" : "모든 호차에 적용"}</button>`
+      ? `${button({ variant: "ghost", className: "seat-apply-all", action: "apply-all-cars", label: locked ? "모든 호차 확인 중…" : "모든 호차에 적용", disabled: locked })}`
       : "";
     return `<div class="seat-filter">
       <div class="seat-filter-row"><span>열</span><div class="seat-chips">${columnChips}<i aria-hidden="true"></i>${chip("pair:window", "창가", allOn(sets.window))}${sets.aisle.length ? chip("pair:aisle", "복도", allOn(sets.aisle)) : ""}</div></div>
@@ -1117,6 +1184,11 @@ export class JariApp {
         this.refreshSeatDialog(true);
         return;
       }
+      // 누르면 실제 예약이에요. "바로 예약"처럼 열차와 좌석을 한 번 보여 주고 시작해요.
+      const train = this.trainOptions.find((option) => option.no === dialog.train.no)?.label || `열차 ${dialog.train.no}`;
+      const seats = dialog.selected.map((seat) => `${seat.carNo}호차 ${seat.label}`).join(", ");
+      const confirmed = await this.confirmSheet({ title: "이 좌석을 예약할까요?", body: `${train} · ${seats}`, confirmLabel: "예약하기" });
+      if (!confirmed || this.seatDialog !== dialog) return;
       await this.run(async (isCurrent) => {
         let result: DesignatedReservationResult;
         try {
@@ -1242,11 +1314,11 @@ export class JariApp {
       <label class="field favourite-name"><span>즐겨찾기 이름 <small>선택</small></span><input id="favourite-name" maxlength="40" placeholder="예: 주말에 집으로"></label>
       ${this.renderError()}
       ${this.renderAccessRequest()}
-      <button class="button primary" data-action="start-now">${waitlist ? "코레일 예약 대기 신청" : "지금 빈자리 찾기"} <span>${waitlist ? "→" : "⌁"}</span></button>
-      <button class="button ghost" data-action="schedule-toggle" ${capabilities.scheduledSearch && !waitlist ? "" : "disabled"}>찾기 시작 시각 예약</button>
+      ${button({ action: "start-now", label: waitlist ? "코레일 예약 대기 신청" : "지금 빈자리 찾기", trailing: waitlist ? "→" : "⌁" })}
+      ${button({ variant: "ghost", action: "schedule-toggle", label: "찾기 시작 시각 예약", disabled: !(capabilities.scheduledSearch && !waitlist) })}
       ${waitlist ? '<p class="availability center">예약 대기는 선택한 열차에 바로 신청해요.</p>' : capabilities.scheduledSearch ? "" : '<p class="availability center">찾기 예약은 현재 서버에서 지원하지 않아요.</p>'}
-      ${this.scheduleOpen && capabilities.scheduledSearch && !waitlist ? `<section class="schedule-panel"><label class="field"><span>찾기를 시작할 시각</span><input id="schedule-at" type="datetime-local" required></label><button class="button secondary" data-action="schedule-start">이 시각으로 찾기 예약</button></section>` : ""}
-      <div class="split-actions"><button class="text-button" data-action="save-favourite" ${capabilities.favourites ? "" : "disabled"}>☆ ${capabilities.favourites ? "이 조건 즐겨찾기" : "즐겨찾기 이용 불가"}</button><button class="text-button" data-view="journey">조건 수정</button></div>`;
+      ${this.scheduleOpen && capabilities.scheduledSearch && !waitlist ? `<section class="schedule-panel"><div class="field"><span>찾기를 시작할 시각</span><input type="hidden" id="schedule-at" value="${this.scheduleDate && this.scheduleTime ? `${this.scheduleDate}T${this.scheduleTime}` : ""}">${this.datePicker.render({ id: "schedule-date", value: this.scheduleDate, label: "찾기 시작 날짜", collapsible: true, ...departureRange() })}${this.timePicker.render({ id: "schedule-time", value: this.scheduleTime, label: "찾기 시작 시각", hours: [0, 23] })}</div>${button({ variant: "secondary", action: "schedule-start", label: "이 시각으로 찾기 예약" })}</section>` : ""}
+      <div class="split-actions">${button({ variant: "text", action: "save-favourite", label: `☆ ${capabilities.favourites ? "이 조건 즐겨찾기" : "즐겨찾기 이용 불가"}`, disabled: !capabilities.favourites })}${button({ variant: "text", view: "journey", label: "조건 수정" })}</div>`;
   }
 
   private renderActivity(): string {
@@ -1264,26 +1336,23 @@ export class JariApp {
     const detail = radar.kind === "healthy" || radar.kind === "running-unverified"
       ? running?.attemptCount ? `<p class="center muted activity-check">${escapeHtml(checkLine)}</p>` : ""
       : `<div class="notice ${radar.kind === "error" || radar.kind === "stale" ? "warning" : "calm"}"><b>${escapeHtml(radar.title)}</b><p>${escapeHtml(radar.description)}</p></div>`;
-    return `${this.renderSubhead("내 예약", "자리 찾기와 결제")}
-      ${this.renderPendingCard(false)}
-      ${running ? `<section class="card activity-card"><div class="row-between"><span class="status-pill status-${radar.kind}"><i></i>${escapeHtml(radar.eyebrow)}</span><small>${sinceCheck ? "" : "확인 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(running.srcLocate)}</span><i>→</i><span>${escapeHtml(running.dstLocate)}</span></div>${this.renderRunningConditions(running)}${detail}<button class="button danger" data-action="cancel-search">그만 찾기</button></section>` : ""}
+    return `${this.renderPendingCard(false)}
+      ${running ? `<section class="card activity-card"><div class="row-between"><span class="status-pill status-${radar.kind}"><i></i>${escapeHtml(radar.eyebrow)}</span><small>${sinceCheck ? "" : "확인 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(running.srcLocate)}</span><i>→</i><span>${escapeHtml(running.dstLocate)}</span></div>${this.renderRunningConditions(running)}${detail}${button({ variant: "ghost-danger", action: "cancel-search", label: "그만 찾기" })}</section>` : ""}
       ${state.scheduled ? this.renderScheduledCard() : ""}
-      ${!state.running && !state.scheduled && !state.pending.length ? `<div class="empty">${activityEmptyMark()}<h2>찾고 있는 자리가 없어요</h2><p>새 여정을 등록하고 빈자리를 찾아보세요.</p><button class="button primary" data-action="new-journey">새 여정 찾기</button></div>` : ""}`;
+      ${!state.running && !state.scheduled && !state.pending.length ? `<div class="empty">${activityEmptyMark()}<h2>찾고 있는 자리가 없어요</h2><p>새 여정을 등록하고 빈자리를 찾아보세요.</p>${button({ action: "new-journey", label: "새 여정 찾기" })}</div>` : ""}`;
   }
 
   private renderFavourites(): string {
     const favourites = this.state!.favourites;
     if (!this.state!.capabilities.favourites) {
-      return `${this.renderSubhead("즐겨찾기", "자주 가는 구간")}<div class="empty">${favouriteEmptyMark()}<h2>즐겨찾기를 이용할 수 없어요</h2><p>예약 서버에 연결하면 자주 쓰는 조건을 저장할 수 있어요.</p></div>`;
+      return `<div class="empty">${favouriteEmptyMark()}<h2>즐겨찾기를 이용할 수 없어요</h2><p>예약 서버에 연결하면 자주 쓰는 조건을 저장할 수 있어요.</p></div>`;
     }
-    return `${this.renderSubhead("즐겨찾기", "자주 가는 구간")}
-      <p class="intro">자주 가는 구간을 저장해 두고, 날짜만 바꿔 바로 조회하세요.</p>
-      <div class="favourite-list">${favourites.length ? favourites.map((favourite) => this.renderFavouriteRow(favourite, false)).join("") : `<div class="empty">${favouriteEmptyMark()}<h2>즐겨찾기가 없어요</h2><p>자주 가는 구간을 저장해 두면 다음 찾기가 더 빨라져요.</p></div>`}</div>
-      <button class="button primary" data-action="new-journey">새 즐겨찾기 만들기 <span>＋</span></button>`;
+    return `<div class="favourite-list">${favourites.length ? favourites.map((favourite) => this.renderFavouriteRow(favourite, false)).join("") : `<div class="empty">${favouriteEmptyMark()}<h2>즐겨찾기가 없어요</h2><p>자주 가는 구간을 저장해 두면 다음 찾기가 더 빨라져요.</p></div>`}</div>
+      ${button({ action: "new-journey", className: "sticky-action favourite-add", label: "새 즐겨찾기 추가", trailing: "＋" })}`;
   }
 
   private renderFavouriteRow(favourite: Favourite, compact: boolean): string {
-    return `<article class="favourite-row ${compact ? "compact" : ""}"><button class="favourite-main" data-use-favourite="${escapeHtml(favourite.id)}"><span class="route-symbol">구간</span><span><b>${escapeHtml(favourite.name)}</b><small>${escapeHtml(favourite.route)} · ${escapeHtml(favourite.window)}</small></span></button>${compact ? "" : `<button class="text-button" data-edit-favourite="${escapeHtml(favourite.id)}">조건 수정</button><button class="icon-button danger" data-delete-favourite="${escapeHtml(favourite.id)}" aria-label="${escapeHtml(favourite.name)} 삭제">삭제</button>`}</article>`;
+    return `<article class="favourite-row ${compact ? "compact" : ""}"><button class="favourite-main" data-use-favourite="${escapeHtml(favourite.id)}"><span class="route-symbol">구간</span><span><b>${escapeHtml(favourite.name)}</b><small>${escapeHtml(favourite.route)} · ${escapeHtml(favourite.window)}</small></span></button>${compact ? "" : `${button({ variant: "text", label: "조건 수정", attrs: { "data-edit-favourite": favourite.id } })}${button({ variant: "icon-danger", label: "삭제", ariaLabel: `${favourite.name} 삭제`, attrs: { "data-delete-favourite": favourite.id } })}`}</article>`;
   }
 
   private renderNotifications(): string {
@@ -1298,7 +1367,7 @@ export class JariApp {
           : ["알림을 불러오는 중이에요", "잠시만 기다려 주세요."];
     const items = this.notificationsLoaded && this.notifications.length
       ? this.notifications
-          .map((item) => `<article class="notification"><span class="notification-icon">${item.kind === "reservation" ? "예약" : "찾기"}</span><div><b>${escapeHtml(item.text)}</b><small>${escapeHtml(formatStamp(item.createdAt))}</small></div></article>`)
+          .map((item) => `<article class="notification"><span class="notification-icon">${NOTICE_MARKS[item.kind] ?? "찾기"}</span><div><b>${escapeHtml(item.text)}</b><small>${escapeHtml(formatStamp(item.createdAt))}</small></div></article>`)
           .join("")
       : `<div class="empty"><span>◌</span><h2>${title}</h2><p>${text}</p></div>`;
     return `${this.renderSubhead("알림", "자리 찾기와 예약 소식")}${this.renderError()}${items}`;
@@ -1311,27 +1380,26 @@ export class JariApp {
       state.notifications?.pushAvailable !== false &&
       state.pushAvailable !== false;
     const notifyAvailable = state.capabilities.notificationSettings;
-    return `${this.renderSubhead("설정", "계정과 알림")}
-      <div class="settings-layout"><aside class="settings-profile"><section class="profile-card"><span class="profile-avatar">${escapeHtml((state.user?.username || "나").slice(0, 1))}</span><div><b>${escapeHtml(state.user?.username || "여행자")}</b><small>${state.user?.role === "admin" ? "관리자 계정" : "초대로 가입한 계정"}</small></div></section><button class="button ghost danger" data-action="app-logout">앱에서 로그아웃</button></aside>
+    return `<div class="settings-layout"><aside class="settings-profile"><section class="profile-card"><span class="profile-avatar">${escapeHtml((state.user?.username || "나").slice(0, 1))}</span><div><b>${escapeHtml(state.user?.username || "여행자")}</b><small>${state.user?.role === "admin" ? "관리자 계정" : "초대로 가입한 계정"}</small></div></section></aside>
       <div class="settings-groups"><section class="settings-section"><p class="eyebrow">철도 계정</p><button class="settings-row" data-view="rail-account"><span><b>코레일 계정</b><small>${state.rail.registered ? "연결됨 · 모든 고속열차 예약 준비 완료" : "연결되지 않음"}</small></span><em>${state.rail.registered ? "관리" : "연결"} →</em></button><div class="settings-row static"><span><b>수서 출발 고속열차</b><small>별도 SRT 계정 없이 코레일 계정으로 이용해요</small></span><em class="integrated-badge">통합됨</em></div></section>
-      <section class="settings-section"><p class="eyebrow">알림</p><div class="settings-row static"><span><b>찾기 상황 알림</b><small>${notifyAvailable ? "찾는 중 진행 상황을 알려드리는 간격" : "현재 서버에서는 알림 간격을 바꿀 수 없어요"}</small></span><div class="stepper small"><button data-action="notify-minus" ${notifyAvailable ? "" : "disabled"}>−</button><output>${notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가"}</output><button data-action="notify-plus" ${notifyAvailable ? "" : "disabled"}>＋</button></div></div><button class="settings-row" data-action="request-push" ${pushAvailable ? "" : "disabled"}><span><b>휴대폰 알림</b><small>${pushAvailable ? "Android 알림 권한 열기" : "휴대폰 알림 서비스가 아직 준비되지 않았어요"}</small></span><em>${pushAvailable ? "설정" : "이용 불가"}</em></button></section>
-      ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p><span class="admin-only-badge">관리자 전용</span></div><p class="settings-section-copy">회원 가입 권한은 관리자만 발급할 수 있어요.</p><button class="settings-row" data-action="create-invite" ${this.inviteLoading ? "disabled" : ""}><span><b>회원 초대 코드</b><small>관리자만 만들 수 있는 일회용 가입 코드예요</small></span><em>${this.inviteLoading ? '<span class="inline-spinner" aria-hidden="true"></span><span class="sr-only">만드는 중</span>' : "만들기 →"}</em></button>${this.invitePreview ? `<div class="invite-card"><p>코드는 이 화면을 닫으면 다시 볼 수 없어요. 가입할 분에게 바로 전달해 주세요.</p><code>${escapeHtml(this.invitePreview)}</code><div class="invite-actions"><button class="button primary" data-action="copy-invite" type="button">복사</button><button class="button ghost" data-action="dismiss-invite" type="button">닫기</button></div></div>` : ""}</section>` : ""}
-      <section class="settings-section"><p class="eyebrow">앱</p><button class="settings-row" data-action="theme"><span><b>화면 테마</b><small>시스템과 별도로 바꿀 수 있어요</small></span><em>${this.theme === "dark" ? "다크" : "라이트"}</em></button><div class="settings-row static"><span><b>앱 버전</b><small>서버 ${escapeHtml(state.version)}</small></span><em>v${escapeHtml(appPackage.version)}</em></div></section></div></div>`;
+      <section class="settings-section"><p class="eyebrow">알림</p><div class="settings-row static"><span><b>찾기 상황 알림</b><small>${notifyAvailable ? "찾는 중 진행 상황을 알려드리는 간격" : "현재 서버에서는 알림 간격을 바꿀 수 없어요"}</small></span>${stepper({ small: true, label: "찾기 상황 알림 간격", value: notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가", decrease: "notify-minus", increase: "notify-plus", disabled: !notifyAvailable, atMin: state.notifyMinutes <= NOTIFY_STEPS[0]!, atMax: state.notifyMinutes >= NOTIFY_STEPS[NOTIFY_STEPS.length - 1]! })}</div><button class="settings-row" data-action="request-push" ${pushAvailable ? "" : "disabled"}><span><b>휴대폰 알림</b><small>${pushAvailable ? "Android 알림 권한 열기" : "휴대폰 알림 서비스가 아직 준비되지 않았어요"}</small></span><em>${pushAvailable ? "설정" : "이용 불가"}</em></button></section>
+      ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p><span class="admin-only-badge">관리자 전용</span></div><p class="settings-section-copy">회원 가입 권한은 관리자만 발급할 수 있어요.</p><button class="settings-row" data-action="create-invite" ${this.inviteLoading ? "disabled" : ""}><span><b>회원 초대 코드</b><small>관리자만 만들 수 있는 일회용 가입 코드예요</small></span><em>${this.inviteLoading ? '<span class="inline-spinner" aria-hidden="true"></span><span class="sr-only">만드는 중</span>' : "만들기 →"}</em></button>${this.invitePreview ? `<div class="invite-card"><p>코드는 이 화면을 닫으면 다시 볼 수 없어요. 가입할 분에게 바로 전달해 주세요.</p><code>${escapeHtml(this.invitePreview)}</code><div class="invite-actions">${button({ action: "copy-invite", label: "복사" })}${button({ variant: "ghost", action: "dismiss-invite", label: "닫기" })}</div></div>` : ""}</section>` : ""}
+      <section class="settings-section"><p class="eyebrow">앱</p><button class="settings-row" data-action="theme"><span><b>화면 테마</b><small>시스템과 별도로 바꿀 수 있어요</small></span><em>${this.theme === "dark" ? "다크" : "라이트"}</em></button><div class="settings-row static"><span><b>앱 버전</b><small>서버 ${escapeHtml(state.version)}</small></span><em>v${escapeHtml(appPackage.version)}</em></div></section>${button({ variant: "ghost-danger", action: "app-logout", label: "앱에서 로그아웃" })}</div></div>`;
   }
 
   private renderRailAccount(): string {
     if (this.options.demoMode) {
-      return `${this.renderSubhead("코레일 계정", "데모용 연결 상태")}<section class="notice calm"><b>샘플 계정으로 화면을 보여드려요.</b><p>데모에서는 코레일 아이디와 비밀번호를 받지 않고, 코레일 서버에도 연결하지 않아요.</p></section><button class="button ghost" data-action="back">설정으로 돌아가기</button>`;
+      return `${this.renderSubhead("코레일 계정", "데모용 연결 상태")}<section class="notice calm"><b>샘플 계정으로 화면을 보여드려요.</b><p>데모에서는 코레일 아이디와 비밀번호를 받지 않고, 코레일 서버에도 연결하지 않아요.</p></section>${button({ variant: "ghost", action: "back", label: "설정으로 돌아가기" })}`;
     }
     const registered = this.state!.rail.registered;
     return `${this.renderSubhead("코레일 계정", registered ? "연결된 계정 관리" : "예약을 위한 계정 연결")}
       <section class="notice calm"><b>로그인 정보는 서버에서만 사용해요.</b><p>앱에는 코레일 비밀번호를 저장하지 않으며, 서버 응답에도 비밀번호를 담지 않아요.</p></section>
-      ${registered ? `<section class="card"><div class="account-state"><span>✓</span><div><b>코레일 계정 연결됨</b><small>열차 조회와 예약을 시작할 수 있어요.</small></div></div><button class="button ghost danger" data-action="rail-logout">코레일 계정 연결 해제</button></section>` : `<form id="rail-form" class="form-stack"><label class="field"><span>휴대전화 번호 또는 회원번호</span><input name="username" inputmode="tel" maxlength="20" autocomplete="username" aria-describedby="rail-login-hint" required><small id="rail-login-hint">회원번호는 숫자 8자리 또는 10자리예요.</small></label><label class="field"><span>코레일 비밀번호</span><input name="password" type="password" maxlength="128" autocomplete="current-password" required></label>${this.state!.capabilities.korail ? "" : '<p class="availability center">예약 서버가 연결되지 않아 코레일 계정을 확인할 수 없어요.</p>'}${this.renderError()}<button class="button primary" type="submit" ${this.state!.capabilities.korail ? "" : "disabled"}>계정 확인하고 연결</button></form>`}`;
+      ${registered ? `<section class="card"><div class="account-state"><span>✓</span><div><b>코레일 계정 연결됨</b><small>열차 조회와 예약을 시작할 수 있어요.</small></div></div>${button({ variant: "ghost-danger", action: "rail-logout", label: "코레일 계정 연결 해제" })}</section>` : `<form id="rail-form" class="form-stack"><label class="field"><span>휴대전화 번호 또는 회원번호</span><input name="username" inputmode="tel" maxlength="20" autocomplete="username" aria-describedby="rail-login-hint" required><small id="rail-login-hint">회원번호는 숫자 8자리 또는 10자리예요.</small></label><label class="field"><span>코레일 비밀번호</span><input name="password" type="password" maxlength="128" autocomplete="current-password" required></label>${this.state!.capabilities.korail ? "" : '<p class="availability center">예약 서버가 연결되지 않아 코레일 계정을 확인할 수 없어요.</p>'}${this.renderError()}${button({ type: "submit", label: "계정 확인하고 연결", disabled: !this.state!.capabilities.korail })}</form>`}`;
   }
 
   private renderAuth(): string {
     if (this.options.demoMode) {
-      return `<div class="auth-shell with-demo"><aside class="demo-banner" data-demo-banner aria-label="데모 상태"><b>데모 모드</b><span>실제 조회·예약 없음</span></aside><div class="auth-art"><span class="orbit one"></span><span class="orbit two"></span><i>자</i></div><section class="auth-card"><p class="eyebrow">미리 둘러보기</p><h1>로그인 없이\n둘러보세요.</h1><p>데모에서는 샘플 데이터만 보여드려요. 로그인하거나 철도 서버에 요청을 보내지 않아요.</p><button class="button primary" data-action="demo-enter">샘플 화면 시작 <span>→</span></button></section></div>`;
+      return `<div class="auth-shell with-demo"><aside class="demo-banner" data-demo-banner aria-label="데모 상태"><b>데모 모드</b><span>실제 조회·예약 없음</span></aside><div class="auth-art"><span class="orbit one"></span><span class="orbit two"></span><i>자</i></div><section class="auth-card"><p class="eyebrow">미리 둘러보기</p><h1>로그인 없이\n둘러보세요.</h1><p>데모에서는 샘플 데이터만 보여드려요. 로그인하거나 철도 서버에 요청을 보내지 않아요.</p>${button({ action: "demo-enter", label: "샘플 화면 시작", trailing: "→" })}</section></div>`;
     }
     const register = this.authMode === "register";
     const admin = this.authGate === "admin";
@@ -1355,17 +1423,17 @@ export class JariApp {
       <div class="auth-art"><span class="orbit one"></span><span class="orbit two"></span><i>자</i></div>
       <section class="auth-card"><p class="eyebrow">내 여행의 빈자리</p><h1>${title}</h1><p>${copy}</p>
         ${choosing ? `<div class="gate-list"><button class="gate-card" data-auth-gate="admin" type="button"><b>관리자</b><small>관리자 계정으로 로그인해요</small></button><button class="gate-card" data-auth-gate="guest" type="button"><b>초대 회원</b><small>로그인하거나 초대 코드로 가입해요</small></button></div>` : ""}
-        ${admin ? `<form id="auth-form" class="form-stack"><label class="field"><span>관리자 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label><label class="field"><span>관리자 비밀번호</span><input name="password" type="password" minlength="12" maxlength="128" autocomplete="current-password" required></label>${this.renderError()}<button class="button primary" type="submit">관리자 로그인 <span>→</span></button></form><button class="text-button" data-auth-gate="choose" type="button">로그인 방법 바꾸기</button>` : ""}
+        ${admin ? `<form id="auth-form" class="form-stack"><label class="field"><span>관리자 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label><label class="field"><span>관리자 비밀번호</span><input name="password" type="password" minlength="12" maxlength="128" autocomplete="current-password" required></label>${this.renderError()}${button({ type: "submit", label: "관리자 로그인", trailing: "→" })}</form>${button({ variant: "text", label: "로그인 방법 바꾸기", attrs: { "data-auth-gate": "choose" } })}` : ""}
         ${this.authGate === "guest" ? `<div class="segmented"><button data-auth-mode="login" class="${register ? "" : "active"}" type="button">로그인</button><button data-auth-mode="register" class="${register ? "active" : ""}" type="button">처음 가입</button></div>
         <form id="auth-form" class="form-stack">
           <label class="field"><span>앱 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label>
           <label class="field"><span>앱 비밀번호</span><input name="password" type="password" minlength="12" maxlength="128" autocomplete="${register ? "new-password" : "current-password"}" required></label>
           ${register ? '<label class="field"><span>초대 코드</span><input name="invite" minlength="16" maxlength="128" autocomplete="one-time-code" required></label>' : ""}
           ${this.renderError()}
-          <button class="button primary" type="submit">${register ? "가입하고 시작하기" : "로그인"} <span>→</span></button>
+          ${button({ type: "submit", label: register ? "가입하고 시작하기" : "로그인", trailing: "→" })}
         </form>
-        <button class="text-button" data-auth-gate="choose" type="button">로그인 방법 바꾸기</button>` : ""}
-        ${this.options.demoMode ? '<button class="text-button demo-enter" data-action="demo-enter">샘플 화면 바로 보기</button>' : ""}
+        ${button({ variant: "text", label: "로그인 방법 바꾸기", attrs: { "data-auth-gate": "choose" } })}` : ""}
+        ${this.options.demoMode ? button({ variant: "text", className: "demo-enter", action: "demo-enter", label: "샘플 화면 바로 보기" }) : ""}
         <p class="auth-note">앱 계정과 코레일 계정은 서로 달라요. 결제는 코레일에서 직접 해 주세요.</p>
       </section>
       ${this.busy ? '<div class="blocker" role="status"><span class="spinner"></span><b>확인하고 있어요</b></div>' : ""}
@@ -1373,7 +1441,7 @@ export class JariApp {
   }
 
   private renderUnavailable(): string {
-    return `<div class="empty"><span>!</span><h2>앱을 열지 못했어요</h2><p>${escapeHtml(this.error || "서버 상태를 확인할 수 없어요.")}</p><button class="button primary" data-action="reload">다시 시도</button></div>`;
+    return `<div class="empty"><span>!</span><h2>앱을 열지 못했어요</h2><p>${escapeHtml(this.error || "서버 상태를 확인할 수 없어요.")}</p>${button({ action: "reload", label: "다시 시도" })}</div>`;
   }
 
   private renderNavigation(): string {
@@ -1392,7 +1460,7 @@ export class JariApp {
 
   private renderAccessRequest(): string {
     if (!this.accessRequired) return "";
-    return `<button class="button secondary" data-action="request-access" ${this.accessRequestPending ? "disabled" : ""}>${this.accessRequestPending ? "사용 승인 요청을 기다리는 중" : "운영자에게 사용 승인 요청"}</button>`;
+    return `${button({ variant: "secondary", action: "request-access", label: this.accessRequestPending ? "사용 승인 요청을 기다리는 중" : "운영자에게 사용 승인 요청", disabled: this.accessRequestPending })}`;
   }
 
   private renderError(): string {
@@ -1647,10 +1715,12 @@ export class JariApp {
     const tomorrow = isoDate(new Date(Date.now() + 86_400_000));
     const preset = this.chipDefaultDate(source);
     const chip = (value: string, label: string) =>
-      `<button type="button" class="seat-chip ${value === preset ? "selected" : ""}" data-sheet-date="${value}" aria-pressed="${value === preset}">${label}</button>`;
+      chipButton({ label, pressed: value === preset, attrs: { "data-sheet-date": value } });
+    // 시트는 열 때마다 새로 시작해요. 지난번에 넘겨 보던 달이 아니라 고른 날짜의 달부터 보여 줘요.
+    this.datePicker.forget("sheet-date");
     const picked = await this.openSheet({
       title: "언제 떠나세요?",
-      content: `<div class="seat-chips sheet-chips">${chip(today, "오늘")}${chip(tomorrow, "내일")}</div><label class="field"><span>출발 날짜</span><input id="sheet-date" type="date" value="${escapeHtml(preset)}"></label><p class="sheet-note">${escapeHtml(note)}<button type="button" class="text-button" data-action="sheet-edit">조건 수정</button></p>`,
+      content: `<div class="seat-chips sheet-chips">${chip(today, "오늘")}${chip(tomorrow, "내일")}</div>${this.datePicker.render({ id: "sheet-date", value: preset, label: "출발 날짜", ...departureRange() })}<p class="sheet-note">${escapeHtml(note)}${button({ variant: "text", action: "sheet-edit", label: "조건 수정" })}</p>`,
       confirmLabel: "이 날짜로 찾기",
     });
     // 날짜만 바꾸는 시트에서 조건 자체를 손보러 가는 길. 시트를 닫고 이 조건으로 채운 여정 폼을 연다.
@@ -1816,19 +1886,73 @@ export class JariApp {
     this.error = error instanceof Error ? error.message : "문제가 생겼어요. 다시 시도해 주세요.";
   }
 
+  // Material 3 스낵바처럼 4–10초 머물러요. 긴 문장일수록 읽을 시간을 더 줘요.
   private showToast(message: string): void {
     this.toast = message;
+    this.toastShownAt = Date.now();
+    this.toastLeavingAt = 0;
     if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
-    this.toastTimer = window.setTimeout(() => {
+    this.toastTimer = window.setTimeout(() => this.dismissToast(), Math.min(10_000, 4_000 + message.length * 60));
+  }
+
+  // 사라지는 애니메이션을 보여 준 뒤 비워요. 밀어서 치운 토스트는 이미 화면 밖이라 바로 비워요.
+  private dismissToast(immediately = false): void {
+    if (!this.toast) return;
+    if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
+    this.toastTimer = null;
+    if (immediately || this.toastLeavingAt) {
       this.toast = "";
+      this.toastLeavingAt = 0;
       this.render();
-    }, 3_500);
+      return;
+    }
+    this.toastLeavingAt = Date.now();
+    this.render();
+    this.toastTimer = window.setTimeout(() => this.dismissToast(true), 180);
+  }
+
+  /**
+   * 다시 그려도 처음부터 떠오르지 않아요: 지난 시간만큼 음수 animation-delay 를 줘서 같은 애니메이션의 그 지점에서 이어 가고,
+   * 끝난 뒤라면 마지막 모습 그대로 서 있어요. 30초 폴링이 홈을 다시 그려도 깜빡이지 않아요.
+   */
+  private renderToast(): string {
+    const leaving = this.toastLeavingAt > 0;
+    const age = this.toast ? Math.max(0, Date.now() - (leaving ? this.toastLeavingAt : this.toastShownAt)) : 0;
+    return `<div class="toast ${leaving ? "leaving" : ""}" role="status" aria-live="polite" style="--toast-age: -${age}ms">${escapeHtml(this.toast)}</div>`;
+  }
+
+  // 토스트를 옆으로 밀면 치워요. 톡 누르기만 해도 치워요(onClick).
+  private onToastPointer(event: PointerEvent): void {
+    const toast = (event.target as HTMLElement).closest?.<HTMLElement>(".toast");
+    if (event.type === "pointerdown") {
+      this.toastSwipe = toast && this.toast ? { pointerId: event.pointerId, x: event.clientX } : null;
+      return;
+    }
+    const swipe = this.toastSwipe;
+    const live = this.root.querySelector<HTMLElement>(".toast");
+    if (!swipe || swipe.pointerId !== event.pointerId || !live) return;
+    const dx = event.clientX - swipe.x;
+    if (event.type === "pointermove") {
+      live.classList.add("dragging");
+      live.style.transform = `translateX(${dx}px)`;
+      live.style.opacity = String(Math.max(0, 1 - Math.abs(dx) / 160));
+      return;
+    }
+    this.toastSwipe = null;
+    live.classList.remove("dragging");
+    live.style.removeProperty("transform");
+    live.style.removeProperty("opacity");
+    if (event.type === "pointerup" && Math.abs(dx) > 64) this.dismissToast(true);
   }
 
   private onClick(event: Event): void {
     const target = event.target as HTMLElement;
     if (this.sheet && target.classList.contains("modal-backdrop")) {
       this.closeSheet(null);
+      return;
+    }
+    if (target.closest(".toast")) {
+      this.dismissToast();
       return;
     }
     const button = target.closest<HTMLButtonElement>("button");
@@ -1878,8 +2002,11 @@ export class JariApp {
     }
     if (button.dataset.sheetDate) {
       const input = this.root.querySelector<HTMLInputElement>("#sheet-date");
-      if (input) input.value = button.dataset.sheetDate;
-      this.syncSheetDateChips();
+      if (input) {
+        input.value = button.dataset.sheetDate;
+        // 달력과 칩이 함께 따라오도록 사용자가 고른 것처럼 알려요.
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }
       return;
     }
     const view = button.dataset.view as AppView | undefined;
@@ -1973,9 +2100,7 @@ export class JariApp {
         this.navigate("confirm");
         break;
       case "close-seat-dialog":
-        this.seatDialog = null;
-        this.error = "";
-        this.render();
+        this.closeSeatDialog();
         break;
       case "confirm-seat-dialog":
         void this.confirmSeatDialog();
@@ -1991,6 +2116,13 @@ export class JariApp {
         break;
       case "schedule-toggle":
         this.scheduleOpen = !this.scheduleOpen;
+        // 열 때마다 오늘, 시각은 비운 채로 새로 시작해요.
+        if (this.scheduleOpen) {
+          this.scheduleDate = localIso();
+          this.scheduleTime = "";
+          this.datePicker.forget("schedule-date");
+          this.timePicker.forget("schedule-time");
+        }
         this.render();
         break;
       case "schedule-start":
@@ -2076,7 +2208,7 @@ export class JariApp {
   }
 
   private onKeyDown(event: KeyboardEvent): void {
-    if (event.key === "Escape" && this.sheet) this.closeSheet(null);
+    if (event.key === "Escape") this.closeTopOverlay();
   }
 
   // 직접 고른 테마가 있으면 그게 우선이에요. 그 전까지는 시스템이 바뀌는 대로 따라가요.
@@ -2100,6 +2232,13 @@ export class JariApp {
     const target = event.target as HTMLInputElement;
     if (target.id === "sheet-date") {
       this.syncSheetDateChips();
+      return;
+    }
+    if (target.id === "schedule-date" || target.id === "schedule-time") {
+      this.scheduleDate = this.root.querySelector<HTMLInputElement>("#schedule-date")?.value ?? "";
+      this.scheduleTime = this.root.querySelector<HTMLInputElement>("#schedule-time")?.value ?? "";
+      const scheduleAt = this.root.querySelector<HTMLInputElement>("#schedule-at");
+      if (scheduleAt) scheduleAt.value = this.scheduleDate && this.scheduleTime ? `${this.scheduleDate}T${this.scheduleTime}` : "";
       return;
     }
     if (target.closest("#conditions-form")) {

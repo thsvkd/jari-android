@@ -19,6 +19,8 @@ import pytest
 
 _TESTS_DIR = Path(__file__).resolve().parent
 _UNIT_DIR = _TESTS_DIR / "unit"
+# The e2e stack brings its own fake Redis, so it needs no container either.
+_E2E_DIR = _TESTS_DIR / "e2e"
 
 _redis_container = None
 
@@ -38,7 +40,7 @@ def _only_unit_tests(config) -> bool:
     for arg in args:
         # Strip the '::TestClass::test_name' part of a node id.
         path = Path(arg.split("::", 1)[0]).resolve()
-        if not path.is_relative_to(_UNIT_DIR):
+        if not (path.is_relative_to(_UNIT_DIR) or path.is_relative_to(_E2E_DIR)):
             return False
     return True
 

@@ -6,10 +6,11 @@ Android 앱과 독립 예약 API 서버를 함께 관리합니다. 루트의 Typ
 
 - 변경 전 관련 코드를 읽고 기존 변경을 보존합니다. 기능 작업은 별도 워크트리를 사용합니다.
 - 커밋 메시지는 한국어 현재형 평서문을 사용합니다.
-- 검증: `npm test`, `npm run build`, `npm run build:demo`.
-- 서버 검증: backend에서 `uv run --frozen pytest tests/unit -q`, `uv run --frozen ruff check src tests`.
+- 커밋 전 검증: 변경을 모두 `git add` 한 뒤 `npm run verify`. 유닛·모듈(vitest, pytest) → 통합(`backend/tests/e2e`, 실서버 + 가짜 코레일) → Playwright e2e·레이아웃(헤드리스 라이트·다크 + 실기기 `com.jari.app.e2e`)을 모두 통과해야 스테이징된 트리에 도장이 찍히고, pre-commit 훅은 도장 없는 커밋을 거부합니다. 실기기는 잠금을 풀고 화면을 켜 둡니다.
+- 사용자가 보는 흐름·화면을 바꾸면 `e2e/`에 그 흐름을 추가하고, 새 화면·상태는 `expectCleanLayout` 으로 레이아웃을 잽니다. 가짜 객체를 손으로 짓지 말고 라이브러리의 실제 클래스로 만듭니다(`backend/tests/e2e/fake_korail`).
+- 고치는 동안은 `npm run verify -- --only=<단계 이름 일부>`, `npm run test:e2e`, backend의 `uv run --frozen pytest tests/unit -q` 로 부분만 돌립니다. 부분 실행은 도장을 찍지 않습니다.
 - Docker 구성은 `compose.yaml`을 사용합니다. 실제 서버 시작·재시작 전 검색 및 예약 상태를 확인하고 사용자 승인을 받습니다.
-- Android 검증: `scripts/build-android.ps1`; 데모 번들을 먼저 만들었다면 `-SkipWebBuild`.
+- Android 빌드: `scripts/build-android.ps1`; 데모 번들을 먼저 만들었다면 `-SkipWebBuild`. e2e 앱은 `-E2ePort 18281`(검증 스크립트가 알아서 만듭니다).
 - 실제 예약·취소·계정 등록·서버 배포는 명시적 사용자 승인 없이 실행하지 않습니다.
 - 데모 결과를 실서비스 검증으로 표현하지 않습니다. 결제는 사용자가 직접 합니다.
 - 세션은 Android Keystore 기반 저장소를 사용합니다. 비밀번호·토큰·서명키·Firebase 설정을 커밋하지 않습니다.

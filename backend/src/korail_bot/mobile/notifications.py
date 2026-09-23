@@ -52,9 +52,10 @@ class Notifications:
         # Shared services still speak the old chat vocabulary. Make their
         # suggested actions usable from this standalone application.
         for command, label in {
-            "/cancel": "검색 중지",
-            "/start": "새 검색",
-            "/register": "철도 계정 연결",
+            # 앱에 실제로 있는 버튼 이름이어야 사용자가 찾을 수 있어요.
+            "/cancel": "그만 찾기",
+            "/start": "새 여정 찾기",
+            "/register": "코레일 계정 연결",
             "/notify_off": "알림 설정",
         }.items():
             text = text.replace(command, label)
@@ -66,7 +67,7 @@ class Notifications:
     def send_and_get_id(self, chat_id, text, **kwargs):
         return self.publish(chat_id, text)
 
-    def publish(self, owner, text, *, kind="booking", dedupe=None):
+    def publish(self, owner, text, *, kind="search", dedupe=None):
         event_id = secrets.token_hex(16)
         now = self.identity.clock()
         text = self._safe_text(owner, text)

@@ -203,3 +203,30 @@ export async function initializePlatform(
     return { native: true, push: "unavailable" };
   }
 }
+
+/**
+ * Android 15 의 가장자리까지 그리기에서는 키보드가 올라와도 WebView 높이가 그대로라, 아래쪽 버튼이 키보드 뒤에 숨어요.
+ * 보이는 높이가 줄어든 만큼 페이지 아래에 여백(--keyboard-inset)을 두어 끝까지 스크롤할 수 있게 하고,
+ * 입력 칸을 누르면 그 칸이 키보드 위로 오게 해요.
+ */
+export function followKeyboard(root: HTMLElement): () => void {
+  const viewport = window.visualViewport;
+  if (!viewport) return () => undefined;
+  const update = () => {
+    const hidden = Math.max(0, Math.round(window.innerHeight - viewport.height - viewport.offsetTop));
+    document.documentElement.style.setProperty("--keyboard-inset", `${hidden}px`);
+  };
+  const reveal = (event: FocusEvent) => {
+    const field = event.target;
+    if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
+    // 키보드가 다 올라온 뒤에 옮겨야 줄어든 높이를 기준으로 가운데에 와요.
+    window.setTimeout(() => field.scrollIntoView({ block: "center" }), 300);
+  };
+  viewport.addEventListener("resize", update);
+  root.addEventListener("focusin", reveal);
+  update();
+  return () => {
+    viewport.removeEventListener("resize", update);
+    root.removeEventListener("focusin", reveal);
+  };
+}
