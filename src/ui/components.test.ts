@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { button, linkButton } from "./components";
+import { badge, button, dialog, emptyState, linkButton, listRow, notice } from "./components";
 import { attrs, cx, esc } from "./html";
 
 describe("html", () => {
@@ -53,5 +53,37 @@ describe("stepper", () => {
     expect(html).toContain('data-action="passenger-minus" aria-label="인원 줄이기" disabled>−');
     expect(html).toContain('data-action="passenger-plus" aria-label="인원 늘리기">＋');
     expect(html).toContain('<output aria-live="polite">1명</output>');
+  });
+});
+
+describe("badge · notice · emptyState · listRow · dialog", () => {
+  it("gives every badge one base look and only a tone on top", () => {
+    expect(badge({ label: "<통합>", tone: "success", className: "integrated-badge" }))
+      .toBe('<span class="badge pill success integrated-badge">&lt;통합&gt;</span>');
+    expect(badge({ label: "찾는 중", dot: true, element: "p", shape: "tag" }))
+      .toBe('<p class="badge tag"><i aria-hidden="true"></i>찾는 중</p>');
+  });
+
+  it("escapes notice text and announces only alerts", () => {
+    expect(notice({ tone: "warning", text: "<x>", alert: true })).toBe('<div class="notice warning" role="alert">&lt;x&gt;</div>');
+    expect(notice({ title: "제목", text: "설명" })).toBe('<div class="notice"><b>제목</b><p>설명</p></div>');
+  });
+
+  it("draws the same line mark for every empty screen and keeps the action", () => {
+    const html = emptyState({ mark: "bell", title: "새 알림이 없어요", text: "a", action: "<button>b</button>" });
+    expect(html).toMatch(/^<div class="empty"><span class="empty-mark" aria-hidden="true"><svg/);
+    expect(html).toContain("<h2>새 알림이 없어요</h2><p>a</p><button>b</button></div>");
+    expect(emptyState({ compact: true, text: "없어요" })).toBe('<div class="empty compact"><p>없어요</p></div>');
+  });
+
+  it("makes a row a button only when it does something", () => {
+    expect(listRow({ title: "앱 버전", value: "v1" })).toBe('<div class="settings-row static"><span><b>앱 버전</b></span><em>v1</em></div>');
+    expect(listRow({ title: "휴대폰 알림", action: "request-push", disabled: true, value: "이용 불가" }))
+      .toBe('<button type="button" class="settings-row" data-action="request-push" disabled><span><b>휴대폰 알림</b></span><em>이용 불가</em></button>');
+  });
+
+  it("wraps overlays in a labelled modal dialog", () => {
+    expect(dialog({ className: "action-sheet", labelledBy: "t", content: "<h2 id=t>a</h2>" }))
+      .toBe('<div class="modal-backdrop" role="presentation"><section class="action-sheet" role="dialog" aria-modal="true" aria-labelledby="t"><h2 id=t>a</h2></section></div>');
   });
 });
