@@ -9,7 +9,7 @@ name = "korail-ktx-bot"
 # packaging normalises on the way in, so a "4.2.0-beta.1" declared here is
 # read as "4.2.0b1" everywhere it matters - the log line, the announcement,
 # and the key the release notes are looked up under.
-version = "4.11.0"
+version = "4.11.1"
 description = "자리났다 Android 앱의 코레일 좌석 예약 API 서버"
 readme = "README.md"
 requires-python = ">=3.13"

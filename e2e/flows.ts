@@ -31,10 +31,13 @@ export async function pickDate(page: Page, iso: string): Promise<void> {
 }
 
 // 시간도 한 곳에서만 골라요. 접힌 시간 칸을 눌러 펼치고, 시 칩과 10분 단위 분 칩을 차례로 눌러요.
+// 이미 펼쳐져 있으면 누르지 않아요. 앞서 연 패널은 화면을 오가도 열린 채라, 누르면 도로 접혀요
+// (밤 10시가 넘으면 끝 시각 칸이 꺼져 출발 시각 패널을 닫아 주는 쪽이 없어서 드러났어요).
 export async function pickTime(page: Page, name: "dep_time" | "max_dep_time", clock: string): Promise<void> {
   const picker = page.locator("[data-time-picker]", { has: page.locator(`[name=${name}]`) });
   const [hour, minute] = clock.split(":").map(Number);
-  await picker.locator("[data-tp='toggle']").click();
+  const toggle = picker.locator("[data-tp='toggle']");
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
   await picker.locator(`[data-tp-hour='${hour}']`).click();
   await picker.locator(`[data-tp-minute='${minute}']`).click();
   await expect(page.locator(`[name=${name}]`)).toHaveValue(clock);

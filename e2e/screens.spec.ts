@@ -42,8 +42,9 @@ async function snap(page: Page, name: string): Promise<void> {
       page.locator(".date-grid"),
       page.locator(".date-field em"),
       page.locator(".profile-card"),
-      // 앱 버전은 릴리스마다 바뀌어요.
+      // 앱과 서버 버전은 릴리스마다 바뀌어요.
       page.locator(".settings-row.static > em"),
+      page.locator(".settings-row.static", { hasText: "앱 버전" }).locator("small"),
       page.locator(".search-last-check"),
       page.locator(".idle-badge"),
       page.locator(".notification small"),
