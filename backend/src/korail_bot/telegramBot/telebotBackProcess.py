@@ -38,10 +38,7 @@ from korail_bot.services import (
     TelegramService,
 )
 from korail_bot.services.cancellation_wait_service import train_label
-from korail_bot.services.rail_service import (
-    DuplicateReservationError,
-    SearchUnavailableError,
-)
+from korail_bot.services.rail_service import SearchUnavailableError
 from korail_bot.storage.redis import RedisStorage
 from korail_bot.telegramBot.messages import Messages
 from korail_bot.utils.formatting import format_duration
@@ -384,44 +381,6 @@ class BackgroundReservationProcess:
                     train_numbers=self.train_numbers,
                     seat_preference=self.seat_preference,
                 )
-            except DuplicateReservationError as e:
-                # First duplicate detection - notify user but continue searching
-                logger.warning(f"Duplicate reservation detected (first time): {e}")
-                message = f"""
-⚠️ 기존 예약 감지
-
-이미 동일한 열차에 대한 예약이 존재합니다.
-
-🔄 기존 예약이 취소될 때까지 대기하면서 계속 검색합니다...
-
-🔗 기존 예약 확인: {self.payment_url}
-
-💡 검색을 중단하려면 /cancel 명령어를 사용하세요.
-💡 기존 예약을 취소하면 자동으로 새 예약을 시도합니다.
-"""
-                # Send notification but DON'T stop the process
-                self._send_callback(message, status=2)  # status=2 for warning/info
-
-                # Continue the reservation loop (retry)
-                logger.info("Continuing search after duplicate detection...")
-                try:
-                    reservation = self.rail.search_and_reserve_loop(
-                        dep_date=self.dep_date,
-                        src_locate=self.src_locate,
-                        dst_locate=self.dst_locate,
-                        dep_time=self.dep_time,
-                        max_dep_time=self.max_dep_time,
-                        train_type=self.train_type,
-                        reserve_option=self.reserve_option,
-                        passenger_count=self.passenger_count,
-                        seat_strategy=self.seat_strategy,
-                        train_numbers=self.train_numbers,
-                        seat_preference=self.seat_preference,
-                    )
-                except DuplicateReservationError:
-                    # Should not happen as we already notified, but handle gracefully
-                    logger.error("Duplicate error raised again - this shouldn't happen")
-                    pass
             except requests.exceptions.RequestException as e:
                 logger.error(f"Network error during reservation: {e}")
                 message = f"""
@@ -611,8 +570,22 @@ class BackgroundReservationProcess:
             },
         )
         existing = self.storage.get_multi_reservation_status(self.chat_id)
+        # A leftover record can be a completely different search - the same
+        # chat's earlier trip, still inside the 15-minute TTL. Carrying its
+        # seats over without checking would either fake this search as
+        # already done or, once trimmed, drop seats that are genuinely PAID
+        # and still counted toward this plan's target. train_no+dep_date is
+        # the only thing that ties a captured seat to *this* plan, and PAID
+        # has to stay - only PENDING would let a resumed search over-book.
+        plan_train_numbers = {train.train_no for train in plan.trains}
         captured: list[SingleReservationInfo] = (
-            list(existing.reservations) if existing and plan.strategy == "independent" else []
+            [
+                item
+                for item in existing.reservations
+                if item.train_no in plan_train_numbers and item.dep_date == self.dep_date
+            ]
+            if existing and plan.strategy == "independent"
+            else []
         )
         attempts = 0
         next_outcome_check = 0.0
@@ -680,6 +653,24 @@ class BackgroundReservationProcess:
 
             deadline = self._payment_deadline(capture.hold)
             hints = self._train_hints(capture.hold)
+            if not hints["train_no"]:
+                # A designated hold (ReservationHoldResponse) names no train; the
+                # searched one does. Without these a resumed search could not tie
+                # the seat to this plan, and the seat keys would exclude nothing.
+                train = capture.train
+                hints = {
+                    "train_no": str(getattr(train, "train_no", "") or ""),
+                    "dep_date": str(
+                        getattr(train, "dep_date", None)
+                        or getattr(train, "departure_date", "")
+                        or ""
+                    ),
+                    "dep_time": str(
+                        getattr(train, "dep_time", None)
+                        or getattr(train, "departure_time", "")
+                        or ""
+                    ),
+                }
             train_info = train_label(capture.train)
             labels = [f"{target.car_no}호차 {target.label}" for target in capture.targets]
             info = SingleReservationInfo(
@@ -830,11 +821,19 @@ class BackgroundReservationProcess:
 
             outcome = self.rail.reservation_outcome(rsv_id, **hints)
 
-            if outcome in (ReservationOutcome.UNKNOWN, ReservationOutcome.OUTSTANDING):
-                # UNKNOWN: the railway could not be asked, or could not say
-                # which of paid and cancelled a disappearance was. Neither is
-                # an answer, and saying the payment went through here would be
-                # the same guess this exists to remove.
+            if outcome is ReservationOutcome.UNKNOWN:
+                # The railway could not be asked. Not an answer, and saying
+                # the payment went through - or that it did not - here would
+                # be the same guess this exists to remove.
+                continue
+
+            if outcome is ReservationOutcome.OUTSTANDING:
+                # Still sitting there unpaid, but the deadline has not passed
+                # yet - it may still be paid for before then. Keep polling
+                # rather than deciding from a single OUTSTANDING read, which
+                # is exactly what let a poll taken seconds after booking (and
+                # before the user could possibly have paid) get treated as
+                # the final word once the deadline arrived.
                 continue
 
             if outcome is ReservationOutcome.PAID:
@@ -844,12 +843,28 @@ class BackgroundReservationProcess:
             self._settle_payment(outcome)
             return
 
-        # The deadline passed with the reservation still on the list, so it
-        # was never paid for. Worth saying plainly even when the user has
-        # already told us otherwise: they are the one who will find out at
-        # the station.
-        logger.warning(f"Reservation {rsv_id} expired unpaid")
-        self._settle_payment(ReservationOutcome.OUTSTANDING)
+        # The deadline passed without a final answer from the loop above (it
+        # only ever saw UNKNOWN or OUTSTANDING). Ask one more time, right at
+        # the wire, and decide from that read alone rather than from
+        # anything seen earlier in the window - an early OUTSTANDING says
+        # nothing about whether the user paid since.
+        outcome = self.rail.reservation_outcome(rsv_id, **hints)
+
+        if outcome is not ReservationOutcome.UNKNOWN:
+            # A real answer, whichever it is. OUTSTANDING right at the
+            # deadline means it was never paid for - worth saying plainly even
+            # when the user has already told us otherwise: they are the one
+            # who will find out at the station.
+            logger.warning(f"Reservation {rsv_id} settled at the deadline: {outcome.name}")
+            self._settle_payment(outcome)
+            return
+
+        # No confirmed answer ever came back before the deadline. Leave
+        # `completed` unset and stop renewing the claim so the app's own
+        # watchdog (payment_watchdog_service) picks the reservation up - it
+        # checks the railway itself rather than trusting this process's guess.
+        logger.warning(f"Reservation {rsv_id} could not be confirmed before the deadline")
+        self.telegram.send_message(self.chat_id, Messages.PAYMENT_UNVERIFIED)
 
     def _claim_the_watch(self) -> None:
         """

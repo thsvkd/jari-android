@@ -17,7 +17,7 @@
 - 모바일 테스트 101개, 일반/데모 빌드와 S26 Ultra 데모 화면 검증을 수행했습니다.
 - 실철도 예약·결제 및 푸시 수신의 종단 간 검증은 완료되지 않았습니다.
 - SRT는 지원하지 않습니다. 코레일 예약 대기는 일반실에만, 좌석 위치 지정 없이 신청합니다.
-- 배포 서명키와 Firebase 설정은 포함하지 않습니다. 현재 APK 빌드는 디버그용입니다.
+- 배포 서명키와 Firebase 설정은 포함하지 않습니다. `-Release` 없이 실행하면 여전히 디버그 APK가 나옵니다.
 - 앱 이름을 바꾸면서 Android `applicationId`가 `com.jari.app`으로 바뀌었습니다.
   기존 앱 위에 덮어쓰는 업데이트가 아니라 별도 앱으로 설치되고, 사용자는 다시 로그인해야 합니다.
   즐겨찾기와 코레일 계정 연결은 서버에 있으므로 그대로 유지됩니다.
@@ -150,6 +150,21 @@ print the `APK:` success line. `-SkipWebBuild` intentionally reuses the existing
 web bundle; sync and Gradle failures are still checked. Explicit exit checks
 also work in Windows PowerShell 5.1; see Microsoft's
 [native command error handling reference](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_error_handling?view=powershell-7.6).
+
+### Release build
+
+`.\scripts\build-android.ps1 -Release` runs `assembleRelease` instead of
+`assembleDebug`. It needs a signing config that is never committed: either
+`android\keystore.properties` (`storeFile`/`storePassword`/`keyAlias`/`keyPassword`)
+or the `JARI_RELEASE_STORE_FILE`/`JARI_RELEASE_STORE_PASSWORD`/
+`JARI_RELEASE_KEY_ALIAS`/`JARI_RELEASE_KEY_PASSWORD` environment variables, all
+four. A relative `storeFile` path (in the properties file or
+`JARI_RELEASE_STORE_FILE`) resolves against `android/`, not the repository
+root; use an absolute path if that is not where the keystore lives. Without
+either signing source complete, the script stops with a clear error before
+invoking Gradle. Only publish the resulting release APK; the debug APK's
+`webContentsDebuggingEnabled` WebView remote-debugging is not present in a
+signed release build.
 
 ### Script regression checks (no APK build)
 

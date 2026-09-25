@@ -1734,6 +1734,8 @@ export class JariApp {
       this.draft = conditionsToDraft(source);
       this.conditions = null;
       this.selectedTrains = wanted;
+      // Seat plans belong to the search that made them; a re-search here must not carry stale picks into a different train's slot.
+      this.cancellationTargets = [];
       this.navigate("journey");
       return;
     }
@@ -2052,6 +2054,8 @@ export class JariApp {
         this.draft = conditionsToDraft(favourite.conditions);
         this.conditions = null;
         this.selectedTrains = favourite.conditions.trains?.map(String) ?? [];
+        // Seat plans belong to the search that made them; a re-search here must not carry stale picks into a different train's slot.
+        this.cancellationTargets = [];
         this.navigate("journey");
       }
       return;

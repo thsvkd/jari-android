@@ -126,6 +126,121 @@ for input in "${!repo_cases[@]}"; do
   fi
 done
 
+echo "== transfer()/verify(): a remote failure must propagate through 'fn || rollback' =="
+# main() calls these as `transfer || rollback_and_exit` and `verify ||
+# rollback_and_exit`, which turns off errexit inside the function body (bash
+# quirk). Reproduce that exact call shape with a faked ssh/run_remote so a
+# regression (a swallowed failure falling through to success) shows up here
+# without touching a real host.
+
+set +e
+TRANSFER_OUT="$(
+  ssh() { echo "FAKE SSH FAILING: $*" >&2; return 1; }
+  HOST="fake@host"; ROOT="/srv/app"; REF="HEAD"; TS="20260101T000000Z"; DRY_RUN=0; SWAPPED=0
+  transfer || echo "TRANSFER_RC=$?"
+  echo "SWAPPED_AFTER=$SWAPPED"
+)" 2>&1
+set -e
+if echo "$TRANSFER_OUT" | grep -q "TRANSFER_RC=1"; then
+  echo "ok: transfer() returns non-zero when ssh fails"
+else
+  echo "FAIL: transfer() swallowed the ssh failure (silent-deploy bug)"
+  FAIL=1
+fi
+if echo "$TRANSFER_OUT" | grep -q "SWAPPED_AFTER=0"; then
+  echo "ok: SWAPPED stays 0 when the transfer step fails"
+else
+  echo "FAIL: SWAPPED was set to 1 despite the transfer step failing"
+  FAIL=1
+fi
+
+set +e
+VERIFY_NO_HEALTHURL_OUT="$(
+  run_remote() { echo "FAKE run_remote FAILING: $*" >&2; return 1; }
+  HOST="fake@host"; ROOT="/srv/app"; SERVICE="api"; HEALTH_URL=""; DRY_RUN=0
+  verify || echo "VERIFY_RC=$?"
+)" 2>&1
+set -e
+if echo "$VERIFY_NO_HEALTHURL_OUT" | grep -q "VERIFY_RC=1"; then
+  echo "ok: verify() propagates a failed remote check when --health-url is unset"
+else
+  echo "FAIL: verify() swallowed a failed remote check (returned 0)"
+  FAIL=1
+fi
+
+set +e
+VERIFY_HTTP000_OUT="$(
+  run_remote() { return 0; }
+  curl() { printf '000'; }
+  HOST="fake@host"; ROOT="/srv/app"; SERVICE="api"; HEALTH_URL="http://example.invalid/health"; DRY_RUN=0
+  verify || echo "VERIFY_RC=$?"
+)" 2>&1
+set -e
+if echo "$VERIFY_HTTP000_OUT" | grep -q "VERIFY_RC=1"; then
+  echo "ok: verify() treats HTTP 000 (connection refused) as a failure"
+else
+  echo "FAIL: verify() accepted HTTP 000 as a healthy response"
+  FAIL=1
+fi
+
+echo "== transfer(): the swap step alone fails (ssh itself succeeds) =="
+# The two ssh calls in transfer() (mkdir, and git archive | ssh tar) are not
+# the only failure point: the swap step goes through run_remote and has its
+# own `|| return 1` guard. The TRANSFER_OUT case above never reaches that
+# guard, since it fails ssh on the very first call. Fake ssh succeeding (and
+# draining the git-archive pipe so it cannot block on a full pipe buffer) so
+# run_remote failing on the swap step is the only thing under test here.
+set +e
+SWAP_ONLY_OUT="$(
+  ssh() { case "$2" in *tar*) cat >/dev/null ;; esac; return 0; }
+  run_remote() { echo "FAKE run_remote FAILING (swap step): $*" >&2; return 1; }
+  HOST="fake@host"; ROOT="/srv/app"; REF="HEAD"; TS="20260101T000000Z"; DRY_RUN=0; SWAPPED=0
+  transfer || echo "TRANSFER_RC=$?"
+  echo "SWAPPED_AFTER=$SWAPPED"
+)" 2>&1
+set -e
+if echo "$SWAP_ONLY_OUT" | grep -q "TRANSFER_RC=1"; then
+  echo "ok: transfer() returns non-zero when only the swap step fails"
+else
+  echo "FAIL: transfer() swallowed the swap-step failure"
+  FAIL=1
+fi
+if echo "$SWAP_ONLY_OUT" | grep -q "SWAPPED_AFTER=0"; then
+  echo "ok: SWAPPED stays 0 when only the swap step fails"
+else
+  echo "FAIL: SWAPPED was set to 1 despite the swap step failing"
+  FAIL=1
+fi
+
+echo "== main(): a failing transfer step ends main() non-zero and rolls back =="
+set +e
+MAIN_OUT="$(
+  preflight() { return 0; }
+  backup() { return 0; }
+  deploy() { return 0; }
+  verify() { return 0; }
+  after_hook() { return 0; }
+  ssh() { echo "FAKE SSH FAILING: $*" >&2; return 1; }
+  run_remote() { echo "FAKE run_remote FAILING: $*" >&2; return 1; }
+  HOST="fake@host"; ROOT="/srv/app"; REF="HEAD"; SERVICE="api"
+  SHORT_REF="deadbee"; TS="20260101T000000Z"; SWAPPED=0
+  main 2>&1
+)"
+MAIN_STATUS=$?
+set -e
+if [[ "$MAIN_STATUS" -ne 0 ]]; then
+  echo "ok: main() exits non-zero when the transfer step fails"
+else
+  echo "FAIL: main() exited 0 despite a failing transfer step"
+  FAIL=1
+fi
+if echo "$MAIN_OUT" | grep -q "FAILED before the swap step reported success"; then
+  echo "ok: main() called rollback_and_exit after the transfer failure"
+else
+  echo "FAIL: main() did not roll back after the transfer failure"
+  FAIL=1
+fi
+
 if [[ "$FAIL" -eq 0 ]]; then
   echo "== all checks passed =="
   exit 0

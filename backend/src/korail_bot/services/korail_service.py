@@ -41,7 +41,6 @@ from korail_mobile_api.errors import KorailAppError
 from korail_bot.config.settings import settings
 from korail_bot.models import ReservationOutcome, SeatPreference, SeatTarget
 from korail_bot.services.rail_service import (
-    DuplicateReservationError,
     RailService,
     SearchProgress,
     SearchUnavailableError,
@@ -124,7 +123,6 @@ _accept_alphanumeric_class_codes()
 # them from this module. Moving them to rail_service.py is not a reason to
 # make every caller say so.
 __all__ = [
-    "DuplicateReservationError",
     "KorailService",
     "SearchProgress",
     "SearchUnavailableError",
@@ -869,6 +867,25 @@ class KorailService(RailService):
         if option is None:
             option = self.default_reserve_option
 
+        # Snapshot which reservations exist right now, so that if the POST
+        # below times out we can tell a reservation Korail just created from
+        # one that was already sitting there (e.g. a duplicate held while
+        # this search kept retrying) - only the former is this attempt's.
+        # ponytail: one extra GET before every reserve POST, i.e. while racing
+        # for a freed seat; cache the ids per search if that latency shows.
+        try:
+            reservation_ids_before = {
+                getattr(r, "rsv_id", None) for r in self._korail_instance.reservations()
+            }
+            snapshot_ok = True
+        except Exception as snapshot_err:
+            reservation_ids_before = set()
+            snapshot_ok = False
+            logger.warning(
+                f"Could not snapshot reservations before reserving {train}: "
+                f"{type(snapshot_err).__name__}: {snapshot_err}"
+            )
+
         try:
             # Create passenger list
             passengers = [AdultPassenger(passenger_count)]
@@ -898,6 +915,35 @@ class KorailService(RailService):
 
         except SoldOutError:
             logger.debug(f"Train sold out during reservation attempt: {train}")
+            return None
+        except requests.exceptions.RequestException as e:
+            # The reservation POST itself timed out or failed to answer - not
+            # sold out, just unheard from (pit5 2026-09-22: a worker sat 30
+            # minutes in recv() after a failed reserve, see _TimedSession).
+            # Korail may have created the pending reservation anyway, so ask
+            # before reporting nothing: otherwise a seat that was in fact
+            # taken ends up with no payment record and no watchdog on it.
+            logger.warning(f"Reservation request failed for {train}: {type(e).__name__}: {e}")
+            if snapshot_ok:
+                try:
+                    for existing in self._korail_instance.reservations():
+                        if (
+                            getattr(existing, "rsv_id", None) not in reservation_ids_before
+                            # No date check: a reservation carries the run date (h_run_dt),
+                            # a searched train the departure date here (h_dpt_dt), and the
+                            # two differ for a train that passes midnight before this station.
+                            # A new reservation id on this train number is already specific.
+                            and str(getattr(existing, "train_no", "")) == str(train.train_no)
+                        ):
+                            logger.info(f"Reservation for {train} appeared despite the timeout")
+                            self._attach_assigned_seats(existing)
+                            return existing
+                except Exception as check_err:
+                    logger.warning(
+                        f"Could not confirm whether {train} was reserved despite the timeout: "
+                        f"{check_err}"
+                    )
+            self.wait_between_requests(self.note_search_failure(e))
             return None
         except Exception as e:
             error_msg = str(e)

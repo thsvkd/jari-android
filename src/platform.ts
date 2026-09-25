@@ -1,4 +1,5 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
+import { ApiError } from "./api";
 
 interface SecureSessionPlugin {
   read(): Promise<{ token: string | null }>;
@@ -162,9 +163,15 @@ export async function initializePlatform(
     try {
       await options.onPushToken?.(token.value);
       finishRegistration(true);
-    } catch {
+    } catch (error) {
       registrationErrorReported = true;
-      options.onPushError?.("휴대폰 알림을 서버에 등록하지 못했어요.");
+      // A 409 (등록할 수 있는 기기 수를 넘었어요) etc. carries a message worth showing. "stale"/"auth" already
+      // drive their own login-expiry flow, so those two keep the generic message instead of doubling up on it.
+      options.onPushError?.(
+        error instanceof ApiError && error.kind !== "stale" && error.kind !== "auth"
+          ? error.message
+          : "휴대폰 알림을 서버에 등록하지 못했어요.",
+      );
       finishRegistration(false);
     }
   });

@@ -49,10 +49,13 @@ class SearchProgress:
         return self.failure_streak == 0
 
 
-class DuplicateReservationError(Exception):
-    """Raised when attempting to reserve a train that's already reserved."""
-
-    pass
+DUPLICATE_NOTICE = (
+    "⚠️ 기존 예약 감지\n\n"
+    "이미 동일한 열차에 대한 예약이 존재합니다.\n"
+    "기존 예약이 취소될 때까지 대기하며 계속 검색합니다.\n\n"
+    "코레일 앱에서 기존 예약을 확인해 주세요.\n\n"
+    "💡 검색을 중단하려면 /cancel 을 사용하세요."
+)
 
 
 class SearchUnavailableError(Exception):
@@ -737,12 +740,15 @@ class RailService(ABC):
                 )
 
                 if reservation == "DUPLICATE":
-                    # Duplicate reservation detected
+                    # Duplicate reservation detected. Told once, like a
+                    # stalled search's failure message, and the loop keeps
+                    # going - raising here used to unwind the whole loop and
+                    # get called again with duplicate_notified reset, so the
+                    # very next duplicate ended the search as "알 수 없는 오류".
                     if not duplicate_notified:
-                        # First time - raise exception to notify user once
                         duplicate_notified = True
                         logger.warning("⚠️ First duplicate detection - notifying user")
-                        raise DuplicateReservationError("동일한 예약 내역이 존재합니다")
+                        self._announce(DUPLICATE_NOTICE)
                     else:
                         # Already notified - just log and continue
                         logger.debug("Duplicate reservation still exists, continuing search...")
@@ -843,12 +849,15 @@ class RailService(ABC):
                 )
 
                 if reservation == "DUPLICATE":
-                    # Duplicate reservation detected
+                    # Duplicate reservation detected. Told once, like the
+                    # consecutive path, and the loop keeps going instead of
+                    # raising - raising here left nothing to catch it, so the
+                    # very next duplicate ended the search as an unhandled
+                    # exception.
                     if not duplicate_notified:
-                        # First time - raise exception to notify user once
                         duplicate_notified = True
                         logger.warning("First duplicate detection - notifying user")
-                        raise DuplicateReservationError("동일한 예약 내역이 존재합니다")
+                        self._announce(DUPLICATE_NOTICE)
                     else:
                         # Already notified - just log and continue
                         logger.debug("Duplicate reservation still exists, continuing search...")

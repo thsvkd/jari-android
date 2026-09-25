@@ -1097,11 +1097,22 @@ class RedisStorage(StorageInterface):
             return None
 
     def save_multi_reservation_status(self, status: MultiReservationStatus) -> None:
-        """Save multi-reservation status."""
+        """
+        Save multi-reservation status.
+
+        Same reasoning as save_payment_status: the configured window is only
+        this bot's guess, so a reservation's own Korail deadline wins when it
+        runs longer - otherwise the record can expire while a seat is still
+        held, and the payment watchdog and reminders forget about it.
+        """
         key = f"multi_reservation_status:{status.chat_id}"
         data = json.dumps(self._serialize_multi_reservation_status(status))
-        # Set with TTL
+        grace = 5 * 60
         ttl = (settings.PAYMENT_TIMEOUT_MINUTES + 5) * 60
+        deadlines = [as_utc(r.expires_at) for r in status.reservations if r.expires_at]
+        if deadlines:
+            latest = max(deadlines)
+            ttl = max(ttl, int((latest - utc_now()).total_seconds()) + grace)
         self.redis.set(key, data, ex=ttl)
 
     def delete_multi_reservation_status(self, chat_id: int) -> None:

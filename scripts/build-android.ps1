@@ -2,7 +2,10 @@
 param(
     [switch]$SkipWebBuild,
     # 로컬 e2e 스택용 com.jari.app.e2e 를 만든다. 실서버·Firebase 설정 없이, adb reverse 로 넘긴 PC 의 서버에만 붙는다.
-    [int]$E2ePort = 0
+    [int]$E2ePort = 0,
+    # 릴리스 서명(assembleRelease)으로 빌드한다. android\keystore.properties 또는
+    # JARI_RELEASE_* 환경 변수로 서명 설정이 없으면 Gradle을 부르기 전에 중단한다.
+    [switch]$Release
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +14,9 @@ if ($E2ePort) {
     # 두 빌드는 dist/ 를 같이 써요. 남아 있던 실서버 번들을 e2e 앱에 싣지 않게 늘 새로 만들어요.
     if ($SkipWebBuild) {
         throw "-E2ePort 는 -SkipWebBuild 와 함께 쓸 수 없어요. e2e 번들은 매번 새로 만들어요."
+    }
+    if ($Release) {
+        throw "-E2ePort 는 -Release 와 함께 쓸 수 없어요. e2e 빌드는 항상 디버그 서명이에요."
     }
     $env:VITE_API_BASE_URL = "http://127.0.0.1:$E2ePort"
 }
@@ -28,6 +34,30 @@ else {
     }
     if (-not $configuredApiBase) {
         throw "VITE_API_BASE_URL이 없어 실서버용 디버그 APK 빌드를 중단합니다. .env.production.local에 HTTPS API 주소를 설정해 주세요."
+    }
+    if ($Release) {
+        $keystoreProps = Join-Path $mobileRoot 'android\keystore.properties'
+        $signingEnvNames = @('JARI_RELEASE_STORE_FILE', 'JARI_RELEASE_STORE_PASSWORD', 'JARI_RELEASE_KEY_ALIAS', 'JARI_RELEASE_KEY_PASSWORD')
+        $signingEnvComplete = -not ($signingEnvNames | Where-Object { -not [Environment]::GetEnvironmentVariable($_, 'Process') })
+        # build.gradle only attaches signingConfigs.release when all 4 keys are
+        # present, so a keystore.properties that exists but is missing a key
+        # (e.g. keyPassword) must not be treated as configured here -- that would
+        # let assembleRelease "succeed" as an unsigned app-release-unsigned.apk
+        # while this script still reports the app-release.apk path below.
+        $keystorePropsComplete = $false
+        if (Test-Path $keystoreProps -PathType Leaf) {
+            $props = @{}
+            foreach ($line in Get-Content $keystoreProps) {
+                if ($line -match '^\s*([^#=\s][^=]*)=(.*)$') {
+                    $props[$Matches[1].Trim()] = $Matches[2].Trim()
+                }
+            }
+            $keystorePropsComplete = -not (@('storeFile', 'storePassword', 'keyAlias', 'keyPassword') |
+                    Where-Object { -not $props[$_] })
+        }
+        if (-not $keystorePropsComplete -and -not $signingEnvComplete) {
+            throw "릴리스 서명 설정이 없어 릴리스 빌드를 중단합니다: $keystoreProps 에 storeFile/storePassword/keyAlias/keyPassword 4개를 모두 두거나 $($signingEnvNames -join '/') 환경 변수를 모두 설정하세요."
+        }
     }
 }
 $jdkCandidates = @()
@@ -94,7 +124,7 @@ try {
     }
     Push-Location ".\android"
     try {
-        $variant = if ($E2ePort) { 'E2e' } else { 'Debug' }
+        $variant = if ($Release) { 'Release' } elseif ($E2ePort) { 'E2e' } else { 'Debug' }
         & ".\gradlew.bat" "assemble$variant"
         if ($LASTEXITCODE -ne 0) {
             throw "Gradle $variant APK 빌드가 실패했습니다."

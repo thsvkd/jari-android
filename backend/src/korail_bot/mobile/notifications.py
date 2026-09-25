@@ -107,19 +107,31 @@ class Notifications:
     def register_device(self, owner, token):
         with self.identity.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            token_hash = digest(token)
             existing = db.execute(
-                "SELECT owner FROM devices WHERE hash=?", (digest(token),)
+                "SELECT owner FROM devices WHERE hash=?", (token_hash,)
             ).fetchone()
-            if existing and existing["owner"] != owner:
-                raise AuthError(
-                    "이미 다른 앱 계정에 연결된 기기예요. 이전 계정에서 먼저 해제해 주세요.", 409
-                )
             count = db.execute("SELECT count(*) FROM devices WHERE owner=?", (owner,)).fetchone()[0]
+            if existing and existing["owner"] != owner:
+                # Only the app install that holds this FCM token can present
+                # it here, so whoever is logged in now owns the device. The
+                # previous owner's queued pushes go with it - they would
+                # otherwise land on this owner's phone instead of theirs.
+                # It is a genuinely new device for the new owner, so the same
+                # device-limit guard applies here as it does below.
+                if count >= 10:
+                    raise AuthError("등록할 수 있는 기기 수를 넘었어요.", 409)
+                db.execute("DELETE FROM outbox WHERE device_hash=?", (token_hash,))
+                db.execute(
+                    "UPDATE devices SET owner=?, token=? WHERE hash=?",
+                    (owner, self.box.encrypt(token), token_hash),
+                )
+                return
             if not existing and count >= 10:
                 raise AuthError("등록할 수 있는 기기 수를 넘었어요.", 409)
             db.execute(
                 "INSERT OR IGNORE INTO devices VALUES (?, ?, ?)",
-                (digest(token), owner, self.box.encrypt(token)),
+                (token_hash, owner, self.box.encrypt(token)),
             )
 
     def remove_device(self, owner, token):

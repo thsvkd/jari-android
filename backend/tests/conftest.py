@@ -49,6 +49,8 @@ def pytest_configure(config):
     """Set up the environment, and a Redis container when one is needed."""
     global _redis_container
 
+    _stop_runaway_tests(config)
+
     # Secrets the application expects. Set before any project module is
     # imported so that korail_bot.config.settings picks them up.
     os.environ.setdefault("BOTTOKEN", "test-bot-token")
@@ -81,6 +83,60 @@ def pytest_configure(config):
 
     os.environ["REDIS_HOST"] = _redis_container.get_container_host_ip()
     os.environ["REDIS_PORT"] = str(_redis_container.get_exposed_port(6379))
+
+
+# A backstop, not the fix. A test that spins - a patched sleep, a fake that ran
+# dry inside a retry loop - with a Mock recording every call grows without bound;
+# one did on 2026-09-25 and took a 32 GB machine to 99% (the fix for that one is
+# patch_poller in tests/unit/test_cancellation_wait_service.py). These limits end
+# such a run with the stack of the test that caused it. The memory line sits far
+# above anything real - the whole unit suite peaks near 180 MB - so it only ever
+# catches a runaway, never a test that genuinely needs the memory.
+_TEST_TIMEOUT_SECONDS = 300
+_running = {"nodeid": None, "since": 0.0}
+
+
+def _stop_runaway_tests(config):
+    import faulthandler
+    import sys
+    import threading
+    import time
+
+    import psutil
+
+    process = psutil.Process()
+    limit = psutil.virtual_memory().total // 4  # far above any real test
+
+    def stop(reason):
+        # Output is captured per test; without this the reason vanishes with the process.
+        capture = config.pluginmanager.getplugin("capturemanager")  # None under -p no:capture
+        if capture:
+            capture.suspend_global_capture(in_=True)
+        sys.stderr.write(f"\nERROR: {reason} in {_running['nodeid']}. Stopping the run. Stacks:\n")
+        faulthandler.dump_traceback(all_threads=True)
+        os._exit(3)
+
+    def watch():
+        while True:
+            rss = process.memory_info().rss
+            if rss > limit:
+                stop(f"pytest reached {rss // 2**20} MB")
+            if _running["nodeid"] and time.monotonic() - _running["since"] > _TEST_TIMEOUT_SECONDS:
+                stop(f"a test ran over {_TEST_TIMEOUT_SECONDS}s")
+            time.sleep(0.5)
+
+    threading.Thread(target=watch, name="runaway-test-guard", daemon=True).start()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    import time
+
+    _running.update(nodeid=item.nodeid, since=time.monotonic())
+    try:
+        yield
+    finally:
+        _running["nodeid"] = None
 
 
 def pytest_sessionfinish(session, exitstatus):

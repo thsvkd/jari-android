@@ -1,8 +1,47 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// Only the "reports a 409 from a failed push registration" test below flips this to true; every other
+// test needs isNative() === false to exercise the browser-storage fallback, same as the real Capacitor plugin off-device.
+const nativePlatform = { active: false };
+
+vi.mock("@capacitor/core", () => ({
+  Capacitor: { isNativePlatform: () => nativePlatform.active },
+  registerPlugin: () => ({
+    read: vi.fn(),
+    write: vi.fn(),
+    clear: vi.fn(),
+    pushConfigured: vi.fn().mockResolvedValue({ configured: true }),
+    openNotificationSettings: vi.fn().mockResolvedValue(undefined),
+  }),
+}));
+
+vi.mock("@capacitor/app", () => ({
+  App: { addListener: vi.fn().mockResolvedValue({ remove: vi.fn() }) },
+}));
+
+vi.mock("@capacitor/push-notifications", () => {
+  let registrationHandler: (token: { value: string }) => void | Promise<void> = () => undefined;
+  return {
+    PushNotifications: {
+      checkPermissions: vi.fn().mockResolvedValue({ receive: "granted" }),
+      requestPermissions: vi.fn().mockResolvedValue({ receive: "granted" }),
+      addListener: vi.fn(async (event: string, handler: (token: { value: string }) => void | Promise<void>) => {
+        if (event === "registration") registrationHandler = handler;
+        return { remove: vi.fn() };
+      }),
+      // Fires the "registration" listener synchronously, standing in for the native FCM callback.
+      register: vi.fn(async () => {
+        await registrationHandler({ value: "token-abc" });
+      }),
+    },
+  };
+});
+
+import { ApiError } from "./api";
 import {
   awaitPushRegistration,
   clearToken,
+  initializePlatform,
   readToken,
   writeToken,
 } from "./platform";
@@ -57,5 +96,43 @@ describe("push registration", () => {
 
     finishSaving(true);
     await expect(registration).resolves.toBe(true);
+  });
+
+  it("passes an ApiError's own message through onPushError instead of a generic one", async () => {
+    nativePlatform.active = true;
+    const onPushError = vi.fn();
+
+    await initializePlatform({
+      enablePushRegistration: true,
+      onPushToken: async () => {
+        // The server's 409 when this account already has as many devices as it's allowed.
+        throw new ApiError("등록할 수 있는 기기 수를 넘었어요.", 409, "server");
+      },
+      onPushError,
+    });
+
+    expect(onPushError).toHaveBeenCalledWith("등록할 수 있는 기기 수를 넘었어요.");
+  });
+
+  it.each([
+    new ApiError("이전 로그인에서 시작한 요청이라 중단했어요.", 0, "stale"),
+    new ApiError("로그인이 필요해요.", 401, "auth"),
+  ])("keeps the generic message for a $kind ApiError instead of its own", async (error) => {
+    nativePlatform.active = true;
+    const onPushError = vi.fn();
+
+    await initializePlatform({
+      enablePushRegistration: true,
+      onPushToken: async () => {
+        throw error;
+      },
+      onPushError,
+    });
+
+    expect(onPushError).toHaveBeenCalledWith("휴대폰 알림을 서버에 등록하지 못했어요.");
+  });
+
+  afterEach(() => {
+    nativePlatform.active = false;
   });
 });

@@ -188,12 +188,17 @@ transfer() {
     log "DRY-RUN git archive $REF backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile | ssh $HOST tar -x -C $tmp"
   else
     log "transfer: archiving $REF to $HOST:$tmp"
-    ssh "$HOST" "mkdir -p '$tmp'"
+    # This function is called as `transfer || rollback_and_exit`, which turns
+    # off errexit for its whole body (bash quirk: `set -e` does not apply
+    # inside a command that is the left side of `||`). Every step that can
+    # fail must therefore propagate with an explicit `|| return 1`, or a
+    # remote failure here would fall through silently to SWAPPED=1 below.
+    ssh "$HOST" "mkdir -p '$tmp'" || return 1
     git -c core.autocrlf=false archive "$REF" \
       backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile \
-      | ssh "$HOST" "tar -x -C '$tmp'"
+      | ssh "$HOST" "tar -x -C '$tmp'" || return 1
   fi
-  run_remote "swap backend/src, copy build files" "$ROOT" "$tmp" "$TS" <<'EOF'
+  run_remote "swap backend/src, copy build files" "$ROOT" "$tmp" "$TS" <<'EOF' || return 1
 set -euo pipefail
 root="$1"; tmp="$2"; ts="$3"
 cd "$root/backend"
@@ -224,8 +229,11 @@ EOF
 }
 
 verify() {
+  # Called as `verify || rollback_and_exit`: same errexit-off quirk as
+  # transfer() above, so the remote check's failure must be propagated
+  # explicitly instead of relying on set -e.
   run_remote "verify $SERVICE: running, RestartCount 0, twice 5s apart (up to 30s)" \
-    "$ROOT" "$SERVICE" "${COMPOSE_ARGS[@]}" <<'EOF'
+    "$ROOT" "$SERVICE" "${COMPOSE_ARGS[@]}" <<'EOF' || return 1
 set -euo pipefail
 root="$1"; service="$2"; shift 2
 cd "$root"
@@ -257,7 +265,10 @@ EOF
     else
       local code
       code="$(curl -s -o /dev/null -w '%{http_code}' "$HEALTH_URL")"
-      [[ "$code" -lt 500 ]] || { echo "health check failed: HTTP $code" >&2; return 1; }
+      # curl prints "000" (not a real HTTP status) when it never got a
+      # response at all, e.g. connection refused; "000" < 500 would
+      # otherwise read as a passing health check.
+      [[ "$code" -lt 500 && "$code" != "000" ]] || { echo "health check failed: HTTP $code" >&2; return 1; }
       log "health check ok: HTTP $code"
     fi
   fi
@@ -275,9 +286,14 @@ EOF
 rollback_and_exit() {
   if [[ "$SWAPPED" -ne 1 ]]; then
     cat >&2 <<MSG
-[deploy] FAILED before the file swap completed. backend/src on $HOST was not
-left changed (the swap step restores the previous src itself on failure);
-there is nothing to roll back. Fix the issue and re-run.
+[deploy] FAILED before the swap step reported success. In the common case
+backend/src on $HOST was not left changed (moving the new src into place
+itself puts the previous src back on failure); there is nothing to roll
+back. But if the swap step failed AFTER moving the new src in -- copying
+pyproject.toml/uv.lock/Dockerfile, or the final cleanup -- src was already
+replaced even though this run reports failure. Check $HOST:$ROOT/backend for
+a leftover .replaced-${TS}/src before assuming nothing changed. Fix the
+issue and re-run.
 MSG
     exit 1
   fi

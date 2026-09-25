@@ -5,7 +5,8 @@ $ErrorActionPreference = 'Stop'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('jari-build-tests-' + [guid]::NewGuid())
 $savedEnvironment = @{}
 $environmentNames = @('PATH', 'JAVA_HOME', 'ANDROID_HOME', 'LOCALAPPDATA', 'ProgramFiles',
-    'JARI_TEST_LOG', 'JARI_TEST_FAIL', 'JARI_TEST_JAVA_VERSION', 'VITE_API_BASE_URL')
+    'JARI_TEST_LOG', 'JARI_TEST_FAIL', 'JARI_TEST_JAVA_VERSION', 'VITE_API_BASE_URL',
+    'JARI_RELEASE_STORE_FILE', 'JARI_RELEASE_STORE_PASSWORD', 'JARI_RELEASE_KEY_ALIAS', 'JARI_RELEASE_KEY_PASSWORD')
 foreach ($name in $environmentNames) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
@@ -56,7 +57,8 @@ class FakeJava {
         param([string]$Name, [string]$FailCommand, [string]$ExpectedCommands,
             [bool]$ExpectSuccess = $false, [string]$JavaVersion = '21.0.12',
             [switch]$DefaultSdk, [switch]$SkipWebBuild, [string]$JavaHome = $fakeJdk,
-            [string]$ExpectedError, [switch]$MissingPushConfig, [switch]$MissingApiUrl, [int]$E2ePort = 0, [switch]$LeftoverE2eBundle)
+            [string]$ExpectedError, [switch]$MissingPushConfig, [switch]$MissingApiUrl, [int]$E2ePort = 0, [switch]$LeftoverE2eBundle,
+            [switch]$Release, [switch]$WithKeystoreProps, [switch]$WithIncompleteKeystoreProps, [switch]$WithSigningEnv)
         if ($MissingPushConfig) {
             Remove-Item "$fixture/android/app/google-services.json" -Force -ErrorAction SilentlyContinue
         } else {
@@ -72,6 +74,19 @@ class FakeJava {
             New-Item -ItemType Directory -Path "$fixture/dist/assets" -Force | Out-Null
             Set-Content "$fixture/dist/assets/index.js" 'const base="http://127.0.0.1:18281";' -Encoding Ascii
         }
+        $keystoreProps = "$fixture/android/keystore.properties"
+        Remove-Item $keystoreProps -Force -ErrorAction SilentlyContinue
+        if ($WithKeystoreProps) {
+            Set-Content $keystoreProps "storeFile=fake.jks`nstorePassword=x`nkeyAlias=x`nkeyPassword=x" -Encoding Ascii
+        } elseif ($WithIncompleteKeystoreProps) {
+            # Missing keyPassword: build.gradle would leave hasReleaseSigning
+            # false for this file too, so the script must stop the same way.
+            Set-Content $keystoreProps "storeFile=fake.jks`nstorePassword=x`nkeyAlias=x" -Encoding Ascii
+        }
+        $signingEnvNames = @('JARI_RELEASE_STORE_FILE', 'JARI_RELEASE_STORE_PASSWORD', 'JARI_RELEASE_KEY_ALIAS', 'JARI_RELEASE_KEY_PASSWORD')
+        foreach ($envName in $signingEnvNames) {
+            [Environment]::SetEnvironmentVariable($envName, $(if ($WithSigningEnv) { 'x' } else { $null }), 'Process')
+        }
         $env:JAVA_HOME = $JavaHome
         $env:ANDROID_HOME = if ($DefaultSdk) { $null } else { "$testRoot/local/Android/Sdk" }
         $env:JARI_TEST_FAIL = $FailCommand
@@ -80,6 +95,7 @@ class FakeJava {
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$fixture/scripts/build-android.ps1")
         if ($SkipWebBuild) { $arguments += '-SkipWebBuild' }
         if ($E2ePort) { $arguments += @('-E2ePort', $E2ePort) }
+        if ($Release) { $arguments += '-Release' }
         # Windows PowerShell exposes native stderr as error records. Capture these
         # without letting the test runner stop before it can assert the exit code.
         $ErrorActionPreference = 'Continue'
@@ -114,6 +130,11 @@ class FakeJava {
     Test-Pipeline -Name 'e2e build refuses a stale web bundle' -E2ePort 18281 -SkipWebBuild -ExpectedCommands '' -ExpectedError 'SkipWebBuild'
     Test-Pipeline -Name 'release build refuses a leftover e2e bundle' -SkipWebBuild -LeftoverE2eBundle -ExpectedCommands '' -ExpectedError 'e2e'
     Test-Pipeline -Name 'SkipWebBuild succeeds with sync and Gradle' -SkipWebBuild -ExpectedCommands 'npx cap sync android|gradlew assembleDebug' -ExpectSuccess $true
+    Test-Pipeline -Name 'release build without signing config stops before Gradle' -Release -ExpectedCommands '' -ExpectedError 'storeFile/storePassword'
+    Test-Pipeline -Name 'release build with keystore.properties builds assembleRelease' -Release -WithKeystoreProps -SkipWebBuild -ExpectedCommands 'npx cap sync android|gradlew assembleRelease' -ExpectSuccess $true
+    Test-Pipeline -Name 'release build with an incomplete keystore.properties stops before Gradle' -Release -WithIncompleteKeystoreProps -ExpectedCommands '' -ExpectedError 'storeFile/storePassword'
+    Test-Pipeline -Name 'release build with JARI_RELEASE_* env vars builds assembleRelease' -Release -WithSigningEnv -SkipWebBuild -ExpectedCommands 'npx cap sync android|gradlew assembleRelease' -ExpectSuccess $true
+    Test-Pipeline -Name 'release and e2e together are rejected' -Release -E2ePort 18281 -ExpectedCommands '' -ExpectedError '-Release'
     if ($RealJavaHome) {
         Test-Pipeline -Name "installed JDK validates: $RealJavaHome" -JavaHome $RealJavaHome -ExpectedCommands 'npm run build|npx cap sync android|gradlew assembleDebug' -ExpectSuccess $true
     }

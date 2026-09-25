@@ -262,6 +262,88 @@ describe("concept C application shell", () => {
     expect(root.querySelector("[data-train='015']")).toBeNull();
   });
 
+  // A favourite (and, once a search has started, the "최근" chip too) never carries a train list on the real
+  // server - only the date is skipped. So 조건 수정's re-search must not resurrect an earlier, unrelated
+  // flow's seat pick; it starts the train list clean, same as any other new search.
+  async function bootstrapWithStaleSeatPick() {
+    const targets: SeatTarget[] = [{
+      carNo: 3, seatNo: "demo-1-A", label: "1A", row: 1, column: "A",
+      direction: "1", floor: "", adjacencyGroup: "1:left", position: 1, rowPosition: 1,
+    }];
+    const demo = createDemoApi();
+    const state = await demo.bootstrap();
+    // A prior, unrelated search left a seat pick on train 015; the bootstrapped draft restores it as a cancellation-wait target.
+    state.draft = {
+      ...state.draft!,
+      trains: ["015"],
+      seat_plan: { strategy: "independent", passengerCount: 1, trains: [{ trainNo: "015", seatClass: "general", targets }] },
+    };
+    return { state, targets };
+  }
+
+  function expectCleanTrainList(root: HTMLElement) {
+    expect(root.querySelector("[data-action='trains-next']")!.textContent).not.toContain("편 선택");
+    expect(root.querySelector(".train-card")?.classList.contains("selected")).toBe(false);
+    // Sold-out cards always offer "좌석 지정" now; only a carried pick shows "선택 완료".
+    expect(root.textContent).not.toContain("선택 완료");
+    expect(root.querySelector("[data-seat-map].selected")).toBeNull();
+  }
+
+  it("re-searching after a favourite row's 조건 수정 does not carry a previous flow's seat pick into the new list", async () => {
+    const { state, targets } = await bootstrapWithStaleSeatPick();
+    const { app, root } = await mountLive({ bootstrap: async () => state });
+    expect(app).toMatchObject({ cancellationTargets: [{ trainNo: "015", seatClass: "general", targets }] });
+
+    app.navigate("favourites");
+    root.querySelector<HTMLButtonElement>("[data-edit-favourite='demo-home']")!.click();
+    root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+
+    await vi.waitFor(() => expect(root.querySelector("[data-train-toggle='015']")).not.toBeNull());
+    expectCleanTrainList(root);
+  });
+
+  it("re-searching after the date sheet's 조건 수정 does not carry a previous flow's seat pick into the new list", async () => {
+    const { state, targets } = await bootstrapWithStaleSeatPick();
+    const { app, root } = await mountLive({ bootstrap: async () => state });
+    expect(app).toMatchObject({ cancellationTargets: [{ trainNo: "015", seatClass: "general", targets }] });
+
+    root.querySelector<HTMLButtonElement>("[data-route-chip='demo-home']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-action='sheet-edit']")!.click();
+    await vi.waitFor(() => expect(root.querySelector("#conditions-form")).not.toBeNull());
+    root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+
+    await vi.waitFor(() => expect(root.querySelector("[data-train-toggle='015']")).not.toBeNull());
+    expectCleanTrainList(root);
+  });
+
+  it("does not reselect a train the user deselected after the seat-plan seeding loop was removed", async () => {
+    const { app, root } = await mountLive();
+
+    app.navigate("journey");
+    root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+    await vi.waitFor(() => expect(root.querySelector("[data-train-toggle='015']")).not.toBeNull());
+
+    // Select two trains and apply the selection - this is what fills `selectedTrains` from `cancellationTargets`.
+    root.querySelector<HTMLButtonElement>("[data-train-toggle='015']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-train-toggle='019']")!.click();
+    expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("2편 선택");
+    root.querySelector<HTMLButtonElement>("[data-action='trains-next']")!.click();
+
+    // Back to the train list, deselect 019. This only touches `cancellationTargets`; the stale `selectedTrains`
+    // set by "다음: 조건 확인" above still names both trains until the next apply or start.
+    expect(app.back()).toBe(true);
+    root.querySelector<HTMLButtonElement>("[data-train-toggle='019']")!.click();
+    expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("1편 선택");
+
+    // Back to the journey form and search again: 019 must stay deselected, not come back via `selectedTrains`.
+    expect(app.back()).toBe(true);
+    root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+
+    await vi.waitFor(() => expect(root.querySelector("[data-train-toggle='015']")).not.toBeNull());
+    expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("1편 선택");
+    expect([...root.querySelectorAll(".train-card.selected [data-train-toggle]")].map((train) => (train as HTMLElement).dataset.trainToggle)).toEqual(["015"]);
+  });
+
   it("starts a new journey with today's time window instead of the previous server draft", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-14T10:37:00+09:00"));
@@ -1302,6 +1384,27 @@ async function mountIdle(overrides: Partial<ReturnType<typeof createDemoApi>> = 
   return mountLive({ bootstrap: async () => state, ...overrides });
 }
 
+it("searches the recent chip's trip on the chosen date and keeps the trains that still run", async () => {
+  // The recent draft is the one saved route that can still carry trains (the server echoes the
+  // session's picked trains back); a favourite never does.
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running = null;
+  state.draft = { ...state.draft!, trains: ["015", "019", "099"] };
+  const { root } = await mountLive({ bootstrap: async () => state });
+
+  root.querySelector<HTMLButtonElement>("[data-route-chip='recent']")!.click();
+  expect(root.querySelector(".action-sheet")?.textContent).toContain("고른 열차 3편");
+  root.querySelector<HTMLInputElement>("#sheet-date")!.value = "2026-10-03";
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector(".train-list")).not.toBeNull());
+  // 015 and 019 are listed again, 099 is not; the button counts only the two that survived.
+  expect(root.querySelector("[data-action='trains-next']")?.textContent).toContain("2편 선택");
+  expect([...root.querySelectorAll(".train-card.selected [data-train-toggle]")].map((train) => (train as HTMLElement).dataset.trainToggle)).toEqual(["015", "019"]);
+  expect(root.querySelector(".toast")?.textContent).toBe("3편 중 1편은 이 날 운행하지 않아 뺐어요.");
+});
+
 it("offers the restored search and the favourites as dated shortcuts above the quiet idle card", async () => {
   const { root } = await mountIdle();
   const shelf = root.querySelector<HTMLElement>(".chip-shelf")!;
@@ -1350,12 +1453,13 @@ it.each([
   expect(root.querySelector<HTMLInputElement>("#sheet-date")!.value).toBe(expected);
 });
 
-it("searches the chip's trip on the chosen date and keeps the trains that still run", async () => {
+it("searches a favourite's trip on the chosen date with no train picked (a real favourite never stores trains)", async () => {
   const trains = vi.fn(createDemoApi().trains);
   const { root } = await mountIdle({ trains });
 
   root.querySelector<HTMLButtonElement>("[data-route-chip='demo-home']")!.click();
-  expect(root.querySelector(".action-sheet")?.textContent).toContain("인원 1명 · 14:00–18:00 · 고른 열차 3편");
+  expect(root.querySelector(".action-sheet")?.textContent).toContain("인원 1명 · 14:00–18:00");
+  expect(root.querySelector(".action-sheet")?.textContent).not.toContain("고른 열차");
   root.querySelector<HTMLInputElement>("#sheet-date")!.value = "2026-10-03";
   root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
 
@@ -1370,10 +1474,9 @@ it("searches the chip's trip on the chosen date and keeps the trains that still 
     train_type: "1",
     seat_plan: undefined,
   });
-  // 015 and 019 are listed again, 099 is not; the button counts only the two that survived.
-  expect(root.querySelector("[data-action='trains-next']")?.textContent).toContain("2편 선택");
-  expect([...root.querySelectorAll(".train-card.selected [data-train-toggle]")].map((train) => (train as HTMLElement).dataset.trainToggle)).toEqual(["015", "019"]);
-  expect(root.querySelector(".toast")?.textContent).toBe("3편 중 1편은 이 날 운행하지 않아 뺐어요.");
+  expect(root.querySelector("[data-action='trains-next']")?.textContent).not.toContain("편 선택");
+  expect(root.querySelectorAll(".train-card.selected")).toHaveLength(0);
+  expect(root.querySelector(".toast")?.textContent).toBe("");
 });
 
 it("keeps the date sheet dismissable without starting a search", async () => {

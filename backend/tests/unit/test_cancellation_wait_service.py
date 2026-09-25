@@ -4,13 +4,20 @@ from unittest.mock import Mock
 
 import pytest
 
-from korail_bot.models import CancellationWaitPlan, ReservationOutcome, SeatTarget
+from korail_bot.models import (
+    CancellationWaitPlan,
+    MultiReservationStatus,
+    ReservationOutcome,
+    ReservationPaymentStatus,
+    SeatTarget,
+    SingleReservationInfo,
+)
 from korail_bot.services.cancellation_wait_service import (
     CancellationWaitService,
     DesignatedCapture,
     train_label,
 )
-from korail_bot.telegramBot.telebotBackProcess import BackgroundReservationProcess
+from korail_bot.telegramBot.telebotBackProcess import BackgroundReservationProcess, SearchStopped
 from korail_bot.utils.timezone import utc_now
 
 
@@ -43,6 +50,27 @@ def payload(strategy: str = "independent", passenger_count: int = 2) -> dict:
             }
         ],
     }
+
+
+def patch_poller(monkeypatch, *captures):
+    """
+    Stand in for CancellationWaitService, answering poll_once with `captures`.
+
+    The poll after the last capture raises SearchStopped, which the loop lets
+    through. Never hand poll_once a bare list: _run_cancellation_wait treats
+    any exception from a poll as a failed Korail read and retries, and with a
+    Mock rail its backoff wait returns at once. An exhausted list's
+    StopIteration then spins ~6,000 times a second while the Mock records
+    every call (each holding the exception and its frames) - on 2026-09-25
+    that took one run to 19 GB.
+    """
+    poller = Mock()
+    poller.poll_once.side_effect = [*captures, SearchStopped(0)]
+    monkeypatch.setattr(
+        "korail_bot.telegramBot.telebotBackProcess.CancellationWaitService",
+        Mock(return_value=poller),
+    )
+    return poller
 
 
 def car(car_no: int = 3, remaining: int = 2) -> SimpleNamespace:
@@ -347,12 +375,7 @@ def test_background_independent_wait_persists_and_notifies_each_capture(monkeypa
         )
         for index, raw in enumerate(payload()["trains"][0]["targets"], 1)
     ]
-    poller = Mock()
-    poller.poll_once.side_effect = captures
-    monkeypatch.setattr(
-        "korail_bot.telegramBot.telebotBackProcess.CancellationWaitService",
-        Mock(return_value=poller),
-    )
+    patch_poller(monkeypatch, *captures)
     process = BackgroundReservationProcess.__new__(BackgroundReservationProcess)
     process.seat_plan = plan
     process.rail = Mock()
@@ -384,6 +407,238 @@ def test_background_independent_wait_persists_and_notifies_each_capture(monkeypa
     process.storage.wait_for_payment.assert_not_called()
 
 
+def test_a_stale_multi_record_from_a_different_train_is_not_carried_over(monkeypatch):
+    # backend-core#4: an independent search picked up every seat in whatever
+    # MultiReservationStatus it found for the chat, even one from an earlier,
+    # unrelated trip still inside the 15-minute TTL. Two PAID seats from that
+    # old trip were enough to satisfy this plan's target before a single
+    # fresh poll ran, so poll_once was never called and nothing was ever
+    # captured for the search actually being run.
+    plan = CancellationWaitPlan.from_payload(payload())  # passengerCount=2, train "015"
+    stale = [
+        SingleReservationInfo(
+            reservation_id=f"STALE{i}",
+            reservation_obj=None,
+            reserved_at=utc_now(),
+            expires_at=utc_now() + timedelta(minutes=10),
+            status=ReservationPaymentStatus.PAID,
+            seat_number=i,
+            train_info="다른 열차",
+            train_no="999",
+            dep_date="20260101",
+        )
+        for i in (1, 2)
+    ]
+    captures = [
+        DesignatedCapture(
+            SimpleNamespace(pnr_no=f"R{index}"),
+            SimpleNamespace(
+                train_no="015",
+                train_class_name="KTX",
+                departure_station_name="서울",
+                arrival_station_name="부산",
+                departure_date="20260920",
+                departure_time="090000",
+            ),
+            "general",
+            (SeatTarget.from_payload(raw),),
+        )
+        for index, raw in enumerate(payload()["trains"][0]["targets"], 1)
+    ]
+    poller = patch_poller(monkeypatch, *captures)
+    process = BackgroundReservationProcess.__new__(BackgroundReservationProcess)
+    process.seat_plan = plan
+    process.rail = Mock()
+    process.rail.reservation_id.side_effect = ["R1", "R2"]
+    process.rail.reservation_outcome.return_value = ReservationOutcome.OUTSTANDING
+    process.storage = Mock()
+    process.storage.get_multi_reservation_status.return_value = MultiReservationStatus(
+        chat_id=-100,
+        reservations=stale,
+        total_seats=2,
+        seat_strategy="independent",
+        created_at=utc_now(),
+    )
+    process.chat_id = -100
+    process.dep_date = "20260920"
+    process.src_locate = "서울"
+    process.dst_locate = "부산"
+    process.dep_time = "090000"
+    process.max_dep_time = "1800"
+    process.train_type = object()
+    process._payment_deadline = Mock(return_value=utc_now() + timedelta(minutes=10))
+    process._train_hints = Mock(
+        return_value={"train_no": "015", "dep_date": "20260920", "dep_time": "090000"}
+    )
+    process.storage.get_user_timezone.return_value = "Asia/Seoul"
+    process._send_callback = Mock()
+
+    process._run_cancellation_wait()
+
+    # Under the bug this was 0: the stale seats already met the target, so
+    # the search returned before ever asking for a fresh one.
+    assert poller.poll_once.call_count == 2
+    saved = process.storage.save_multi_reservation_status.call_args.args[0]
+    assert [r.reservation_id for r in saved.reservations] == ["R1", "R2"]
+
+
+def test_a_paid_seat_on_the_same_train_and_date_is_kept_while_another_trains_seat_is_dropped(
+    monkeypatch,
+):
+    # backend-core#4, round2_better_fix: the filter keeps PAID seats that
+    # match this plan's train_no and dep_date (dropping only PENDING would
+    # lose an already-paid seat and over-book), and still drops a seat from a
+    # different train even when it is PAID.
+    plan = CancellationWaitPlan.from_payload(payload())  # passengerCount=2, train "015"
+    same_train = SingleReservationInfo(
+        reservation_id="PAID-SAME",
+        reservation_obj=None,
+        reserved_at=utc_now(),
+        expires_at=utc_now() + timedelta(minutes=10),
+        status=ReservationPaymentStatus.PAID,
+        seat_number=1,
+        train_info="KTX 015",
+        train_no="015",
+        dep_date="20260920",
+    )
+    other_train = SingleReservationInfo(
+        reservation_id="PAID-OTHER-TRAIN",
+        reservation_obj=None,
+        reserved_at=utc_now(),
+        expires_at=utc_now() + timedelta(minutes=10),
+        status=ReservationPaymentStatus.PAID,
+        seat_number=1,
+        train_info="다른 열차",
+        train_no="999",
+        dep_date="20260920",
+    )
+    captures = [
+        DesignatedCapture(
+            SimpleNamespace(pnr_no="R1"),
+            SimpleNamespace(
+                train_no="015",
+                train_class_name="KTX",
+                departure_station_name="서울",
+                arrival_station_name="부산",
+                departure_date="20260920",
+                departure_time="090000",
+            ),
+            "general",
+            (SeatTarget.from_payload(payload()["trains"][0]["targets"][0]),),
+        )
+    ]
+    poller = patch_poller(monkeypatch, *captures)
+    process = BackgroundReservationProcess.__new__(BackgroundReservationProcess)
+    process.seat_plan = plan
+    process.rail = Mock()
+    process.rail.reservation_id.side_effect = ["R1"]
+    process.rail.reservation_outcome.return_value = ReservationOutcome.OUTSTANDING
+    process.storage = Mock()
+    process.storage.get_multi_reservation_status.return_value = MultiReservationStatus(
+        chat_id=-100,
+        reservations=[same_train, other_train],
+        total_seats=2,
+        seat_strategy="independent",
+        created_at=utc_now(),
+    )
+    process.chat_id = -100
+    process.dep_date = "20260920"
+    process.src_locate = "서울"
+    process.dst_locate = "부산"
+    process.dep_time = "090000"
+    process.max_dep_time = "1800"
+    process.train_type = object()
+    process._payment_deadline = Mock(return_value=utc_now() + timedelta(minutes=10))
+    process._train_hints = Mock(
+        return_value={"train_no": "015", "dep_date": "20260920", "dep_time": "090000"}
+    )
+    process.storage.get_user_timezone.return_value = "Asia/Seoul"
+    process._send_callback = Mock()
+
+    process._run_cancellation_wait()
+
+    # Only one more seat is needed: the same-train/date PAID seat already
+    # counts toward the target of 2, so a single poll fills the rest.
+    assert poller.poll_once.call_count == 1
+    saved = process.storage.save_multi_reservation_status.call_args.args[0]
+    saved_ids = [r.reservation_id for r in saved.reservations]
+    assert "PAID-SAME" in saved_ids
+    assert "R1" in saved_ids
+    assert "PAID-OTHER-TRAIN" not in saved_ids
+
+
+def test_a_stale_seat_on_the_same_train_but_a_different_date_is_not_carried_over(monkeypatch):
+    # Same train_no as the plan, but from an earlier day's trip - the
+    # dep_date half of the filter has to reject it on its own, independent
+    # of the train_no check covered by the tests above.
+    plan = CancellationWaitPlan.from_payload(payload())  # passengerCount=2, train "015"
+    stale_same_train_other_date = [
+        SingleReservationInfo(
+            reservation_id=f"STALE{i}",
+            reservation_obj=None,
+            reserved_at=utc_now(),
+            expires_at=utc_now() + timedelta(minutes=10),
+            status=ReservationPaymentStatus.PAID,
+            seat_number=i,
+            train_info="KTX 015",
+            train_no="015",
+            dep_date="20260101",
+        )
+        for i in (1, 2)
+    ]
+    captures = [
+        DesignatedCapture(
+            SimpleNamespace(pnr_no=f"R{index}"),
+            SimpleNamespace(
+                train_no="015",
+                train_class_name="KTX",
+                departure_station_name="서울",
+                arrival_station_name="부산",
+                departure_date="20260920",
+                departure_time="090000",
+            ),
+            "general",
+            (SeatTarget.from_payload(raw),),
+        )
+        for index, raw in enumerate(payload()["trains"][0]["targets"], 1)
+    ]
+    poller = patch_poller(monkeypatch, *captures)
+    process = BackgroundReservationProcess.__new__(BackgroundReservationProcess)
+    process.seat_plan = plan
+    process.rail = Mock()
+    process.rail.reservation_id.side_effect = ["R1", "R2"]
+    process.rail.reservation_outcome.return_value = ReservationOutcome.OUTSTANDING
+    process.storage = Mock()
+    process.storage.get_multi_reservation_status.return_value = MultiReservationStatus(
+        chat_id=-100,
+        reservations=stale_same_train_other_date,
+        total_seats=2,
+        seat_strategy="independent",
+        created_at=utc_now(),
+    )
+    process.chat_id = -100
+    process.dep_date = "20260920"
+    process.src_locate = "서울"
+    process.dst_locate = "부산"
+    process.dep_time = "090000"
+    process.max_dep_time = "1800"
+    process.train_type = object()
+    process._payment_deadline = Mock(return_value=utc_now() + timedelta(minutes=10))
+    process._train_hints = Mock(
+        return_value={"train_no": "015", "dep_date": "20260920", "dep_time": "090000"}
+    )
+    process.storage.get_user_timezone.return_value = "Asia/Seoul"
+    process._send_callback = Mock()
+
+    process._run_cancellation_wait()
+
+    # The same-train seats are from a different day's trip, so both must be
+    # dropped and both plan seats polled for fresh.
+    assert poller.poll_once.call_count == 2
+    saved = process.storage.save_multi_reservation_status.call_args.args[0]
+    assert [r.reservation_id for r in saved.reservations] == ["R1", "R2"]
+
+
 def test_train_label_reads_a_real_korail2_reservation_without_price_or_deadline():
     # The library's own class from Korail's wire fields, not a stand-in: a
     # hand-made object once let this label read "출발역 → 도착역" unnoticed.
@@ -408,3 +663,65 @@ def test_train_label_reads_a_real_korail2_reservation_without_price_or_deadline(
 
     assert str(reservation).startswith("[KTX] 9월 24일, 서울~부산(13:18~15:59), 78200원")
     assert train_label(reservation) == "KTX 00101 서울 → 부산 · 9월 24일(목) 13:18→15:59"
+
+
+def test_a_designated_hold_is_saved_with_its_trains_number_and_date(monkeypatch):
+    # reserve_designated answers with a ReservationHoldResponse, which names no
+    # train. The seat must still be filed under the searched train, or a resumed
+    # search drops it from the plan and books the seat count again.
+    from korail_mobile_api.models import TrainSummary
+    from korail_mobile_api.mutation_models import ReservationHoldResponse
+
+    from korail_bot.services.korail_service import KorailService
+
+    plan = CancellationWaitPlan.from_payload(payload())
+    train = TrainSummary(
+        train_no="015",
+        departure_date="20260920",
+        departure_time="090000",
+        arrival_time="113000",
+        departure_station_name="서울",
+        arrival_station_name="부산",
+        run_date="20260920",
+        train_class_name="KTX",
+        train_group_name="KTX",
+        train_class_code="00",
+        general_reservation_code="13",
+        special_reservation_code="13",
+        general_availability_name="매진",
+        special_availability_name="매진",
+        wait_reservation_flag="-1",
+    )
+    hold = ReservationHoldResponse(
+        pnr_no="R1", payment_deadline_date="20260920", payment_deadline_time="080000"
+    )
+    patch_poller(
+        monkeypatch,
+        DesignatedCapture(
+            hold, train, "general", (SeatTarget.from_payload(payload()["trains"][0]["targets"][0]),)
+        ),
+    )
+    process = BackgroundReservationProcess.__new__(BackgroundReservationProcess)
+    process.seat_plan = plan
+    process.rail = Mock()
+    process.rail.describe_train = KorailService.describe_train
+    process.rail.reservation_id.return_value = "R1"
+    process.storage = Mock()
+    process.storage.get_multi_reservation_status.return_value = None
+    process.storage.get_user_timezone.return_value = "Asia/Seoul"
+    process.chat_id = -100
+    process.dep_date = "20260920"
+    process.src_locate = "서울"
+    process.dst_locate = "부산"
+    process.dep_time = "090000"
+    process.max_dep_time = "1800"
+    process.train_type = object()
+    process._payment_deadline = Mock(return_value=utc_now() + timedelta(minutes=10))
+    process._send_callback = Mock()
+
+    with pytest.raises(SearchStopped):
+        process._run_cancellation_wait()
+
+    saved = process.storage.save_multi_reservation_status.call_args.args[0]
+    [seat] = saved.reservations
+    assert (seat.train_no, seat.dep_date, seat.dep_time) == ("015", "20260920", "090000")

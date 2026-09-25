@@ -99,8 +99,8 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
       name: "주말에 집으로",
       route: "서울 → 부산",
       window: "14:00–18:00",
-      // 오후 구간이라 복원된 "최근" 칩과 겹치지 않고, 고른 열차 하나(099)는 데모 열차 목록에 없어 빠지는 안내까지 볼 수 있어요.
-      conditions: { ...conditions, dep_date: "", dep_time: "1400", max_dep_time: "1800", trains: ["015", "019", "099"] },
+      // 오후 구간이라 복원된 "최근" 칩과 겹치지 않아요. 실서버처럼 즐겨찾기는 날짜와 마찬가지로 열차도 담지 않아요(그날 다니지 않을 수 있어서).
+      conditions: { ...conditions, dep_date: "", dep_time: "1400", max_dep_time: "1800" },
     },
   ];
   let notifyMinutes = 5;

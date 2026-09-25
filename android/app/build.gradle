@@ -1,5 +1,21 @@
 apply plugin: 'com.android.application'
 
+// Release signing. Reads android/keystore.properties (gitignored) if present,
+// otherwise falls back to JARI_RELEASE_* environment variables. Neither is
+// committed or created by this repo. When neither is configured, the release
+// signingConfig is simply left out below -- Debug and E2e stay unaffected,
+// they never reference it.
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+def releaseStoreFile = keystoreProps.getProperty('storeFile') ?: System.getenv('JARI_RELEASE_STORE_FILE')
+def releaseStorePassword = keystoreProps.getProperty('storePassword') ?: System.getenv('JARI_RELEASE_STORE_PASSWORD')
+def releaseKeyAlias = keystoreProps.getProperty('keyAlias') ?: System.getenv('JARI_RELEASE_KEY_ALIAS')
+def releaseKeyPassword = keystoreProps.getProperty('keyPassword') ?: System.getenv('JARI_RELEASE_KEY_PASSWORD')
+def hasReleaseSigning = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+
 android {
     namespace "com.jari.app"
     compileSdk rootProject.ext.compileSdkVersion
@@ -16,10 +32,23 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    if (hasReleaseSigning) {
+        signingConfigs {
+            release {
+                storeFile rootProject.file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
         }
         // The local end-to-end stack only. Installs beside the real app (its own id, storage and
         // Keystore entry) and may speak plain HTTP to the PC's server over adb reverse, nothing else.
