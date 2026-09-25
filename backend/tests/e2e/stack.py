@@ -36,6 +36,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import psutil
 import redis
 from fakeredis import TcpFakeServer
 
@@ -121,8 +122,8 @@ class Stack:
                 "admin",
                 "--username",
                 self.admin["username"],
-                "--password",
-                self.admin["password"],
+                # One token: token_urlsafe can start with "-", which argparse would take for an option.
+                f"--password={self.admin['password']}",
             ],
             env=self.env,
             cwd=BACKEND,
@@ -179,6 +180,14 @@ class Stack:
                 request("POST", f"{self.api}/api/mobile/search/cancel", {}, token)
             except urllib.error.HTTPError as refused:
                 refused.close()
+        # 예약을 잡은 워커는 찾기 기록을 지우고 결제 기한(가짜 코레일 10분)까지 결제를 지켜봐서,
+        # 위의 취소로는 멈추지 않아요. 남겨 두면 테스트마다 하나씩 쌓여 메모리를 먹고, 다음 테스트에 알림을 보내요.
+        for child in psutil.Process(self.server.pid).children(recursive=True):
+            try:
+                if "korail_bot.mobile.worker" in child.cmdline():
+                    child.kill()
+            except psutil.Error:
+                pass
         self.redis.delete(SCENARIO_KEY, LOG_KEY)
         with sqlite3.connect(self.data / "identity.sqlite3") as db:
             db.execute("DELETE FROM rate_limits")

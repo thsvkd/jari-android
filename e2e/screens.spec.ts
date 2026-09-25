@@ -97,6 +97,9 @@ test.describe("화면 @visual", () => {
     await snap(page, "home-shortcuts");
     await page.locator("[data-route-chip]").first().click();
     await expect(page.locator(".action-sheet")).toBeVisible();
+    // 기본 날짜는 지금 시각에 따라 오늘이나 내일이라(밤 11시가 넘으면 내일) 사용자처럼 오늘을 골라 둬요.
+    await page.locator("[data-sheet-date]").first().click();
+    await expect(page.locator("[data-sheet-date]").first()).toHaveAttribute("aria-pressed", "true");
     await snap(page, "date-sheet");
   });
 

@@ -39,6 +39,12 @@ test.describe("즐겨찾기", () => {
     await page.locator("[data-action='save-favourite']").click();
     await expect(page.locator(".toast")).toHaveText("즐겨찾기에 저장했어요.");
     await page.locator(".bottom-nav [data-view='home']").click();
+    // 이름 없이 저장한 즐겨찾기는 이름이 곧 구간이에요. 칩과 자주 가는 구간 카드에 구간을 두 번 쓰지 않아요.
+    const favouriteChip = page.locator("[data-route-chip]:not([data-route-chip='recent'])").first();
+    await expect(favouriteChip.locator(".idle-chip-when")).toHaveText(/^즐겨찾기 · /);
+    await expect(page.locator(".route-list .favourite-main b")).toHaveText("서울 → 부산");
+    await expect(page.locator(".route-list .favourite-main small")).not.toContainText("→");
+    await expectCleanLayout(page, "홈(이름 없는 즐겨찾기)");
     const chip = page.locator("[data-route-chip]").first();
     await expect(chip).toBeVisible();
     await chip.click();

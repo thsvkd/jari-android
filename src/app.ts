@@ -163,6 +163,11 @@ function formatTimeWindow(conditions: Conditions): string {
   return `${clockFromCompact(conditions.dep_time)}–${conditions.max_dep_time === "2400" ? "마지막 열차" : clockFromCompact(conditions.max_dep_time)}`;
 }
 
+// Under a favourite's name: the route only when the name is not already the route, then the time window.
+function favouriteDetail(favourite: Favourite): string {
+  return favourite.name === favourite.route ? favourite.window : `${favourite.route} · ${favourite.window}`;
+}
+
 function isoDate(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
@@ -566,7 +571,9 @@ export class JariApp {
     };
     if (state.draft) add("recent", `최근 · ${formatTimeWindow(state.draft)}`, state.draft);
     for (const favourite of state.favourites.slice(0, 3)) {
-      add(favourite.id, `${favourite.name} · ${favourite.window}`, favourite.conditions);
+      // A favourite left with its default name is just the route, which the chip already shows above.
+      const label = favourite.name === favourite.route ? "즐겨찾기" : favourite.name;
+      add(favourite.id, `${label} · ${favourite.window}`, favourite.conditions);
     }
     return chips;
   }
@@ -1358,7 +1365,7 @@ export class JariApp {
   }
 
   private renderFavouriteRow(favourite: Favourite, compact: boolean): string {
-    return `<article class="favourite-row ${compact ? "compact" : ""}"><button class="favourite-main" data-use-favourite="${escapeHtml(favourite.id)}"><span class="route-symbol">구간</span><span><b>${escapeHtml(favourite.name)}</b><small>${escapeHtml(favourite.route)} · ${escapeHtml(favourite.window)}</small></span></button>${compact ? "" : `${button({ variant: "text", label: "조건 수정", attrs: { "data-edit-favourite": favourite.id } })}${button({ variant: "icon-danger", label: "삭제", ariaLabel: `${favourite.name} 삭제`, attrs: { "data-delete-favourite": favourite.id } })}`}</article>`;
+    return `<article class="favourite-row ${compact ? "compact" : ""}"><button class="favourite-main" data-use-favourite="${escapeHtml(favourite.id)}"><span class="route-symbol">구간</span><span><b>${escapeHtml(favourite.name)}</b><small>${escapeHtml(favouriteDetail(favourite))}</small></span></button>${compact ? "" : `${button({ variant: "text", label: "조건 수정", attrs: { "data-edit-favourite": favourite.id } })}${button({ variant: "icon-danger", label: "삭제", ariaLabel: `${favourite.name} 삭제`, attrs: { "data-delete-favourite": favourite.id } })}`}</article>`;
   }
 
   private renderNotifications(): string {
@@ -1801,7 +1808,7 @@ export class JariApp {
     if (!favourite) return;
     const confirmed = await this.confirmSheet({
       title: "즐겨찾기를 삭제할까요?",
-      body: `${favourite.name} · ${favourite.route}`,
+      body: favourite.name === favourite.route ? favourite.name : `${favourite.name} · ${favourite.route}`,
       confirmLabel: "삭제",
       danger: true,
     });

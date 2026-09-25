@@ -1620,6 +1620,40 @@ it("labels a chip with the favourite's name when it matches the restored search"
   expect(chips[0]!.textContent).toContain("저녁에 부산");
 });
 
+it("does not repeat a default-named favourite's route under it or on its chip", async () => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running = null;
+  state.draft = null;
+  // The server names an unnamed favourite after its route.
+  const conditions = { ...(await demo.bootstrap()).draft!, dep_date: "", dep_time: "1600", max_dep_time: "1800" };
+  state.favourites = [{ id: "fav-route", name: "서울 → 부산", route: "서울 → 부산", window: "16:00~18:00", conditions }];
+  const { root } = await mountLive({ bootstrap: async () => state });
+
+  const chip = root.querySelector("[data-route-chip='fav-route']")!;
+  expect(chip.querySelector(".idle-chip-when")?.textContent).toBe("즐겨찾기 · 16:00~18:00");
+  expect(root.querySelector(".route-list .favourite-main small")?.textContent).toBe("16:00~18:00");
+
+  root.querySelector<HTMLButtonElement>("nav [data-view='favourites']")!.click();
+  const row = root.querySelector(".favourite-list .favourite-main")!;
+  expect(row.querySelector("b")?.textContent).toBe("서울 → 부산");
+  expect(row.querySelector("small")?.textContent).toBe("16:00~18:00");
+
+  root.querySelector<HTMLButtonElement>("[data-delete-favourite='fav-route']")!.click();
+  expect(root.querySelector(".action-sheet")?.textContent).toContain("서울 → 부산");
+  expect(root.querySelector(".action-sheet")?.textContent).not.toContain("서울 → 부산 · 서울 → 부산");
+});
+
+it("keeps the route under a favourite that has its own name", async () => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  const { root } = await mountLive({ bootstrap: async () => state });
+  root.querySelector<HTMLButtonElement>("nav [data-view='favourites']")!.click();
+  const row = root.querySelector(".favourite-list .favourite-main")!;
+  expect(row.querySelector("b")?.textContent).toBe("주말에 집으로");
+  expect(row.querySelector("small")?.textContent).toBe("서울 → 부산 · 14:00–18:00");
+});
+
 it("sums a whole-formation seat plan instead of listing every label", async () => {
   const demo = createDemoApi();
   const state = await demo.bootstrap();
