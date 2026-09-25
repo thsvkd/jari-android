@@ -700,32 +700,43 @@ export class JariApp {
           .map((train) => {
             const departure = train.dep_time ? clockFromCompact(train.dep_time) : "";
             const arrival = train.arr_time ? clockFromCompact(train.arr_time) : "";
+            const specificGrade = this.draft.seatGradeMode === "specific";
             const configuredClasses = conditions.seat_classes?.length
               ? conditions.seat_classes
               : (["general", "special"] as SeatClass[]);
             // "좌석 지정": pick seats on the map. Pressing the card itself takes the train as a whole - any seat will do.
-            const seatButton = (seatClass: SeatClass, available: boolean | undefined) => {
+            // The long "일반실 · 기다릴 좌석 고르기" wrapped and grew the button. One cabin stays "좌석 지정";
+            // two cabins keep the short name so the buttons can be told apart.
+            const seatButton = (seatClass: SeatClass, available: boolean | undefined, distinguish: boolean) => {
               const label = seatClass === "general" ? "일반실" : "특실";
               const selectedCount = this.cancellationTargets
                 .find((target) => target.trainNo === train.no && target.seatClass === seatClass)
                 ?.targets.length ?? 0;
+              const caption = available ? `${label} · 지금 예약할 좌석` : distinguish ? label : "좌석 지정";
               return button({
                 variant: "seat",
                 className: selectedCount ? "selected" : undefined,
                 disabled: !train.trainKey,
                 attrs: { "data-seat-map": train.trainKey || "", "data-train-no": train.no, "data-seat-class": seatClass, "data-seat-mode": available ? "immediate" : "wait" },
-                content: `<span>${available ? `${label} · 지금 예약할 좌석` : `${label} · 기다릴 좌석 고르기`}</span>${selectedCount ? `<em>선택 완료 · ${selectedCount}석</em>` : ""}`,
+                content: `<span>${caption}</span>${selectedCount ? `<em>선택 완료 · ${selectedCount}석</em>` : ""}`,
               });
             };
             const classButtons = configuredClasses.map((seatClass) =>
-              seatButton(seatClass, seatClass === "general" ? train.generalAvailable : train.specialAvailable),
+              seatButton(
+                seatClass,
+                seatClass === "general" ? train.generalAvailable : train.specialAvailable,
+                configuredClasses.length > 1,
+              ),
             ).join("");
             const anyAvailable = train.generalAvailable || train.specialAvailable;
-            const anyAction = this.draft.seatGradeMode === "specific"
+            // 등급 상관없음인데 매진 열차에 일반실·특실을 나란히 두면, 고르지 않겠다던 선택을 다시 묻게 된다.
+            // 좌석을 집어 기다릴 때는 일반실 좌석표 하나만 연다. 특실을 가리려면 여정에서 등급을 지정한다.
+            const anyAction = specificGrade
               ? classButtons
               : anyAvailable
                 ? `${button({ variant: "seat", label: "바로 예약", attrs: { "data-immediate-any": train.no } })}`
-                : (["general", "special"] as SeatClass[]).map((seatClass) => seatButton(seatClass, false)).join("");
+                // An older draft may already hold special-class seats; keep their button so they stay editable.
+                : `${seatButton("general", false, false)}${this.cancellationTargets.some((target) => target.trainNo === train.no && target.seatClass === "special") ? seatButton("special", false, true) : ""}`;
             const official = train.waitlistEligible
               ? `${button({ variant: "text", label: "코레일 예약 대기", attrs: { "data-official-waitlist": train.no } })}`
               : "";
@@ -786,7 +797,7 @@ export class JariApp {
             const windowSeat = seat.column ? windowColumns.has(seat.column) : index === 0 || index === row.length - 1;
             // A numeric-label car (무궁화 등) has a synthetic column letter; show the real seat number instead.
             const cellText = seat.column && !isNumericSeatLabel(seat) ? seat.column : seat.label;
-            return `${groupChanged ? '<span class="train-aisle" aria-hidden="true">통로</span>' : ""}<button type="button" class="seat-cell ${available ? "available" : "occupied"} ${selected ? "selected" : ""} ${windowSeat ? "window-seat" : ""}" data-seat-no="${escapeHtml(seat.seatNo)}" aria-pressed="${selected}" ${selectable(seat) && !locked ? "" : "disabled"} title="${escapeHtml(description)}"><b>${escapeHtml(cellText)}</b><small>${seat.familyLabel ? "가족" : windowSeat ? "창가" : available ? "가능" : "대기"}</small></button>`;
+            return `${groupChanged ? '<span class="train-aisle" aria-hidden="true"><b>통</b><b>로</b></span>' : ""}<button type="button" class="seat-cell ${available ? "available" : "occupied"} ${selected ? "selected" : ""} ${windowSeat ? "window-seat" : ""}" data-seat-no="${escapeHtml(seat.seatNo)}" aria-pressed="${selected}" ${selectable(seat) && !locked ? "" : "disabled"} title="${escapeHtml(description)}"><b>${escapeHtml(cellText)}</b><small>${seat.familyLabel ? "가족" : windowSeat ? "창가" : available ? "가능" : "대기"}</small></button>`;
           }).join("");
           return `<div class="seat-row"><span>${escapeHtml(row[0]?.row ?? "")}</span><div class="seat-row-track">${cells}</div></div>`;
         }).join("") || (dialog.inventory.seats.length
@@ -899,8 +910,11 @@ export class JariApp {
     const applyAll = multiCar
       ? `${button({ variant: "ghost", className: "seat-apply-all", action: "apply-all-cars", label: locked ? "모든 호차 확인 중…" : "모든 호차에 적용", disabled: locked })}`
       : "";
+    // Letters and the window/aisle pair wrap as groups. A lone chip with flex-grow fills the next line,
+    // which is how "복도" became a full-width bar on narrow phones.
+    const pairChips = `${chip("pair:window", "창가", allOn(sets.window))}${sets.aisle.length ? chip("pair:aisle", "복도", allOn(sets.aisle)) : ""}`;
     return `<div class="seat-filter">
-      <div class="seat-filter-row"><span>열</span><div class="seat-chips">${columnChips}<i aria-hidden="true"></i>${chip("pair:window", "창가", allOn(sets.window))}${sets.aisle.length ? chip("pair:aisle", "복도", allOn(sets.aisle)) : ""}</div></div>
+      <div class="seat-filter-row seat-columns"><span>열</span><div class="seat-chips">${columnChips ? `<div class="seat-chip-letters">${columnChips}</div>` : ""}<div class="seat-chip-pairs">${pairChips}</div></div></div>
       <div class="seat-filter-row seat-steppers">${stepper("trim", "좌석 앞뒤 제외", trimLabel, filter.trimRows <= 0, filter.trimRows >= maxTrimRows(seats))}${carStepper}${family}</div>
       ${applyAll}
     </div>`;

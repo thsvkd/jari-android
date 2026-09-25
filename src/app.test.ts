@@ -307,6 +307,27 @@ describe("concept C application shell", () => {
     expect(root.querySelector("[data-action='trains-next']")!.textContent).toContain("1편 선택");
   });
 
+  it("keeps the special-class button for restored special seats when the cabin does not matter", async () => {
+    const demo = createDemoApi();
+    const state = await demo.bootstrap();
+    const targets: SeatTarget[] = [{
+      carNo: 1, seatNo: "demo-1-A", label: "1A", row: 1, column: "A",
+      direction: "1", floor: "", adjacencyGroup: "1:left", position: 1, rowPosition: 1,
+    }];
+    state.draft = {
+      ...state.draft!,
+      trains: ["015"],
+      seat_plan: { strategy: "independent", passengerCount: 1, trains: [{ trainNo: "015", seatClass: "special", targets }] },
+    };
+    const { app, root } = await mountLive({ bootstrap: async () => state });
+
+    app.navigate("journey");
+    root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+    await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='special']")).not.toBeNull());
+    expect(root.querySelector("[data-train-no='015'][data-seat-class='special'] em")?.textContent).toBe("선택 완료 · 1석");
+    expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")?.textContent).toContain("좌석 지정");
+  });
+
   it("drops a restored cancellation-wait target once a re-search no longer lists its train", async () => {
     const demo = createDemoApi();
     const state = await demo.bootstrap();
@@ -1101,9 +1122,9 @@ it("opens the seat dialog immediately and keeps load failures inside it", async 
   const { app, root } = await mountLive({ seatCars: () => failure.promise });
   app.navigate("journey");
   root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
-  await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='special']")).not.toBeNull());
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
 
-  root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='special']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
   expect(root.querySelector("[role='dialog'] .seat-loading")).not.toBeNull();
   expect(root.querySelector(".blocker")).toBeNull();
 
@@ -1729,6 +1750,19 @@ it("names the stepper units instead of an unqualified 없음", async () => {
   expect(trim()).toBe("1줄");
 });
 
+it("keeps a single seat button when the cabin does not matter", async () => {
+  const { app, root } = await mountLive();
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
+
+  const wait = root.querySelector("[data-train-no='015'][data-seat-class='general']");
+  expect(wait?.textContent).toContain("좌석 지정");
+  expect(root.querySelector("[data-train-no='015'][data-seat-class='special']")).toBeNull();
+  expect(root.querySelector("[data-immediate-any='025']")?.textContent).toContain("바로 예약");
+  expect(root.querySelector("[data-train-no='025'][data-seat-class]")).toBeNull();
+});
+
 it("says what each train-list button will do", async () => {
   const { app, root } = await mountLive();
   app.navigate("journey");
@@ -1738,7 +1772,8 @@ it("says what each train-list button will do", async () => {
   await vi.waitFor(() => expect(root.querySelector("[data-train-no='025'][data-seat-class='general']")).not.toBeNull());
 
   expect(root.querySelector("[data-train-no='025'][data-seat-class='general']")?.textContent).toContain("일반실 · 지금 예약할 좌석");
-  expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")?.textContent).toContain("일반실 · 기다릴 좌석 고르기");
+  expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")?.textContent).toContain("좌석 지정");
+  expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")?.textContent).not.toContain("기다릴 좌석");
   expect(root.querySelector("[data-action='trains-next']")?.textContent).toContain("다음: 조건 확인");
   root.querySelector<HTMLButtonElement>("[data-train-toggle='015']")!.click();
   expect(root.querySelector("[data-action='trains-next']")?.textContent).toContain("1편 선택 · 다음: 조건 확인");

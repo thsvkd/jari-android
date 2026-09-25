@@ -45,6 +45,46 @@ test.describe("레이아웃 @layout", () => {
     await expectCleanLayout(page, "좌석표");
   });
 
+  test("등급을 가리지 않은 매진 열차는 좌석 지정 하나이고, 창가·복도는 같은 너비예요", async ({ signedIn: page }) => {
+    await searchTrains(page);
+    const open = page.locator("article.train-card", { has: page.locator("[data-train-toggle='00101']") });
+    await expect(open.locator("[data-immediate-any]")).toContainText("바로 예약");
+    await expect(open.locator("[data-seat-class]")).toHaveCount(0);
+
+    const soldOut = page.locator("article.train-card", { has: page.locator("[data-train-toggle='00103']") });
+    const pick = soldOut.locator("[data-seat-class='general']");
+    await expect(pick).toContainText("좌석 지정");
+    await expect(pick).not.toContainText("기다릴 좌석");
+    await expect(soldOut.locator("[data-seat-class='special']")).toHaveCount(0);
+    await pick.click();
+    await expect(page.locator(".seat-cell").first()).toBeVisible();
+    await expectCleanLayout(page, "좌석 범위(등급 상관없음)");
+
+    const boxes = await page.evaluate(() => {
+      const box = (selector: string) => {
+        const node = document.querySelector(selector);
+        if (!node) return null;
+        const rect = node.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      };
+      return {
+        windowChip: box("[data-seat-filter='pair:window']"),
+        aisleChip: box("[data-seat-filter='pair:aisle']"),
+        row: box(".seat-row"),
+        mark: box(".train-aisle"),
+      };
+    });
+    expect(boxes.windowChip, "창가 칩").not.toBeNull();
+    expect(boxes.aisleChip, "복도 칩").not.toBeNull();
+    expect(boxes.row, "좌석 줄").not.toBeNull();
+    expect(boxes.mark, "통로 표시").not.toBeNull();
+    expect(Math.abs(boxes.windowChip!.width - boxes.aisleChip!.width)).toBeLessThan(2);
+    expect(Math.abs(boxes.windowChip!.y - boxes.aisleChip!.y)).toBeLessThan(2);
+    expect(boxes.aisleChip!.width).toBeLessThan((boxes.row!.width) * 0.8);
+    expect(boxes.mark!.y).toBeGreaterThanOrEqual(boxes.row!.y - 1);
+    expect(boxes.mark!.y + boxes.mark!.height).toBeLessThanOrEqual(boxes.row!.y + boxes.row!.height + 1);
+  });
+
   test("찾는 중·결제 대기", async ({ signedIn: page }) => {
     await searchTrains(page);
     await keepOnlyTrains(page, ["00101"]);
