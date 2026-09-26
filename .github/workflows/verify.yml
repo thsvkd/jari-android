@@ -36,6 +36,9 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
           cd backend && uv sync --frozen
+      # 러너 기본 글꼴에는 한글 굵은 글씨가 없어 제목이 보통 굵기·좁은 폭으로 그려져요. 레이아웃·스크린샷을 실제에 가깝게 재려고 깔아요.
+      - name: 한글 글꼴
+        run: sudo apt-get install -y --no-install-recommends fonts-noto-cjk
       - name: 전체 검증 (기기 제외)
         run: node scripts/verify.mjs --ci
       - name: e2e 결과
