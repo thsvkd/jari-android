@@ -43,7 +43,7 @@ export default defineConfig({
     { name: "phone-narrow", use: { ...phone, viewport: { width: 344, height: 780 }, deviceScaleFactor: 3 }, grep: /@layout|@visual/ },
     // 실기기: scripts/verify.mjs 가 e2e 앱을 설치하고 WebView 디버깅 포트를 넘긴 뒤에만 켜져요.
     // 스크린샷 기준은 헤드리스에서만 비교해요(기기는 상태 표시줄·글꼴이 달라요).
-    ...(process.env.JARI_DEVICE ? [{ name: "device", use: { baseURL: "https://localhost" }, grepInvert: /@visual/ }] : []),
+    ...(process.env.JARI_DEVICE_CDP ? [{ name: "device", use: { baseURL: "https://localhost" }, grepInvert: /@visual/ }] : []),
   ],
   webServer: [
     {

@@ -130,6 +130,14 @@ export async function bottomClearance(page: Page): Promise<string[]> {
 
 /** 이 화면의 레이아웃 결함이 없어야 해요. 실패 메시지에 결함을 전부 적어요. */
 export async function expectCleanLayout(page: Page, where: string, rules?: LayoutRules): Promise<void> {
+  // 막 나타나는 요소(토스트는 14px 아래에서 올라와요)를 움직이는 중에 재면 느린 기기에서 겹친다고 잘못 봐요.
+  // 끝나는 애니메이션만 기다려요. 스피너처럼 끝없이 도는 것은 빼요.
+  await page.evaluate(() => Promise.race([
+    Promise.all(document.getAnimations()
+      .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
+      .map((animation) => animation.finished.catch(() => undefined))),
+    new Promise((resolve) => setTimeout(resolve, 2000)),
+  ]));
   const problems = [...(await layoutProblems(page, rules)), ...(await bottomClearance(page))];
   expect(problems, `${where} 레이아웃`).toEqual([]);
 }

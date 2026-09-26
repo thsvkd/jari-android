@@ -20,6 +20,7 @@ const CI = process.argv.includes("--ci");
 const DEVICE = !CI || process.argv.includes("--device");
 const ONLY = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length);
 const E2E_API_PORT = 18281; // playwright.config.ts 의 E2E.api
+const DEVTOOLS_PORT = 9377; // 이 PC 의 9222 는 다른 프로그램이 써요.
 const E2E_APP = "com.jari.app.e2e";
 
 function run(command, { cwd = ROOT, env = {}, capture = false } = {}) {
@@ -102,12 +103,14 @@ function prepareDevice() {
     if (!socket) spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 500)"]);
   }
   if (!socket) throw new Error("e2e 앱의 WebView 디버깅 소켓을 찾지 못했어요.");
-  // 테스트는 이 소켓에 Playwright 의 Android API(_android)로 붙어요(e2e/fixtures.ts). 포트를 따로 넘기지 않아요.
+  adb(`forward tcp:${DEVTOOLS_PORT} localabstract:${socket.slice(1)}`);
   const top = adb(`shell "dumpsys activity activities | grep -E 'topResumedActivity|ResumedActivity:'"`);
   if (!top.includes(E2E_APP)) throw new Error(`전면 앱이 ${E2E_APP} 가 아니에요. 기기를 잠시 그대로 두세요.\n${top}`);
+  return `http://127.0.0.1:${DEVTOOLS_PORT}`;
 }
 
 function releaseDevice() {
+  spawnSync(`adb forward --remove tcp:${DEVTOOLS_PORT}`, { shell: true });
   spawnSync(`adb reverse --remove tcp:${E2E_API_PORT}`, { shell: true });
 }
 
@@ -115,9 +118,9 @@ function releaseDevice() {
 const deviceStep = [
   "실기기 e2e (com.jari.app.e2e)",
   () => {
-    prepareDevice();
+    const cdp = prepareDevice();
     try {
-      run("npx playwright test --project=device", { env: { JARI_DEVICE: E2E_APP } });
+      run("npx playwright test --project=device", { env: { JARI_DEVICE_CDP: cdp } });
     } finally {
       releaseDevice();
     }

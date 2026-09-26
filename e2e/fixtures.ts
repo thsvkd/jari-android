@@ -1,4 +1,4 @@
-import { _android, test as base, expect, type Page } from "@playwright/test";
+import { chromium, test as base, expect, type Page } from "@playwright/test";
 
 import { E2E } from "../playwright.config";
 
@@ -92,19 +92,15 @@ export const test = base.extend<{ control: Control; user: User; app: Page; signe
   // 헤드리스에서는 Playwright 의 새 페이지, 기기에서는 e2e 앱의 WebView 에 CDP 로 붙은 페이지예요.
   app: async ({ page }, use, testInfo) => {
     if (testInfo.project.name !== "device") return use(page);
-    const pkg = process.env.JARI_DEVICE;
-    if (!pkg) throw new Error("JARI_DEVICE 가 없어요. scripts/verify.mjs 가 기기를 준비한 뒤 실행해요.");
-    // connectOverCDP 는 구글 WebView(에뮬레이터)가 모르는 명령(Browser.setDownloadBehavior)을 보내요. Android 전용 API 로 붙어요.
-    const serial = process.env.ANDROID_SERIAL;
-    const devices = await _android.devices();
-    const device = devices.find((candidate) => !serial || candidate.serial() === serial);
-    if (!device) throw new Error(`기기를 찾지 못했어요(${devices.map((candidate) => candidate.serial()).join(", ") || "없음"}).`);
-    try {
-      const webview = await device.webView({ pkg }, { timeout: 20_000 });
-      await use(await webview.page());
-    } finally {
-      await device.close();
-    }
+    const endpoint = process.env.JARI_DEVICE_CDP;
+    if (!endpoint) throw new Error("JARI_DEVICE_CDP 가 없어요. scripts/verify.mjs 가 기기를 준비한 뒤 실행해요.");
+    // noDefaults: 붙은 WebView 에 Playwright 기본 설정(다운로드·색상 에뮬레이션 등)을 걸지 않아요.
+    // 구글 WebView(에뮬레이터)는 다운로드 설정 명령(Browser.setDownloadBehavior)을 거부해 연결부터 실패해요.
+    const browser = await chromium.connectOverCDP(endpoint, { noDefaults: true });
+    const webview = browser.contexts()[0]?.pages()[0];
+    if (!webview) throw new Error("기기의 e2e 앱 WebView 를 찾지 못했어요.");
+    await use(webview);
+    await browser.close();
   },
   control: async ({}, use) => {
     const control = new Control();

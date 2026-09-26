@@ -113,6 +113,9 @@ class Stack:
 
     def start(self) -> None:
         fake = TcpFakeServer(("127.0.0.1", self.args.redis_port))
+        # fakeredis 는 연결마다 데몬이 아닌 스레드를 둬요. 스택 자신의 연결처럼 열린 채 남은 연결이 있으면
+        # 종료 신호 뒤에도 파이썬이 그 스레드를 기다리며 끝나지 않아요(리눅스 CI 에서 드러남).
+        fake.daemon_threads = True
         threading.Thread(target=fake.serve_forever, daemon=True).start()
         subprocess.run(
             [
