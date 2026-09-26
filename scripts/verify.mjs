@@ -1,19 +1,23 @@
 #!/usr/bin/env node
-// 커밋 전 전체 검증. 모두 통과하면 지금 스테이징된 내용(트리 해시)에 도장을 찍고, pre-commit 훅은 그 도장이 있어야 커밋을 받아요.
+// 전체 검증. 실기기까지 모두 통과하면 지금 스테이징된 내용(트리 해시)을 실기기 검증 기록에 남기고,
+// 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 그 기록을 봐요. 커밋 훅은 빠른 검사만 해요.
 //
-//   npm run verify            실기기 e2e → 유닛·모듈 → 통합(실서버+가짜 코레일) → 헤드리스 e2e·레이아웃·스크린샷 → 도장
-//   npm run verify -- --ci    기기 없이(GitHub Actions). 도장은 찍지 않아요.
-//   npm run verify -- --only=실기기   이름에 그 말이 든 단계만(고치는 동안). 도장은 찍지 않아요.
+//   npm run verify            실기기 e2e → 유닛·모듈 → 통합(실서버+가짜 코레일) → 헤드리스 e2e·레이아웃·스크린샷 → 기록
+//   npm run verify -- --ci    기기 없이(GitHub Actions). 기록은 남기지 않아요.
+//   npm run verify -- --ci --device --only=실기기   GitHub Actions 의 Android 에뮬레이터로 기기 단계만.
+//   npm run verify -- --only=실기기   이름에 그 말이 든 단계만(고치는 동안). 기록은 남기지 않아요.
 //
 // 실제 코레일에는 닿지 않아요. 실기기 단계는 com.jari.app.e2e 를 따로 설치해 실제 앱의 로그인·데이터를 건드리지 않아요.
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const BACKEND = join(ROOT, "backend");
 const CI = process.argv.includes("--ci");
+// CI 에서도 기기(에뮬레이터)가 붙어 있으면 기기 단계를 돌려요.
+const DEVICE = !CI || process.argv.includes("--device");
 const ONLY = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length);
 const E2E_API_PORT = 18281; // playwright.config.ts 의 E2E.api
 const DEVTOOLS_PORT = 9377; // 이 PC 의 9222 는 다른 프로그램이 써요.
@@ -37,7 +41,7 @@ function run(command, { cwd = ROOT, env = {}, capture = false } = {}) {
 const git = (args) => run(`git ${args}`, { capture: true });
 const adb = (args) => run(`adb ${args}`, { capture: true });
 
-// 도장이 뜻을 가지려면 검증한 파일이 곧 커밋할 파일이어야 해요.
+// 기록이 뜻을 가지려면 검증한 파일이 곧 커밋할 파일이어야 해요.
 function stagedTree() {
   const unstaged = spawnSync("git diff --quiet", { cwd: ROOT, shell: true }).status !== 0;
   const untracked = git("ls-files --others --exclude-standard");
@@ -73,7 +77,14 @@ function prepareDevice() {
       "기기 화면이 꺼져 있거나 잠겨 있어요. 잠금을 풀고 검증이 끝날 때까지 화면을 켜 두세요(개발자 옵션의 '화면 켜진 상태로 유지'가 편해요).",
     );
   }
-  run(`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1 -E2ePort ${E2E_API_PORT}`);
+  if (process.platform === "win32") {
+    run(`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1 -E2ePort ${E2E_API_PORT}`);
+  } else {
+    // build-android.ps1 -E2ePort 와 같은 세 단계(리눅스 CI 러너용): 로컬 서버 주소로 웹 번들 → Capacitor 동기화 → e2e APK.
+    run("npm run build", { env: { VITE_API_BASE_URL: `http://127.0.0.1:${E2E_API_PORT}` } });
+    run("npx cap sync android");
+    run("./gradlew assembleE2e", { cwd: join(ROOT, "android") });
+  }
   run(`adb install -r "${join(ROOT, "android/app/build/outputs/apk/e2e/app-e2e.apk")}"`);
   adb(`reverse tcp:${E2E_API_PORT} tcp:${E2E_API_PORT}`);
   adb(`shell am force-stop ${E2E_APP}`);
@@ -117,7 +128,7 @@ const deviceStep = [
 ];
 
 const steps = [
-  ...(CI ? [] : [deviceStep]),
+  ...(DEVICE ? [deviceStep] : []),
   ["프론트 유닛·모듈 (vitest)", () => run("npm test")],
   ["프론트 타입·빌드", () => run("npm run build && npx tsc -p e2e/tsconfig.json --noEmit")],
   ["데모 빌드", () => run("npm run build:demo")],
@@ -133,8 +144,8 @@ const steps = [
 const partial = CI || Boolean(ONLY);
 const before = partial ? null : stagedTree();
 if (before && !before.tree) {
-  // 몇 분을 돌리고 나서 도장을 못 찍는다고 알리는 것보다 지금 멈추는 게 나아요.
-  console.error(`도장을 찍을 수 없는 상태예요.\n${before.reason}\n테스트만 돌리려면 npm run verify -- --ci`);
+  // 몇 분을 돌리고 나서 기록을 못 남긴다고 알리는 것보다 지금 멈추는 게 나아요.
+  console.error(`실기기 검증 기록을 남길 수 없는 상태예요.\n${before.reason}\n테스트만 돌리려면 npm run verify -- --ci`);
   process.exit(1);
 }
 const timings = [];
@@ -153,17 +164,14 @@ for (const [name, step] of steps.filter(([name]) => !ONLY || name.includes(ONLY)
 console.log(`\n✓ 전체 검증 통과\n${timings.map((line) => `  ${line}`).join("\n")}`);
 if (partial) process.exit(0);
 
-// 검증 중에 파일이 바뀌었다면 그 도장은 거짓이에요.
+// 검증 중에 파일이 바뀌었다면 그 기록은 거짓이에요.
 const after = stagedTree();
 if (!before.tree || before.tree !== after.tree) {
-  console.error(`\n도장은 찍지 않았어요. ${before.reason || after.reason || "검증 중에 스테이징된 내용이 바뀌었어요."}`);
+  console.error(`\n실기기 검증 기록은 남기지 않았어요. ${before.reason || after.reason || "검증 중에 스테이징된 내용이 바뀌었어요."}`);
   process.exit(1);
 }
-const stamp = resolve(ROOT, git("rev-parse --git-dir"), "jari-verified");
-writeFileSync(stamp, JSON.stringify({ tree: after.tree, at: new Date().toISOString(), steps: timings }, null, 2));
-console.log(`\n도장: ${after.tree} (${existsSync(stamp) ? stamp : ""})`);
 // 실기기까지 통과한 트리는 따로 쌓아 둬요. 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 이 목록을 봐요.
 // 워크트리끼리 같이 쓰도록 공용 git 디렉터리에 둬요.
 const deviceList = resolve(ROOT, git("rev-parse --git-common-dir"), "jari-device-verified");
 appendFileSync(deviceList, `${after.tree} ${new Date().toISOString()}\n`);
-console.log(`실기기 검증 기록: ${deviceList}`);
+console.log(`\n실기기 검증 기록: ${after.tree} (${deviceList})`);

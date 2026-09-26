@@ -1,18 +1,25 @@
-# 실기기를 뺀 전체 검증. main 브랜치 보호 규칙에서 이 작업을 필수로 두면, 통과하지 않은 변경은 병합되지 않아요.
-# 실기기 e2e 는 로컬 npm run verify 가 맡고, 커밋 전 도장으로 확인해요.
+# 푸시·PR 마다 도는 검증. 커밋 훅은 빠른 검사만 하고, 무거운 검증은 여기서 해요.
+#   checks: 유닛·모듈 → 통합(실서버 + 가짜 코레일) → 헤드리스 e2e·레이아웃·스크린샷(리눅스 기준 이미지)
+#   device: GitHub 러너의 Android 에뮬레이터에 com.jari.app.e2e 를 깔고 기기 단계를 그대로 돌려요.
+# 실폰 확인은 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 요구해요(로컬 npm run verify).
 name: verify
 
 on:
   pull_request:
   push:
-    branches: [main]
+    # 모든 브랜치: main 보호 규칙은 이 검사를 통과한 커밋만 받으니, 브랜치에서 먼저 초록불을 보고 main 으로 올려요.
+    branches: ["**"]
 
 concurrency:
   group: verify-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # 테스트의 날짜·시각은 한국 시간을 가정해요. 러너 기본값(UTC)이면 자정 근처 계산이 어긋나요.
+  TZ: Asia/Seoul
+
 jobs:
-  verify:
+  checks:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -29,12 +36,61 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
           cd backend && uv sync --frozen
-      - name: 전체 검증 (실기기 제외)
+      - name: 전체 검증 (기기 제외)
         run: node scripts/verify.mjs --ci
       - name: e2e 결과
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-results
+          path: |
+            test-results/
+            e2e/__screens__/**/*-linux.png
+          retention-days: 7
+
+  device:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: KVM(에뮬레이터 하드웨어 가속)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: 의존성
+        run: |
+          npm ci
+          npx playwright install chromium
+          cd backend && uv sync --frozen
+      - name: 에뮬레이터에서 기기 단계
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_7
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # 부팅 직후 잠금 화면을 걷어요. 검증 스크립트는 잠긴 기기를 거부해요.
+          script: |
+            adb shell input keyevent 82
+            node scripts/verify.mjs --ci --device --only=실기기
+      - name: 기기 단계 결과
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-results
           path: test-results/
           retention-days: 7
