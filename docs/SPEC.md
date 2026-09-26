@@ -16,7 +16,7 @@
 
 - 진입점은 둘: `korail_bot.mobile`(API, Dockerfile CMD)과 `korail_bot.mobile.worker`(`mobile/process.py`가 spawn). 워커는 `telegramBot/telebotBackProcess.py`의 검색 루프를 그대로 쓴다.
 - 워커는 **API 컨테이너 안의 자식 프로세스**다. API를 재시작하면 워커도 죽는다. 배포 스크립트는 워커가 있으면 거부한다(`--force` 시 재시작 후 `reconcile_after_restart`가 기록을 보고 다시 띄우려 하지만 보장하지 않는다).
-- 실서버: pit5, `scripts/deploy-backend.sh --host pit5 --root /home/pi/services/teum-android --compose-file compose.yaml --compose-file pit5-edge.yaml --ref <sha>`. 배포 전 이미지는 `jari-api:pre-<sha>`로 태그된다.
+- 실서버: pit5, `scripts/deploy-backend.sh --host pit5 --root /home/pi/services/jari-android --compose-file compose.yaml --compose-file pit5-edge.yaml --ref <sha>`. 배포 전 이미지는 `jari-api:pre-<sha>`로 태그된다.
 
 ## 2. 앱 구조
 
@@ -107,4 +107,3 @@ seatPlanSummary: "015 일반실 3호차 5A·5B · 019 좌석 무관" | ""
 - 알림 항목은 서버 원문 문자열(제목·본문·기한 분리 미구현). 좌석 셀 라벨은 상태·위치 축이 섞여 있다.
 - 즐겨찾기에 좌석표 자리(seat_plan) 저장 안 함.
 - `korail_mobile_api` 상류 미수정(영숫자 종별 코드).
-- pit5 배포 디렉터리 이름이 `teum-android`(내용은 jari).
