@@ -1,4 +1,0 @@
-/* 전체 화면을 이어 붙여 찍으면 고정된 하단 메뉴가 첫 화면 높이에 박혀 중간 내용을 가려요.
-   찍을 때만 문서 맨 아래에 둬요. 화면에는 메뉴 높이만큼 아래 여백이 있어 끝까지 내렸을 때와 같아요. */
-.bottom-nav { position: absolute !important; top: auto !important; bottom: 0 !important; }
-body, .app-shell { position: relative; }

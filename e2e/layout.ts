@@ -93,6 +93,34 @@ export async function layoutProblems(page: Page, rules: LayoutRules = {}): Promi
     if (header && first && visible(first) && window.scrollY === 0 && first.getBoundingClientRect().top < header.bottom - 0.5) {
       problems.push("머리글이 화면 첫 요소를 가림");
     }
+
+    // 5-1. 붙박이 버튼과 하단 메뉴 사이는 --cta-gap 이에요. 여기(스크롤 맨 위)서는 목록이 길면 버튼이 떠 있고,
+    //      bottomClearance(맨 아래)에서는 제자리에 있어요. 두 자리 모두 같은 간격이어야 해요.
+    const stickyButton = document.querySelector(".sticky-action");
+    if (nav && stickyButton && visible(stickyButton)) {
+      const want = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--cta-gap"));
+      const gap = nav.top - stickyButton.getBoundingClientRect().bottom;
+      if (gap >= 0 && Math.abs(gap - want) > 1) problems.push(`붙박이 버튼과 하단 메뉴 사이 ${Math.round(gap)}px (규칙 ${want}px, 떠 있을 때)`);
+    }
+
+    // 6. 화면 폭 버튼은 화면 좌우 여백선(--gutter)에 딱 맞아요. 홈·내 예약·즐겨찾기의 큰 버튼 폭이 제각각이던 문제를 잡아요.
+    //    카드·시트·나란한 두 칸 안의 버튼과 글자 폭 버튼은 이 규칙 밖이에요.
+    const screen = document.querySelector("main.screen");
+    if (screen) {
+      const box = screen.getBoundingClientRect();
+      const style = getComputedStyle(screen);
+      const left = box.left + parseFloat(style.paddingLeft);
+      const right = box.right - parseFloat(style.paddingRight);
+      for (const button of screen.querySelectorAll(".button")) {
+        if (!visible(button) || ignored(button)) continue;
+        if (button.closest(".card, .notice, .schedule-panel, .favourite-row, .two-columns, .invite-actions, .split-actions, .action-sheet-actions")) continue;
+        const edge = button.getBoundingClientRect();
+        if (edge.width < (right - left) * 0.6) continue;
+        if (Math.abs(edge.left - left) > 1 || Math.abs(edge.right - right) > 1) {
+          problems.push(`여백선에서 벗어난 화면 폭 버튼(왼쪽 ${Math.round(edge.left - left)}px, 오른쪽 ${Math.round(right - edge.right)}px): ${name(button)}`);
+        }
+      }
+    }
     return problems;
   }, { minTarget: rules.minTarget ?? 48, ignore: rules.ignore ?? [], smaller: SMALLER_TARGETS });
 }
@@ -101,7 +129,7 @@ export async function layoutProblems(page: Page, rules: LayoutRules = {}): Promi
 export async function bottomClearance(page: Page): Promise<string[]> {
   // 앱이 막 펼친 판을 부드럽게 스크롤해 보여 주는 중이면 내린 자리를 도로 끌어올려요(느린 실기기에서 드러남).
   // 그래서 맨 아래에 두 번 잇달아 멈춰 있는 것을 본 그 자리에서 곧바로 재요.
-  const problem = await page.evaluate(async () => {
+  const problem: string[] = await page.evaluate(async () => {
     const root = document.scrollingElement!;
     const pause = () => new Promise((resolve) => setTimeout(resolve, 120));
     let previous = -1;
@@ -112,20 +140,29 @@ export async function bottomClearance(page: Page): Promise<string[]> {
       if (atBottom && root.scrollTop === previous) break;
       previous = atBottom ? root.scrollTop : -1;
     }
+    const problems: string[] = [];
     const nav = document.querySelector(".bottom-nav")?.getBoundingClientRect();
+    // 붙박이 버튼(즐겨찾기 추가·다음: 조건 확인)과 하단 메뉴 사이는 떠 있든 제자리에 있든 --cta-gap 이에요.
+    const sticky = document.querySelector(".sticky-action")?.getBoundingClientRect();
+    if (nav && sticky && sticky.height > 0) {
+      const want = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--cta-gap"));
+      const gap = nav.top - sticky.bottom;
+      if (Math.abs(gap - want) > 1) problems.push(`붙박이 버튼과 하단 메뉴 사이 ${Math.round(gap)}px (규칙 ${want}px)`);
+    }
     const items = [...document.querySelectorAll("main *")].filter((node) => {
       const box = node.getBoundingClientRect();
       return box.height > 0 && getComputedStyle(node).position !== "sticky";
     });
     const last = Math.max(...items.map((node) => node.getBoundingClientRect().bottom));
-    if (!nav || last <= nav.top + 0.5) return null;
+    if (!nav || last <= nav.top + 0.5) return problems;
     // 무엇이 가리는지 적어 두면 다시 났을 때 바로 원인을 볼 수 있어요.
     const culprit = items.find((node) => node.getBoundingClientRect().bottom === last);
     const where = culprit ? `<${culprit.tagName.toLowerCase()} ${culprit.getAttribute("class") ?? ""}>` : "";
-    return `끝까지 내려도 마지막 내용이 하단 메뉴에 ${Math.round(last - nav.top)}px 가려요 ${where} (scrollTop ${Math.round(root.scrollTop)}/${root.scrollHeight - window.innerHeight})`;
+    problems.push(`끝까지 내려도 마지막 내용이 하단 메뉴에 ${Math.round(last - nav.top)}px 가려요 ${where} (scrollTop ${Math.round(root.scrollTop)}/${root.scrollHeight - window.innerHeight})`);
+    return problems;
   });
   await page.evaluate(() => window.scrollTo(0, 0));
-  return problem ? [problem] : [];
+  return problem;
 }
 
 /** 이 화면의 레이아웃 결함이 없어야 해요. 실패 메시지에 결함을 전부 적어요. */

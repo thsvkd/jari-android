@@ -1,5 +1,5 @@
 # 푸시·PR 마다 도는 검증. 커밋 훅은 빠른 검사만 하고, 무거운 검증은 여기서 해요.
-#   checks: 유닛·모듈 → 통합(실서버 + 가짜 코레일) → 헤드리스 e2e·레이아웃·스크린샷(리눅스 기준 이미지)
+#   checks: 유닛·모듈 → 통합(실서버 + 가짜 코레일) → 헤드리스 e2e·레이아웃 측정
 #   device: GitHub 러너의 Android 에뮬레이터에 com.jari.app.e2e 를 깔고 기기 단계를 그대로 돌려요.
 # 실폰 확인은 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 요구해요(로컬 npm run verify).
 name: verify
@@ -36,7 +36,7 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
           cd backend && uv sync --frozen
-      # 러너 기본 글꼴에는 한글 굵은 글씨가 없어 제목이 보통 굵기·좁은 폭으로 그려져요. 레이아웃·스크린샷을 실제에 가깝게 재려고 깔아요.
+      # 러너 기본 글꼴에는 한글 굵은 글씨가 없어 제목이 보통 굵기·좁은 폭으로 그려져요. 글자 폭·넘침을 실제에 가깝게 재려고 깔아요.
       # 앱 글꼴 목록의 "Noto Sans KR" 이름을 설치된 "Noto Sans CJK KR" 로 이어요(앱 CSS 는 그대로 둬요).
       - name: 한글 글꼴
         run: |
@@ -58,9 +58,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-results
-          path: |
-            test-results/
-            e2e/__screens__/**/*-linux.png
+          path: test-results/
           retention-days: 7
 
   device:
