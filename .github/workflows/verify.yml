@@ -77,7 +77,8 @@ jobs:
       - name: 에뮬레이터에서 기기 단계
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          # API 34 이미지의 WebView(113)는 Playwright 가 붙을 때 쓰는 CDP 명령(Browser.setDownloadBehavior)을 몰라요. 더 새 이미지를 써요.
+          api-level: 36
           arch: x86_64
           target: google_apis
           profile: pixel_7

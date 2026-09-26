@@ -1,3 +1,4 @@
+import signal
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -65,7 +66,8 @@ def patch_poller(monkeypatch, *captures):
     that took one run to 19 GB.
     """
     poller = Mock()
-    poller.poll_once.side_effect = [*captures, SearchStopped(0)]
+    # 실제로 검색을 멈추는 신호예요. 0 은 Windows 에만 있는 신호 번호(CTRL_C_EVENT)라 리눅스 CI 에서 깨졌어요.
+    poller.poll_once.side_effect = [*captures, SearchStopped(signal.SIGTERM)]
     monkeypatch.setattr(
         "korail_bot.telegramBot.telebotBackProcess.CancellationWaitService",
         Mock(return_value=poller),
