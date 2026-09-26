@@ -59,7 +59,8 @@ export async function openApp(page: Page): Promise<void> {
   // 기기 WebView 에 CDP 로 붙은 페이지에는 baseURL 이 없어요. 이미 열린 앱 주소(https://localhost/)를 기준으로 해요.
   const current = page.url();
   await page.goto(current.startsWith("http") ? new URL("/", current).href : "/");
-  await expect(page.locator(".auth-shell, main.screen").first()).toBeVisible();
+  // 앱을 막 띄운 기기의 첫 로딩(WebView 준비·Keystore 읽기)은 에뮬레이터와 느린 폰에서 10초를 넘기기도 해요.
+  await expect(page.locator(".auth-shell, main.screen").first()).toBeVisible({ timeout: 30_000 });
   if (await page.locator(".auth-shell").count()) return;
   await page.locator(".bottom-nav [data-view='settings']").click();
   await page.locator("[data-action='app-logout']").click();
