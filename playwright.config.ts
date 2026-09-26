@@ -25,7 +25,8 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   retries: 0,
-  // 스크린샷 기준 이미지는 글꼴이 번들되지 않아 OS 마다 따로예요(-win32 로컬, -linux GitHub Actions).
+  // 스크린샷 비교는 GitHub Actions(리눅스)에서만 해요. 기준 이미지가 글꼴 때문에 OS 마다 달라 리눅스 한 벌만 둬요.
+  grepInvert: process.env.CI ? undefined : /@visual/,
   timeout: 60_000,
   expect: { timeout: 10_000 },
   reporter: [["list"], ["html", { open: "never", outputFolder: "test-results/e2e-report" }]],

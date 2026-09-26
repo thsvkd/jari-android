@@ -4,7 +4,7 @@ import { expect, openApp, test } from "./fixtures";
 import { keepOnlyTrains, pickTime, searchTrains, waitForPaymentCard } from "./flows";
 
 // 화면 단위 스크린샷 비교 @visual. 매번 바뀌는 글자(사용자 이름, 남은 시간, 상대 시각)는 가려요.
-// 기준 이미지는 폰트가 OS 마다 달라 -win32/-linux 로 따로 있어요. 바꾸려면 사람이 보고 승인해요.
+// 기준 이미지는 GitHub Actions(리눅스)용 -linux 한 벌만 있고, 로컬에서는 이 파일을 건너뛰어요. 바꾸려면 사람이 보고 승인해요.
 
 /**
  * 날마다·분마다 달라지는 글자를 고정값으로 바꿔요. 그대로 두면 기준 이미지가 날짜가 바뀔 때마다 깨져요.
