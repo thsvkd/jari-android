@@ -8,7 +8,7 @@
 // 실제 코레일에는 닿지 않아요. 실기기 단계는 com.jari.app.e2e 를 따로 설치해 실제 앱의 로그인·데이터를 건드리지 않아요.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -162,3 +162,8 @@ if (!before.tree || before.tree !== after.tree) {
 const stamp = resolve(ROOT, git("rev-parse --git-dir"), "jari-verified");
 writeFileSync(stamp, JSON.stringify({ tree: after.tree, at: new Date().toISOString(), steps: timings }, null, 2));
 console.log(`\n도장: ${after.tree} (${existsSync(stamp) ? stamp : ""})`);
+// 실기기까지 통과한 트리는 따로 쌓아 둬요. 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 이 목록을 봐요.
+// 워크트리끼리 같이 쓰도록 공용 git 디렉터리에 둬요.
+const deviceList = resolve(ROOT, git("rev-parse --git-common-dir"), "jari-device-verified");
+appendFileSync(deviceList, `${after.tree} ${new Date().toISOString()}\n`);
+console.log(`실기기 검증 기록: ${deviceList}`);

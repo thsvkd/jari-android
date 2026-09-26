@@ -6,7 +6,7 @@ Android 앱과 독립 예약 API 서버를 함께 관리합니다. 루트의 Typ
 
 - 변경 전 관련 코드를 읽고 기존 변경을 보존합니다. 기능 작업은 별도 워크트리를 사용합니다.
 - 커밋 메시지는 한국어 현재형 평서문을 사용합니다.
-- 커밋 전 검증: 변경을 모두 `git add` 한 뒤 `npm run verify`. 유닛·모듈(vitest, pytest) → 통합(`backend/tests/e2e`, 실서버 + 가짜 코레일) → Playwright e2e·레이아웃(헤드리스 라이트·다크 + 실기기 `com.jari.app.e2e`)을 모두 통과해야 스테이징된 트리에 도장이 찍히고, pre-commit 훅은 도장 없는 커밋을 거부합니다. 실기기는 잠금을 풀고 화면을 켜 둡니다. 폰과 에뮬레이터처럼 여러 대가 붙어 있으면 `ANDROID_SERIAL=<serial>`로 하나를 고릅니다. 에뮬레이터는 폰이 없을 때의 보조이고, 화면 최종 확인은 실기기로 합니다(삼성 글꼴·WebView 버전 차이).
+- 커밋 전 검증: 변경을 모두 `git add` 한 뒤 `npm run verify`. 유닛·모듈(vitest, pytest) → 통합(`backend/tests/e2e`, 실서버 + 가짜 코레일) → Playwright e2e·레이아웃(헤드리스 라이트·다크 + 실기기 `com.jari.app.e2e`)을 모두 통과해야 스테이징된 트리에 도장이 찍히고, pre-commit 훅은 도장 없는 커밋을 거부합니다. 실기기는 잠금을 풀고 화면을 켜 둡니다. 폰과 에뮬레이터처럼 여러 대가 붙어 있으면 `ANDROID_SERIAL=<serial>`로 하나를 고릅니다. 에뮬레이터는 폰이 없을 때의 보조이고, 화면 최종 확인은 실기기로 합니다(삼성 글꼴·WebView 버전 차이). 릴리스 태그(`v*`)는 실기기 포함 전체 검증을 통과한 커밋에만 푸시됩니다(`.githooks/pre-push`). 태그는 로컬에서 만들어 푸시한 뒤 `gh release create`로 올립니다(`gh`가 태그를 새로 만들면 훅을 거치지 않아요).
 - 사용자가 보는 흐름·화면을 바꾸면 `e2e/`에 그 흐름을 추가하고, 새 화면·상태는 `expectCleanLayout` 으로 레이아웃을 잽니다. 가짜 객체를 손으로 짓지 말고 라이브러리의 실제 클래스로 만듭니다(`backend/tests/e2e/fake_korail`).
 - 고치는 동안은 `npm run verify -- --only=<단계 이름 일부>`, `npm run test:e2e`, backend의 `uv run --frozen pytest tests/unit -q` 로 부분만 돌립니다. 부분 실행은 도장을 찍지 않습니다.
 - Docker 구성은 `compose.yaml`을 사용합니다. 실제 서버 시작·재시작 전 검색 및 예약 상태를 확인하고 사용자 승인을 받습니다.
