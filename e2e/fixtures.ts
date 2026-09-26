@@ -89,7 +89,42 @@ export async function nextPoll(page: Page): Promise<void> {
   await page.clock.setSystemTime(new Date());
 }
 
-export const test = base.extend<{ control: Control; user: User; app: Page; signedIn: Page }>({
+/**
+ * 에뮬레이터를 막 띄운 뒤 처음 1~2분은 앱을 열어도 런치 화면("여정을 불러오고 있어요")에서 멈춰요.
+ * CI 에서는 첫 테스트 1~3개가 openApp 의 30초를 넘겨 실패했어요(매번 새로 연 뒤에야 풀렸어요).
+ * 테스트마다 기다림을 늘리지 않고, 기기 워커가 시작할 때 한 번만 앱이 처음 그려질 때까지 다시 열며 기다려요.
+ */
+async function warmUpDevice(endpoint: string): Promise<void> {
+  const browser = await chromium.connectOverCDP(endpoint, { noDefaults: true });
+  try {
+    const webview = browser.contexts()[0]?.pages()[0];
+    if (!webview) throw new Error("기기의 e2e 앱 WebView 를 찾지 못했어요.");
+    const deadline = Date.now() + 240_000;
+    for (;;) {
+      const current = webview.url();
+      await webview.goto(current.startsWith("http") ? new URL("/", current).href : "/");
+      const ready = await webview
+        .locator(".auth-shell, main.screen")
+        .first()
+        .waitFor({ state: "visible", timeout: 30_000 })
+        .then(() => true, () => false);
+      if (ready) return;
+      if (Date.now() > deadline) throw new Error("기기 앱이 4분 동안 처음 화면을 그리지 못했어요.");
+    }
+  } finally {
+    await browser.close();
+  }
+}
+
+export const test = base.extend<{ control: Control; user: User; app: Page; signedIn: Page }, { deviceWarm: void }>({
+  deviceWarm: [
+    async ({}, use, workerInfo) => {
+      const endpoint = process.env.JARI_DEVICE_CDP;
+      if (workerInfo.project.name === "device" && endpoint) await warmUpDevice(endpoint);
+      await use();
+    },
+    { scope: "worker", auto: true, timeout: 300_000 },
+  ],
   // 헤드리스에서는 Playwright 의 새 페이지, 기기에서는 e2e 앱의 WebView 에 CDP 로 붙은 페이지예요.
   app: async ({ page }, use, testInfo) => {
     if (testInfo.project.name !== "device") return use(page);
