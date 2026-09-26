@@ -47,6 +47,7 @@ from korail_bot.services.rail_service import (
 )
 from korail_bot.utils.logger import get_logger
 from korail_bot.utils.privacy import mask_phone
+from korail_bot.utils.timezone import RAIL_TIMEZONE
 
 logger = get_logger(__name__)
 
@@ -204,6 +205,8 @@ class KorailService(RailService):
         self._modern_client: KorailClient | None = None
         self._modern_seat_context: tuple | None = None
         self._seat_layout_references: dict[tuple, object] = {}
+        # 열차가 이미 떠났는지 가를 때 쓰는 지금 시각(한국 시간). 테스트는 바꿔 끼워요.
+        self.clock = lambda: datetime.now(RAIL_TIMEZONE)
 
         # Log class methods to verify correct version is loaded
         logger.debug(
@@ -481,6 +484,10 @@ class KorailService(RailService):
         if not self._logged_in or client is None:
             raise ValueError("좌석을 조회하려면 먼저 로그인해 주세요.")
         cabin = self._seat_class(seat_class)
+        if self._departed(train):
+            # 떠난 열차의 좌석은 고를 수도 기다릴 수도 없어요. 코레일에 묻기 전에 까닭을 알려요
+            # (전에는 빈 호차 목록이 돌아와 앱에 "좌석표가 아직 제공되지 않아요"로만 보였어요).
+            raise ValueError("이미 출발한 열차예요. 열차 목록을 새로 조회해 주세요.")
         key = (self._seat_key(train), cabin.value, passenger_count)
         try:
             response = client.get_seat_cars(
@@ -488,11 +495,22 @@ class KorailService(RailService):
                 passenger_count=passenger_count,
                 room_class_code=cabin.value,
             )
-            layout_train = train
-            self._seat_layout_references.pop(key, None)
         except KorailAppError as exc:
             if not self._is_no_remaining_seats(exc):
                 raise
+            response = None
+        if response is not None and response.cars:
+            layout_train = train
+            self._seat_layout_references.pop(key, None)
+        else:
+            # 오류 없이 호차 0개가 와도 "잔여석이 없습니다"와 같이 다뤄요: 앱에는 빈 목록이 "좌석표 없음"으로만
+            # 보였어요. 가까운 날 편성으로 좌석을 고르게 하고, 편성이 없으면 그 까닭을 알려요.
+            if response is not None:
+                logger.info(
+                    "Korail listed no %s cars; treating it as sold out %s",
+                    seat_class,
+                    self.describe_train_row(train),
+                )
             if not allow_layout_reference:
                 # A caller that books rather than draws wants "no car has a
                 # seat", not another date's formation, and not the search it
@@ -509,6 +527,16 @@ class KorailService(RailService):
             layout_passenger_count,
         )
         return response
+
+    def _departed(self, train) -> bool:
+        """출발 일시가 지금(한국 시간)보다 이르면 True. 일시를 읽을 수 없으면 코레일에 맡겨요."""
+        try:
+            departs = datetime.strptime(
+                f"{train.departure_date}{str(train.departure_time)[:4]}", "%Y%m%d%H%M"
+            ).replace(tzinfo=RAIL_TIMEZONE)
+        except (AttributeError, TypeError, ValueError):
+            return False
+        return departs <= self.clock()
 
     def seat_layout_is_reference(self, train, seat_class: str, passenger_count: int = 1) -> bool:
         """Whether selection uses the same train number on a nearby date."""

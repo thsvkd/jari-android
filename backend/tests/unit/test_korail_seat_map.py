@@ -20,12 +20,15 @@ from korail_bot.services.seat_map_service import (
     SeatMapNotFoundError,
     SeatMapService,
 )
+from korail_bot.utils.timezone import RAIL_TIMEZONE
 
 
 def service_with_modern_client() -> KorailService:
     service = KorailService()
     service._logged_in = True
     service._modern_client = MagicMock()
+    # 아래 열차들(9월 14일 등)이 아직 떠나지 않은 시각이에요.
+    service.clock = lambda: datetime(2026, 9, 1, 9, 0, tzinfo=RAIL_TIMEZONE)
     return service
 
 
@@ -125,6 +128,47 @@ def test_sold_out_train_uses_nearby_matching_formation_for_seat_selection():
     service._modern_client.get_seat_inventory.assert_called_once_with(
         reference, 3, passenger_count=1, room_class_code="1"
     )
+
+
+def test_a_departed_train_says_so_without_asking_korail():
+    service = service_with_modern_client()
+    service.clock = lambda: datetime(2026, 9, 26, 17, 15, tzinfo=RAIL_TIMEZONE)
+    train = SimpleNamespace(train_no="107", departure_date="20260926", departure_time="171300")
+
+    with pytest.raises(ValueError, match="이미 출발한 열차"):
+        service.seat_cars(train, "special", 1)
+    service._modern_client.get_seat_cars.assert_not_called()
+
+
+def test_an_empty_car_list_is_read_as_sold_out_and_shows_a_nearby_formation():
+    # KTX 107 특실(2026-09-26): 코레일이 오류 없이 호차 0개를 주자 앱에 "특실 좌석표가 아직 제공되지 않아요"만 떴어요.
+    service = service_with_modern_client()
+    train = SimpleNamespace(
+        train_no="107",
+        train_class_code="00",
+        departure_date="20260926",
+        departure_time="171300",
+        departure_station_name="서울",
+        arrival_station_name="부산",
+    )
+    reference = SimpleNamespace(
+        train_no="107", train_class_code="00", departure_date="20261003", departure_time="171300"
+    )
+    cars = SeatCarListResponse(cars=(SeatCar(4, "특실", 1, ()),))
+    service._modern_client.get_seat_cars.side_effect = [SeatCarListResponse(train_no="107"), cars]
+    service._modern_client.search_trains.return_value = SimpleNamespace(trains=[reference])
+
+    assert service.seat_cars(train, "special", 1) is cars
+    assert service.seat_layout_is_reference(train, "special", 1)
+
+
+def test_booking_takes_an_empty_car_list_as_no_seat_without_a_reference_search():
+    service = service_with_modern_client()
+    train = SimpleNamespace(train_no="107", departure_date="20260926", departure_time="171300")
+    service._modern_client.get_seat_cars.return_value = SeatCarListResponse(train_no="107")
+
+    assert not service.seat_cars(train, "special", 1, allow_layout_reference=False).cars
+    service._modern_client.search_trains.assert_not_called()
 
 
 def test_booking_reads_no_nearby_formation_for_a_sold_out_train():
