@@ -102,8 +102,16 @@ def stack():
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True)
     else:
         process.terminate()
-    process.wait(timeout=30)
-    process.stdout.close()
+    # 출력을 비우면서 기다려요. 준비 뒤로 읽지 않은 파이프가 차 있으면 스택이 끝나며 출력을 쓰다 멈춰요(리눅스 CI).
+    try:
+        process.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        output, _ = process.communicate()
+        raise RuntimeError(
+            "e2e 스택이 종료 신호 뒤 30초 안에 끝나지 않았어요:\n"
+            + output.decode(errors="replace")[-4000:]
+        ) from None
 
 
 @pytest.fixture
