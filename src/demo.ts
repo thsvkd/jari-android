@@ -104,13 +104,13 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     },
   ];
   let notifyMinutes = 5;
+  // 알림 화면이 종류마다 어떻게 보이는지 데모에서도 보이게, 실제 서버가 보내는 글 모양 그대로 몇 건 둬요.
+  const ago = (minutes: number) => new Date(clock().getTime() - minutes * 60_000).toISOString();
   const notifications: NotificationItem[] = [
-    {
-      id: "demo-event-1",
-      text: "데모 화면이에요. 실제로 열차를 조회하거나 예약하지 않아요.",
-      createdAt: clock().toISOString(),
-      kind: "demo",
-    },
+    { id: "demo-event-4", text: "예약한 좌석의 결제 시간이 약 12분 남았어요. 코레일 앱에서 결제해 주세요.", createdAt: ago(3), kind: "payment" },
+    { id: "demo-event-3", text: "🎉 좌석을 잡았어요\nKTX 015 서울 → 부산 · 07:27→10:12\n\n결제 기한 안에 코레일에서 결제해 주세요. 결제하면 앱이 확인해 알려드려요.", createdAt: ago(18), kind: "reservation" },
+    { id: "demo-event-2", text: "⚠️ 코레일 조회가 잠시 막혔어요\n서울 → 부산 · 07:00~12:00\n\n잠시 뒤 자동으로 다시 찾아요.", createdAt: ago(95), kind: "error" },
+    { id: "demo-event-1", text: "데모 화면이에요. 실제로 열차를 조회하거나 예약하지 않아요.", createdAt: ago(60 * 26), kind: "search" },
   ];
 
   const asSearch = (conditions: Conditions, trains: string[]): RunningSearch => ({
@@ -186,7 +186,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     registerApp: async (input) => auth(input.username, "member"),
     login: async (input) => auth(input.username, input.role ?? "member"),
     createInvite: async () => ({
-      invite: "demo-invite-code-not-for-railway",
+      invite: "acorn-bagel-tulip",
       ttlHours: 24,
       expiresAt: new Date(clock().getTime() + 86_400_000).toISOString(),
     }),

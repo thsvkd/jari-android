@@ -192,13 +192,16 @@ class Stack:
         with sqlite3.connect(self.data / "identity.sqlite3") as db:
             db.execute("DELETE FROM rate_limits")
 
-    def new_user(self) -> dict:
+    def new_invite(self) -> str:
         admin = request(
             "POST", f"{self.api}/api/mobile/auth/login", {**self.admin, "role": "admin"}
         )
-        invite = request("POST", f"{self.api}/api/mobile/invites", {"ttlHours": 1}, admin["token"])[
+        return request("POST", f"{self.api}/api/mobile/invites", {"ttlHours": 1}, admin["token"])[
             "invite"
         ]
+
+    def new_user(self) -> dict:
+        invite = self.new_invite()
         user = {"username": f"u{secrets.token_hex(4)}", "password": secrets.token_urlsafe(16)}
         registered = request(
             "POST", f"{self.api}/api/mobile/auth/register", {**user, "invite": invite}
@@ -266,6 +269,8 @@ def control(stack: Stack):
                 return self.reply(200, {"reset": True})
             if self.path == "/user":
                 return self.reply(200, stack.new_user())
+            if self.path == "/invite":
+                return self.reply(200, {"invite": stack.new_invite()})
             self.reply(404, {})
 
     return ThreadingHTTPServer(("127.0.0.1", stack.args.control_port), Handler)

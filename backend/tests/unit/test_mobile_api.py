@@ -227,7 +227,7 @@ def test_only_admin_can_create_invites(api):
         json={"ttlHours": 24},
     )
     assert created.status_code == 200
-    assert len(created.json["invite"]) >= 16
+    assert len(created.json["invite"].split("-")) == 3
     guest = client.post(
         "/api/mobile/auth/register",
         json={

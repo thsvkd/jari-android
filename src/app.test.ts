@@ -14,6 +14,7 @@ afterEach(() => {
   for (const app of mounted.splice(0)) app.dispose();
   vi.useRealTimers();
   document.body.replaceChildren();
+  window.localStorage.removeItem("jari.recentRoutes");
 });
 
 describe("concept C application shell", () => {
@@ -307,7 +308,7 @@ describe("concept C application shell", () => {
     const { app, root } = await mountLive({ bootstrap: async () => state });
     expect(app).toMatchObject({ cancellationTargets: [{ trainNo: "015", seatClass: "general", targets }] });
 
-    root.querySelector<HTMLButtonElement>("[data-route-chip='demo-home']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-use-favourite='demo-home']")!.click();
     root.querySelector<HTMLButtonElement>("[data-action='sheet-edit']")!.click();
     await vi.waitFor(() => expect(root.querySelector("#conditions-form")).not.toBeNull());
     root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
@@ -559,8 +560,40 @@ describe("concept C application shell", () => {
     expect(password.maxLength).toBe(128);
     root.querySelector<HTMLButtonElement>("[data-auth-mode='register']")?.click();
     const invite = root.querySelector<HTMLInputElement>("[name='invite']")!;
-    expect(invite.minLength).toBe(16);
+    expect(invite.minLength).toBe(-1);
     expect(invite.maxLength).toBe(128);
+    expect(invite.getAttribute("autocapitalize")).toBe("off");
+    expect(invite.getAttribute("spellcheck")).toBe("false");
+    const confirm = root.querySelector<HTMLInputElement>("[name='password_confirm']")!;
+    expect([confirm.type, confirm.autocomplete, confirm.minLength, confirm.maxLength]).toEqual(["password", "new-password", 12, 128]);
+    root.querySelector<HTMLButtonElement>("[data-auth-mode='login']")?.click();
+    expect(root.querySelector("[name='password_confirm']")).toBeNull();
+  });
+
+  it("checks the sign-up password twice in the app and sends it to the server once", async () => {
+    const registerApp = vi.fn(createDemoApi().registerApp);
+    const root = document.createElement("div");
+    document.body.append(root);
+    const app = new JariApp(root, { ...createDemoApi(), registerApp }, { demoMode: false });
+    mounted.push(app);
+    await app.start(false);
+    root.querySelector<HTMLButtonElement>("[data-auth-gate='guest']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-auth-mode='register']")!.click();
+    edit(root, "username", "new_friend");
+    edit(root, "password", "a long secure passphrase");
+    edit(root, "password_confirm", "a long secure passphrasE");
+    edit(root, "invite", "Apple River Cloud");
+    const submit = () => root.querySelector("#auth-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+
+    submit();
+    expect(root.querySelector(".form-error")?.textContent).toBe("비밀번호가 서로 달라요.");
+    expect(registerApp).not.toHaveBeenCalled();
+    expect(root.querySelector<HTMLInputElement>("[name='invite']")!.value).toBe("Apple River Cloud");
+
+    edit(root, "password_confirm", "a long secure passphrase");
+    submit();
+    await vi.waitFor(() => expect(registerApp).toHaveBeenCalledOnce());
+    expect(registerApp).toHaveBeenCalledWith({ username: "new_friend", password: "a long secure passphrase", invite: "Apple River Cloud" });
   });
 });
 
@@ -680,15 +713,20 @@ describe("editable form rerender regressions", () => {
     const { app, root } = await mountLive();
     app.navigate("journey");
     const picker = (id: string) => root.querySelector<HTMLElement>(`[data-time-picker='${id}']`)!;
+    const slide = (id: string, part: "hour" | "minute", value: number) => {
+      const slider = picker(id).querySelector<HTMLInputElement>(`[data-tp-slider='${part}']`)!;
+      slider.value = String(value);
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+    };
     picker("max-dep-time").querySelector<HTMLButtonElement>("[data-tp='toggle']")!.click();
-    picker("max-dep-time").querySelector<HTMLButtonElement>("[data-tp-hour='18']")!.click();
-    picker("max-dep-time").querySelector<HTMLButtonElement>("[data-tp-minute='30']")!.click();
+    slide("max-dep-time", "hour", 18);
+    slide("max-dep-time", "minute", 35);
     picker("dep-time").querySelector<HTMLButtonElement>("[data-tp='toggle']")!.click();
-    picker("dep-time").querySelector<HTMLButtonElement>("[data-tp-hour='13']")!.click();
+    slide("dep-time", "hour", 13);
     app.notify("background update");
-    expect(root.querySelector<HTMLInputElement>("[name='max_dep_time']")!.value).toBe("18:30");
+    expect(root.querySelector<HTMLInputElement>("[name='max_dep_time']")!.value).toBe("18:35");
     expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value.slice(0, 3)).toBe("13:");
-    // 시만 고른 칸은 펼친 채로 다시 그려져요.
+    // 고르던 칸은 펼친 채로 다시 그려져요.
     expect(picker("dep-time").querySelector(".time-panel")).not.toBeNull();
     root.querySelector<HTMLInputElement>("[name='unlimited_time']")!.click();
     expect(picker("max-dep-time").querySelector<HTMLButtonElement>("[data-tp='toggle']")!.disabled).toBe(true);
@@ -707,12 +745,16 @@ describe("editable form rerender regressions", () => {
     root.querySelector<HTMLButtonElement>("[data-date-picker='schedule-date'] [data-dp='toggle']")!.click();
     root.querySelector<HTMLButtonElement>("[data-dp-day='2026-09-25']")!.click();
     root.querySelector<HTMLButtonElement>("[data-time-picker='schedule-time'] [data-tp='toggle']")!.click();
-    root.querySelector<HTMLButtonElement>("[data-time-picker='schedule-time'] [data-tp-hour='0']")!.click();
-    root.querySelector<HTMLButtonElement>("[data-time-picker='schedule-time'] [data-tp-minute='20']")!.click();
-    expect(scheduleAt()).toBe("2026-09-25T00:20");
+    // 비어 있던 칸은 시 슬라이더를 누른 자리(0시)에서 떼면 정해지고, 분 슬라이더로 넘어가요.
+    const slider = (part: string) => root.querySelector<HTMLInputElement>(`[data-time-picker='schedule-time'] [data-tp-slider='${part}']`)!;
+    slider("hour").dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    slider("hour").dispatchEvent(new Event("pointerup", { bubbles: true }));
+    slider("minute").value = "25";
+    slider("minute").dispatchEvent(new Event("input", { bubbles: true }));
+    expect(scheduleAt()).toBe("2026-09-25T00:25");
     app.notify("background update");
-    expect(scheduleAt()).toBe("2026-09-25T00:20");
-    expect(root.querySelector("[data-time-picker='schedule-time'] .time-field")?.textContent).toContain("오전 12:20");
+    expect(scheduleAt()).toBe("2026-09-25T00:25");
+    expect(root.querySelector("[data-time-picker='schedule-time'] .time-field")?.textContent).toContain("오전 12:25");
     vi.useRealTimers();
   });
 });
@@ -878,7 +920,8 @@ it("starts cancellation waiting with the selected physical-seat range", async ()
   root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
   await vi.waitFor(() => expect(root.querySelector("[data-seat-filter='pair:window']")).not.toBeNull());
   root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
-  expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(4);
+  // 데모 좌석표는 1열만 팔려요. 대기 조건은 팔린 자리만 골라요(1열 A 는 빠져요).
+  expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(3);
   root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
   expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(0);
   for (const action of ["pair:window", "family", "trim:+"]) {
@@ -912,10 +955,11 @@ it("starts cancellation waiting with the selected physical-seat range", async ()
   expect(Object.keys(sentTrain).sort()).toEqual(["seatClass", "targets", "trainNo"].sort());
 });
 
+// Train 015, whose wait dialog these cars fill, is sold out: a for-sale seat tapped there would switch the dialog to booking now.
 function makeCarInventory(carNo: number): SeatInventory {
   const seat = (row: number, column: "A" | "B"): SeatMapSeat => ({
     carNo, seatNo: `${carNo}-${row}-${column}`, label: `${row}${column}`,
-    salePossible: true, direction: "1", floor: "", row, column,
+    salePossible: false, direction: "1", floor: "", row, column,
     adjacencyGroup: `${carNo}:${row}`, position: column === "A" ? 1 : 2, rowPosition: column === "A" ? 1 : 2, familyLabel: "",
   });
   return {
@@ -1341,7 +1385,7 @@ it("keeps the route chips under the heading in every state, and drops the shelf 
   const shelf = root.querySelector<HTMLElement>(".chip-shelf")!;
 
   expect(shelf.textContent).toContain("최근 구간 바로가기");
-  expect([...shelf.querySelectorAll<HTMLButtonElement>(".idle-chip")].map((chip) => chip.dataset.routeChip)).toEqual(["recent", "demo-home"]);
+  expect([...shelf.querySelectorAll<HTMLButtonElement>(".idle-chip")].map((chip) => chip.dataset.routeChip)).toEqual(["recent"]);
   expect(shelf.compareDocumentPosition(root.querySelector("[data-search-status]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
   const demo = createDemoApi();
@@ -1405,14 +1449,21 @@ it("searches the recent chip's trip on the chosen date and keeps the trains that
   expect(root.querySelector(".toast")?.textContent).toBe("3편 중 1편은 이 날 운행하지 않아 뺐어요.");
 });
 
-it("offers the restored search and the favourites as dated shortcuts above the quiet idle card", async () => {
+it("offers the restored search and this phone's recent routes, never a favourite, above the quiet idle card", async () => {
+  const demo = createDemoApi();
+  const draft = (await demo.bootstrap()).draft!;
+  window.localStorage.setItem("jari.recentRoutes", JSON.stringify([
+    { ...draft, dep_time: "0900", max_dep_time: "1000" }, // the restored search's route again: one chip per route
+    { ...draft, src_station: "부산", dst_station: "서울", dep_time: "1400", max_dep_time: "1800" },
+  ]));
   const { root } = await mountIdle();
   const shelf = root.querySelector<HTMLElement>(".chip-shelf")!;
   const chips = [...shelf.querySelectorAll<HTMLButtonElement>(".idle-chip")];
 
-  expect(chips.map((chip) => chip.dataset.routeChip)).toEqual(["recent", "demo-home"]);
-  expect(chips[0]!.textContent).toContain("최근 · 07:00–12:00");
-  expect(chips[1]!.textContent).toContain("주말에 집으로 · 14:00–18:00");
+  expect(chips.map((chip) => chip.dataset.routeChip)).toEqual(["recent", "recent:1"]);
+  expect(chips[0]!.querySelector(".idle-chip-when")?.textContent).toBe("07:00–12:00");
+  expect(chips[1]!.textContent).toContain("부산→서울");
+  expect(shelf.textContent).not.toContain("주말에 집으로");
   const card = root.querySelector("[data-search-status]")!;
   expect(shelf.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(card.textContent?.trim()).toBe("대기 중인 항목이 없어요");
@@ -1457,7 +1508,7 @@ it("searches a favourite's trip on the chosen date with no train picked (a real 
   const trains = vi.fn(createDemoApi().trains);
   const { root } = await mountIdle({ trains });
 
-  root.querySelector<HTMLButtonElement>("[data-route-chip='demo-home']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-use-favourite='demo-home']")!.click();
   expect(root.querySelector(".action-sheet")?.textContent).toContain("인원 1명 · 14:00–18:00");
   expect(root.querySelector(".action-sheet")?.textContent).not.toContain("고른 열차");
   root.querySelector<HTMLInputElement>("#sheet-date")!.value = "2026-10-03";
@@ -1607,17 +1658,25 @@ it("lists the running search's trains and seats on the activity screen", async (
   expect(app).toBeTruthy();
 });
 
-it("labels a chip with the favourite's name when it matches the restored search", async () => {
+it("remembers each searched route first, once, and keeps the last five", async () => {
   const demo = createDemoApi();
   const state = await demo.bootstrap();
   state.running = null;
-  state.favourites = [{ id: "fav-same", name: "저녁에 부산", route: "서울 → 부산", window: "07:00–12:00", conditions: { ...state.draft!, dep_date: "" } }];
-  const { root } = await mountLive({ bootstrap: async () => state });
+  state.draft = null;
+  const { app, root } = await mountLive({ bootstrap: async () => state });
+  const search = async (src: string, dst: string) => {
+    app.navigate("journey");
+    const form = root.querySelector<HTMLFormElement>("#conditions-form")!;
+    form.querySelector<HTMLInputElement>("[name='src_station']")!.value = src;
+    form.querySelector<HTMLInputElement>("[name='dst_station']")!.value = dst;
+    form.requestSubmit();
+    await vi.waitFor(() => expect(root.querySelector(".train-list")).not.toBeNull());
+  };
+  for (const [src, dst] of [["서울", "부산"], ["서울", "대전"], ["서울", "광주송정"], ["서울", "강릉"], ["서울", "목포"], ["서울", "부산"], ["용산", "여수EXPO"]]) await search(src!, dst!);
+  app.navigate("home");
 
-  const chips = [...root.querySelectorAll("[data-route-chip]")];
-  expect(chips).toHaveLength(1);
-  expect(chips[0]!.getAttribute("data-route-chip")).toBe("fav-same");
-  expect(chips[0]!.textContent).toContain("저녁에 부산");
+  const routes = [...root.querySelectorAll(".idle-chip-route")].map((chip) => chip.textContent);
+  expect(routes).toEqual(["용산→여수EXPO", "서울→부산", "서울→목포", "서울→강릉", "서울→광주송정"]);
 });
 
 it("does not repeat a default-named favourite's route under it or on its chip", async () => {
@@ -1630,8 +1689,6 @@ it("does not repeat a default-named favourite's route under it or on its chip", 
   state.favourites = [{ id: "fav-route", name: "서울 → 부산", route: "서울 → 부산", window: "16:00~18:00", conditions }];
   const { root } = await mountLive({ bootstrap: async () => state });
 
-  const chip = root.querySelector("[data-route-chip='fav-route']")!;
-  expect(chip.querySelector(".idle-chip-when")?.textContent).toBe("즐겨찾기 · 16:00~18:00");
   expect(root.querySelector(".route-list .favourite-main small")?.textContent).toBe("16:00~18:00");
 
   root.querySelector<HTMLButtonElement>("nav [data-view='favourites']")!.click();
@@ -1936,7 +1993,7 @@ describe("날짜 시트", () => {
   const openDateSheet = async () => {
     const trains = vi.fn(async () => ({ trains: [], truncated: false, passengerCount: 1 }));
     const mounted = await mountLive({ trains });
-    mounted.root.querySelector<HTMLButtonElement>("[data-route-chip='demo-home']")!.click();
+    mounted.root.querySelector<HTMLButtonElement>("[data-use-favourite='demo-home']")!.click();
     await vi.waitFor(() => expect(mounted.root.querySelector("#sheet-date")).not.toBeNull());
     return { ...mounted, trains };
   };
@@ -2072,7 +2129,7 @@ describe("테마 날짜 선택기와 토스트", () => {
     expect(root.querySelector(".screen .sticky-action")).not.toBeNull();
     expect(root.querySelector(".toast")?.classList.contains("above-action")).toBe(true);
     const css = await readFile("src/styles.css", "utf8");
-    expect(css).toContain(".toast.above-action { --toast-lift: calc(var(--nav-clearance) + 54px); }");
+    expect(css).toContain(".toast.above-action { --toast-lift: calc(var(--cta-gap) + 54px); }");
     expect(css).toContain("bottom: calc(var(--nav-height) + var(--toast-shell-gap, 0px) + 10px + var(--toast-lift));");
   });
 });
@@ -2102,4 +2159,34 @@ it("closes an open sheet on Android back before leaving the screen", async () =>
 
   expect(app.back()).toBe(true);
   expect(root.querySelector(".screen-favourites")).not.toBeNull();
+});
+
+it("draws a notification's kind as a picture and splits the server's text into title, train line and body", async () => {
+  const text = "🎉 좌석을 잡았어요\nKTX 00101 서울 → 부산 · 9월 26일(토) 07:00→09:41\n\n결제 기한 안에 코레일에서 결제해 주세요.";
+  const { app, root } = await mountLive({
+    notifications: async () => ({ items: [{ id: "n1", text, createdAt: new Date(Date.now() - 5 * 60_000).toISOString(), kind: "reservation" }], pushAvailable: false }),
+  });
+  app.navigate("notifications");
+  await vi.waitFor(() => expect(root.querySelector(".notification")).not.toBeNull());
+  const item = root.querySelector(".notification")!;
+
+  expect(item.getAttribute("data-tone")).toBe("success");
+  expect(item.querySelector(".notification-icon")?.getAttribute("aria-label")).toBe("예약");
+  expect(item.querySelector(".notification-icon svg")).not.toBeNull();
+  expect(item.querySelector(".notification-head b")?.textContent).toBe("좌석을 잡았어요");
+  expect(item.querySelector(".notification-head small")?.textContent).toBe("5분 전");
+  expect(item.querySelector(".notification-detail")?.textContent).toBe("KTX 00101 서울 → 부산 · 9월 26일(토) 07:00→09:41");
+  expect(item.querySelector(".notification-text")?.textContent).toBe("결제 기한 안에 코레일에서 결제해 주세요.");
+});
+
+it("keeps a plain search notice's title in the text colour (the tone never borrows a global utility class)", async () => {
+  const { app, root } = await mountLive({
+    notifications: async () => ({ items: [{ id: "n2", text: "검색을 중지했어요.", createdAt: new Date().toISOString(), kind: "search" }], pushAvailable: false }),
+  });
+  app.navigate("notifications");
+  await vi.waitFor(() => expect(root.querySelector(".notification")).not.toBeNull());
+  const item = root.querySelector(".notification")!;
+  expect(item.getAttribute("data-tone")).toBe("muted");
+  expect(item.classList.contains("muted")).toBe(false);
+  expect(item.querySelector(".notification-head b")?.textContent).toBe("자리 찾기");
 });

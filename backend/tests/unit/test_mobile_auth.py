@@ -1,11 +1,13 @@
 """Real persistent auth, exercised without Redis or railway calls."""
 
+import secrets
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from korail_bot.mobile.identity import AuthError, IdentityStore
+from korail_bot.mobile.identity import AuthError, IdentityStore, digest
+from korail_bot.mobile.invite_words import WORDS
 
 
 def test_invitation_is_single_use_and_session_survives_restart(tmp_path):
@@ -18,6 +20,45 @@ def test_invitation_is_single_use_and_session_survives_restart(tmp_path):
     with pytest.raises(AuthError):
         reopened.register("bob", "another secure passphrase", invite)
     assert session["user"]["id"].startswith("mobile_")
+
+
+def test_invite_is_three_words_typed_any_way_once(tmp_path):
+    store = IdentityStore(tmp_path / "identity.sqlite3")
+    spellings = [
+        lambda a, b, c: f"{a} {b} {c}".title(),
+        lambda a, b, c: f"{a}-{b}-{c}",
+        lambda a, b, c: f" {a}  {b},{c.upper()} ",
+    ]
+    for index, spell in enumerate(spellings):
+        invite = store.create_invite()
+        words = invite.split("-")
+        assert len(words) == 3 and all(word in WORDS for word in words)
+        session = store.register(f"user{index}", "a long secure passphrase", spell(*words))
+        assert session["user"]["username"] == f"user{index}"
+        with pytest.raises(AuthError):
+            store.register(f"again{index}", "a long secure passphrase", invite)
+
+
+def test_invite_with_a_wrong_word_is_rejected(tmp_path):
+    store = IdentityStore(tmp_path / "identity.sqlite3")
+    first, second, _ = store.create_invite().split("-")
+    wrong = next(word for word in WORDS if word not in (first, second))
+    for rejected in (f"{first}-{second}-{wrong}", f"{first}-{second}", f"{first}-{second}-zzzz"):
+        with pytest.raises(AuthError) as error:
+            store.register("alice", "a long secure passphrase", rejected)
+        assert error.value.status == 403
+
+
+def test_invite_issued_before_word_codes_still_redeems_once(tmp_path):
+    store = IdentityStore(tmp_path / "identity.sqlite3")
+    legacy = secrets.token_urlsafe(32)
+    with store.connect() as db:
+        db.execute("INSERT INTO invites VALUES (?, ?, NULL)", (digest(legacy), store.clock() + 60))
+    assert (
+        store.register("alice", "a long secure passphrase", legacy)["user"]["username"] == "alice"
+    )
+    with pytest.raises(AuthError):
+        store.register("bobby", "a long secure passphrase", legacy)
 
 
 def test_invite_race_has_exactly_one_winner(tmp_path):

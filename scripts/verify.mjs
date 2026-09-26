@@ -54,10 +54,15 @@ function stagedTree() {
 }
 
 function prepareDevice() {
-  const devices = adb("devices").split("\n").slice(1).filter((line) => /\tdevice$/.test(line));
-  if (devices.length !== 1) {
+  // Windows 의 adb 는 줄 끝이 \r\n 이에요. \n 으로만 자르면 마지막 줄(trim 된 한 줄)만 기기로 잡혀요.
+  const devices = adb("devices").split(/\r?\n/).slice(1).filter((line) => /\tdevice$/.test(line));
+  // ANDROID_SERIAL 을 주면 adb 가 모든 명령을 그 기기로 보내요. 폰과 에뮬레이터가 함께 붙어 있어도 하나를 골라 돌릴 수 있어요.
+  const serial = process.env.ANDROID_SERIAL;
+  if (serial ? !devices.some((line) => line.startsWith(`${serial}\t`)) : devices.length !== 1) {
     throw new Error(
-      `연결된 기기가 ${devices.length}대예요. 실기기 한 대를 연결해 주세요(무선 디버깅이면 \`! adb connect <IP>:<포트>\`).`,
+      serial
+        ? `ANDROID_SERIAL=${serial} 기기가 연결돼 있지 않아요. \`adb devices\` 로 이름을 확인해 주세요.`
+        : `연결된 기기가 ${devices.length}대예요. 실기기 한 대를 연결하거나, 여러 대면 ANDROID_SERIAL 로 하나를 골라 주세요(무선 디버깅이면 \`! adb connect <IP>:<포트>\`).`,
     );
   }
   // 잠긴 화면·꺼진 화면에서는 WebView 가 그리지 않고 타이머도 늦어져요. 잠금은 풀지 않고(보안 설정이에요) 사람에게 부탁해요.

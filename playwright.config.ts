@@ -40,8 +40,8 @@ export default defineConfig({
   projects: [
     { name: "phone-light", use: { ...phone, colorScheme: "light" } },
     { name: "phone-dark", use: { ...phone, colorScheme: "dark" }, grep: /@layout|@visual/ },
-    // 좁은 폰(보급형 360dp)에서도 규칙을 지켜요.
-    { name: "phone-narrow", use: { ...phone, viewport: { width: 360, height: 780 }, deviceScaleFactor: 3 }, grep: /@layout|@visual/ },
+    // 좁은 폰에서도 규칙을 지켜요. 344dp 는 지원하는 가장 좁은 화면(갤럭시 폴드 커버)이에요.
+    { name: "phone-narrow", use: { ...phone, viewport: { width: 344, height: 780 }, deviceScaleFactor: 3 }, grep: /@layout|@visual/ },
     // 실기기: scripts/verify.mjs 가 e2e 앱을 설치하고 WebView 디버깅 포트를 넘긴 뒤에만 켜져요.
     // 스크린샷 기준은 헤드리스에서만 비교해요(기기는 상태 표시줄·글꼴이 달라요).
     ...(process.env.JARI_DEVICE_CDP ? [{ name: "device", use: { baseURL: "https://localhost" }, grepInvert: /@visual/ }] : []),

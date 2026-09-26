@@ -33,15 +33,15 @@ test.describe("즐겨찾기", () => {
   });
 
   test("홈의 최근 구간에서 날짜 시트를 열고 달력으로 날짜를 골라요 @layout", async ({ signedIn: page }) => {
-    // 홈의 바로가기 칩은 최근 검색이나 즐겨찾기에서 생겨요. 즐겨찾기를 하나 만들어 둬요.
+    // 홈의 바로가기 칩은 이 폰에서 조회한 구간이에요. 즐겨찾기는 칩이 아니라 아래 자주 가는 구간에만 있어요.
     await searchTrains(page);
     await page.locator("[data-action='trains-next']").click();
     await page.locator("[data-action='save-favourite']").click();
     await expect(page.locator(".toast")).toHaveText("즐겨찾기에 저장했어요.");
     await page.locator(".bottom-nav [data-view='home']").click();
-    // 이름 없이 저장한 즐겨찾기는 이름이 곧 구간이에요. 칩과 자주 가는 구간 카드에 구간을 두 번 쓰지 않아요.
-    const favouriteChip = page.locator("[data-route-chip]:not([data-route-chip='recent'])").first();
-    await expect(favouriteChip.locator(".idle-chip-when")).toHaveText(/^즐겨찾기 · /);
+    await expect(page.locator(".idle-chip")).toHaveCount(1);
+    await expect(page.locator(".idle-chip")).not.toContainText("즐겨찾기");
+    // 이름 없이 저장한 즐겨찾기는 이름이 곧 구간이에요. 자주 가는 구간 카드에 구간을 두 번 쓰지 않아요.
     await expect(page.locator(".route-list .favourite-main b")).toHaveText("서울 → 부산");
     await expect(page.locator(".route-list .favourite-main small")).not.toContainText("→");
     await expectCleanLayout(page, "홈(이름 없는 즐겨찾기)");

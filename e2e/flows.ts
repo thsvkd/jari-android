@@ -21,6 +21,8 @@ export function trainLine(daysAhead = 3, no = "00101", times = "07:00→09:41"):
 // 새 여정의 달력은 접힌 날짜 칸을 눌러 펼치고, 그 달에 없으면 다음 달로 넘겨서 날을 눌러요.
 export async function pickDate(page: Page, iso: string): Promise<void> {
   const toggle = page.locator("[data-dp='toggle']");
+  // 칸이 하단 탭바에 반쯤 가려 있으면 누른 뒤에도 접힌 채로 남아서(날짜·시간 칸 사이 여백을 넓혔을 때 드러남) 화면 가운데로 먼저 올려요.
+  await toggle.evaluate((element) => element.scrollIntoView({ block: "center" }));
   if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
   const day = page.locator(`[data-dp-day='${iso}']:not([disabled])`);
   for (let month = 0; month < 13 && !(await day.isVisible()); month++) {
@@ -30,16 +32,23 @@ export async function pickDate(page: Page, iso: string): Promise<void> {
   await expect(page.locator("[name=dep_date]")).toHaveValue(iso);
 }
 
-// 시간도 한 곳에서만 골라요. 접힌 시간 칸을 눌러 펼치고, 시 칩과 10분 단위 분 칩을 차례로 눌러요.
+// 시간도 한 곳에서만 골라요. 접힌 시간 칸을 눌러 펼치고, 시·분 슬라이더에 값을 넣은 뒤 칸을 다시 눌러 접어요.
+// 손을 떼면 다음으로 넘어가는 흐름은 손가락·마우스에만 일어나서, 값만 넣으면 칸이 제자리에 있어요(끌어서 넘어가는 흐름은 layout.spec 이 재요).
 // 이미 펼쳐져 있으면 누르지 않아요. 앞서 연 패널은 화면을 오가도 열린 채라, 누르면 도로 접혀요
 // (밤 10시가 넘으면 끝 시각 칸이 꺼져 출발 시각 패널을 닫아 주는 쪽이 없어서 드러났어요).
 export async function pickTime(page: Page, name: "dep_time" | "max_dep_time", clock: string): Promise<void> {
   const picker = page.locator("[data-time-picker]", { has: page.locator(`[name=${name}]`) });
   const [hour, minute] = clock.split(":").map(Number);
   const toggle = picker.locator("[data-tp='toggle']");
+  // 칸이 하단 탭바에 반쯤 가려 있으면 누른 뒤에도 접힌 채로 남아서(날짜·시간 칸 사이 여백을 넓혔을 때 드러남) 화면 가운데로 먼저 올려요.
+  await toggle.evaluate((element) => element.scrollIntoView({ block: "center" }));
   if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-  await picker.locator(`[data-tp-hour='${hour}']`).click();
-  await picker.locator(`[data-tp-minute='${minute}']`).click();
+  // range 입력의 fill 은 값을 넣고 input·change 를 올려요. 키보드로 바꾼 것처럼 다음으로 넘어가지 않아요.
+  await picker.locator("[data-tp-slider='hour']").fill(String(hour));
+  await picker.locator("[data-tp-slider='minute']").fill(String(minute));
+  // 손으로 접듯 칸을 다시 눌러 접어요. Escape 로 접으면 칸에 키보드 초점 고리가 남아 스크린샷에 찍혀요.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator(`[name=${name}]`)).toHaveValue(clock);
 }
 

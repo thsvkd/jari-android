@@ -59,6 +59,8 @@ test.describe("화면 @visual", () => {
     await snap(page, "auth-gate");
     await page.locator("[data-auth-gate='guest']").click();
     await snap(page, "auth-member");
+    await page.locator("[data-auth-mode='register']").click();
+    await snap(page, "auth-register");
   });
 
   test("탭과 새 여정", async ({ signedIn: page }) => {

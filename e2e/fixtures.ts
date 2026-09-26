@@ -33,6 +33,11 @@ export class Control {
     return this.post("/user", {});
   }
 
+  /** 관리자가 만든 것과 같은 일회용 초대 코드예요. */
+  async newInvite(): Promise<string> {
+    return (await this.post<{ invite: string }>("/invite", {})).invite;
+  }
+
   async korailLog(): Promise<Array<Record<string, unknown>>> {
     const reply = await fetch(`${CONTROL}/log`);
     return reply.json();

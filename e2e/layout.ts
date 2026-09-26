@@ -99,16 +99,30 @@ export async function layoutProblems(page: Page, rules: LayoutRules = {}): Promi
 
 /** 끝까지 내렸을 때 마지막 내용이 하단 메뉴 위로 올라와 있어야 해요. */
 export async function bottomClearance(page: Page): Promise<string[]> {
-  await page.evaluate(() => window.scrollTo(0, document.scrollingElement!.scrollHeight));
-  await page.waitForTimeout(150);
-  const problem = await page.evaluate(() => {
+  // 앱이 막 펼친 판을 부드럽게 스크롤해 보여 주는 중이면 내린 자리를 도로 끌어올려요(느린 실기기에서 드러남).
+  // 그래서 맨 아래에 두 번 잇달아 멈춰 있는 것을 본 그 자리에서 곧바로 재요.
+  const problem = await page.evaluate(async () => {
+    const root = document.scrollingElement!;
+    const pause = () => new Promise((resolve) => setTimeout(resolve, 120));
+    let previous = -1;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      window.scrollTo({ top: root.scrollHeight, behavior: "instant" });
+      await pause();
+      const atBottom = root.scrollTop + window.innerHeight >= root.scrollHeight - 1;
+      if (atBottom && root.scrollTop === previous) break;
+      previous = atBottom ? root.scrollTop : -1;
+    }
     const nav = document.querySelector(".bottom-nav")?.getBoundingClientRect();
     const items = [...document.querySelectorAll("main *")].filter((node) => {
       const box = node.getBoundingClientRect();
       return box.height > 0 && getComputedStyle(node).position !== "sticky";
     });
     const last = Math.max(...items.map((node) => node.getBoundingClientRect().bottom));
-    return nav && last > nav.top + 0.5 ? `끝까지 내려도 마지막 내용이 하단 메뉴에 ${Math.round(last - nav.top)}px 가려요` : null;
+    if (!nav || last <= nav.top + 0.5) return null;
+    // 무엇이 가리는지 적어 두면 다시 났을 때 바로 원인을 볼 수 있어요.
+    const culprit = items.find((node) => node.getBoundingClientRect().bottom === last);
+    const where = culprit ? `<${culprit.tagName.toLowerCase()} ${culprit.getAttribute("class") ?? ""}>` : "";
+    return `끝까지 내려도 마지막 내용이 하단 메뉴에 ${Math.round(last - nav.top)}px 가려요 ${where} (scrollTop ${Math.round(root.scrollTop)}/${root.scrollHeight - window.innerHeight})`;
   });
   await page.evaluate(() => window.scrollTo(0, 0));
   return problem ? [problem] : [];

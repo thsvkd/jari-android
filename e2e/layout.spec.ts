@@ -10,6 +10,15 @@ test.describe("레이아웃 @layout", () => {
     await expectCleanLayout(page, "로그인 방법 고르기");
     await page.locator("[data-auth-gate='guest']").click();
     await expectCleanLayout(page, "초대 회원 로그인");
+    await page.locator("[data-auth-mode='register']").click();
+    await expectCleanLayout(page, "초대 코드로 가입");
+    await page.locator("#auth-form [name='username']").fill("new_friend");
+    await page.locator("#auth-form [name='password']").fill("a long secure passphrase");
+    await page.locator("#auth-form [name='password_confirm']").fill("a different passphrase");
+    await page.locator("#auth-form [name='invite']").fill("apple river cloud");
+    await page.locator("#auth-form [name='invite']").press("Enter");
+    await expect(page.locator(".form-error")).toBeVisible();
+    await expectCleanLayout(page, "가입 비밀번호 불일치");
   });
 
   test("홈·탭 화면(빈 상태)", async ({ signedIn: page }) => {
@@ -29,13 +38,39 @@ test.describe("레이아웃 @layout", () => {
     await page.locator("[data-dp='toggle']").click();
     await expect(page.locator("[data-dp-day]").first()).toBeVisible();
     await expectCleanLayout(page, "새 여정(달력 펼침)");
-    for (const name of ["dep_time", "max_dep_time"]) {
-      const toggle = page.locator("[data-time-picker]", { has: page.locator(`[name=${name}]`) }).locator("[data-tp='toggle']");
-      // 밤 10시가 넘어 돌면 기본값이 "마지막 열차까지"라 끝 시각 칸이 꺼져 있어요.
-      if (await toggle.isDisabled()) continue;
-      await toggle.click();
-      await expect(page.locator(".time-panel [data-tp-minute]").first()).toBeVisible();
-      await expectCleanLayout(page, `새 여정(${name} 시간 펼침)`);
+    const timeField = (name: string) => page.locator("[data-time-picker]", { has: page.locator(`[name=${name}]`) });
+    // 손으로 슬라이더를 끌다 떼요. 떼는 순간 다음 단계로 넘어가요.
+    const drag = async (name: string, part: "hour" | "minute", at: number) => {
+      // 판을 펼치면 화면이 부드럽게 스크롤돼요. 자리가 멈춘 뒤에 잡아야 옆 슬라이더를 누르지 않아요.
+      const slider = timeField(name).locator(`[data-tp-slider='${part}']`);
+      // 앞선 레이아웃 검사가 화면을 맨 아래로 내려 두니, 사람처럼 슬라이더가 보이는 데까지 올려요.
+      await slider.scrollIntoViewIfNeeded();
+      let box = (await slider.boundingBox())!;
+      for (let settled = false; !settled;) {
+        await page.waitForTimeout(80);
+        const next = (await slider.boundingBox())!;
+        settled = next.y === box.y;
+        box = next;
+      }
+      await page.mouse.move(box.x + 14, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + 14 + (box.width - 28) * at, box.y + box.height / 2, { steps: 5 });
+      await page.mouse.up();
+    };
+    await timeField("dep_time").locator("[data-tp='toggle']").click();
+    await expect(timeField("dep_time").locator("[data-tp-slider='minute']")).toBeVisible();
+    await expectCleanLayout(page, "새 여정(dep_time 시간 펼침)");
+    await drag("dep_time", "hour", 0.5);
+    await expect(timeField("dep_time").locator("[data-tp-slider='minute']")).toBeFocused();
+    await drag("dep_time", "minute", 0.5);
+    await expect(timeField("dep_time").locator(".time-panel")).toHaveCount(0);
+    // 밤 10시가 넘어 돌면 기본값이 "마지막 열차까지"라 끝 시각 칸이 꺼져 있어 넘어가지 않아요.
+    if (!(await timeField("max_dep_time").locator("[data-tp='toggle']").isDisabled())) {
+      await expect(timeField("max_dep_time").locator("[data-tp-slider='hour']")).toBeFocused();
+      await expectCleanLayout(page, "새 여정(max_dep_time 시간 펼침)");
+      await drag("max_dep_time", "hour", 0.8);
+      await drag("max_dep_time", "minute", 0);
+      await expect(timeField("max_dep_time").locator(".time-panel")).toHaveCount(0);
     }
     await page.locator(".bottom-nav [data-view='home']").click();
     await searchTrains(page, { seatMode: "specific", seatClasses: ["general", "special"] });
@@ -92,7 +127,7 @@ test.describe("레이아웃 @layout", () => {
     await expectCleanLayout(page, "조건 확인");
     await page.locator("[data-action='schedule-toggle']").click();
     await page.locator("[data-time-picker='schedule-time'] [data-tp='toggle']").click();
-    await expect(page.locator(".time-panel [data-tp-hour='0']")).toBeVisible();
+    await expect(page.locator(".time-panel [data-tp-slider='hour']")).toBeVisible();
     await expectCleanLayout(page, "조건 확인(찾기 시작 시각 펼침)");
     await page.locator("[data-date-picker='schedule-date'] [data-dp='toggle']").click();
     await expect(page.locator(".schedule-panel [data-dp-day]").first()).toBeVisible();

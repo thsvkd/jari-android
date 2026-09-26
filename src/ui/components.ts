@@ -163,8 +163,8 @@ export function notice(options: NoticeOptions): Html {
 const MARKS = {
   /** 열차 앞모습과 시계: 찾는 것·조회된 열차가 없을 때. */
   train: '<rect x="13" y="15" width="38" height="30" rx="9"/><path d="M20 45l-5 7m29-7 5 7M21 26h22M23 36h4m10 0h4"/><circle class="filled" cx="46" cy="17" r="7"/><path class="signal" d="M46 14v3l2 2"/>',
-  /** 열차와 책갈피: 즐겨찾기. */
-  favourite: '<path d="M15 43h34M19 43l-5 8m31-8 5 8"/><circle cx="17" cy="28" r="6"/><circle cx="47" cy="28" r="6"/><path d="M23 28h18M32 28v-7"/><path class="filled" d="M27 12h10v14l-5-3-5 3z"/>',
+  /** 별: 즐겨찾기. */
+  favourite: '<path d="M32 12l5.4 13.6 14.6.9-11.3 9.3 3.6 14.2L32 42.2 19.7 50l3.6-14.2L12 26.5l14.6-.9z"/>',
   /** 종: 알림. */
   bell: '<path d="M20 42V30a12 12 0 0 1 24 0v12l4 5H16z"/><path d="M28 52a4 4 0 0 0 8 0"/>',
   /** 느낌표: 열지 못함. */

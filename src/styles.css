@@ -7,6 +7,16 @@
   /* 하단 탭바 높이와 그 위에 남길 여백. .screen 의 아래 패딩이 여기서 나와 둘이 어긋날 수 없어요. */
   --nav-height: calc(72px + env(safe-area-inset-bottom));
   --nav-clearance: 40px;
+  /* 붙박이 버튼과 탭바 사이, 폼 칸과 칸 사이. 버튼이 떠 있든 제자리에 있든 같은 간격이에요. */
+  --cta-gap: 16px;
+  /* 화면 좌우 여백. 화면 폭 버튼·칩 줄·토스트가 모두 이 선에 맞춰요. */
+  --gutter: 20px;
+  /* 카드 안쪽 여백과 폼 카드 사이 간격. */
+  --card-pad: 18px;
+  --stack-gap: 14px;
+  --field-gap: 16px;
+  /* 앱 전체의 체크 표시. 글자(✓)는 폰 글꼴 따라 이모지처럼 보여서 선 하나로 그려요. mask 로 써서 색은 background 가 정해요. */
+  --check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E");
   --bg: #f6f7f9;
   --surface: #ffffff;
   --surface-raised: #ffffff;
@@ -67,6 +77,10 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html { min-height: 100%; background: var(--bg); }
 body { min-width: 300px; min-height: 100vh; margin: 0; background: var(--bg); color: var(--text); }
+/* 한국어는 띄어쓰기에서만 줄을 바꿔요(단어 중간에서 끊지 않기). 제목은 줄 길이를 고르게, 본문은 마지막 줄에 한 글자만 남지 않게. */
+body { word-break: keep-all; overflow-wrap: break-word; }
+h1, h2, h3, b, strong { text-wrap: balance; }
+p, small, li, dd { text-wrap: pretty; }
 button, input, select { font: inherit; }
 button, a, input, select { touch-action: manipulation; }
 button { border: 0; color: inherit; cursor: pointer; }
@@ -81,8 +95,8 @@ small { color: var(--muted); }
 #app { min-height: 100vh; }
 /* clip, not hidden: hidden makes the shell a scroll container, and .sticky-action then sticks to a box that never scrolls. */
 .app-shell { width: min(100%, 520px); min-height: 100vh; margin: 0 auto; position: relative; overflow: clip; background: var(--bg); box-shadow: 0 0 0 1px rgb(20 30 45 / 4%), 0 20px 80px rgb(27 36 51 / 12%); }
-.screen { min-height: calc(100vh - 148px); padding: 22px 22px calc(var(--nav-height) + var(--nav-clearance)); }
-.topbar { display: flex; align-items: center; justify-content: space-between; height: calc(72px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 22px 0; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(18px); position: sticky; top: 0; z-index: 20; }
+.screen { min-height: calc(100vh - 148px); padding: 22px var(--gutter) calc(var(--nav-height) + var(--nav-clearance)); }
+.topbar { display: flex; align-items: center; justify-content: space-between; height: calc(72px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) var(--gutter) 0; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(18px); position: sticky; top: 0; z-index: 20; }
 .brand { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0; background: transparent; text-align: left; }
 .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 13px; background: var(--text); color: var(--bg); }
 .brand-mark svg { width: 25px; height: 25px; fill: currentColor; }
@@ -140,7 +154,7 @@ small { color: var(--muted); }
 .search-status-card[data-state="idle"] { padding: 22px 22px 18px; }
 .idle-badge > i { opacity: .55; }
 .idle-shelf-label { margin: 18px 0 0; color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .08em; }
-.idle-shelf { display: flex; gap: 8px; list-style: none; margin: 10px -22px 0; padding: 4px 22px 2px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; }
+.idle-shelf { display: flex; gap: 8px; list-style: none; margin: 10px calc(-1 * var(--gutter)) 0; padding: 4px var(--gutter) 2px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; }
 .idle-shelf::-webkit-scrollbar { width: 0; height: 0; }
 .idle-shelf > li { flex: 0 0 auto; scroll-snap-align: start; }
 .idle-chip { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-height: 52px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface-raised); color: var(--text); text-align: left; transition: transform .16s ease, background-color .16s ease, border-color .16s ease; }
@@ -197,7 +211,7 @@ small { color: var(--muted); }
 .section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 15px; margin: 31px 0 8px; }
 .section-head h2 { margin: 0; font-size: 16px; }
 
-.card { margin: 16px 0; padding: 18px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
+.card { margin: 16px 0; padding: var(--card-pad); border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
 .compact-card { margin-top: 25px; }
 .payment-row { display: grid; gap: 7px; padding: 15px 0; }
 .payment-row + .payment-row { border-top: 1px solid var(--line); }
@@ -232,7 +246,7 @@ small { color: var(--muted); }
 
 .subhead { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 14px; margin: 4px 0 24px; }
 .subhead .icon-button { width: 38px; height: 38px; font-size: 18px; }
-.form-stack { display: grid; gap: 14px; }
+.form-stack { display: grid; gap: var(--stack-gap); }
 .form-card { margin: 0; box-shadow: none; }
 .form-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 17px; }
 .form-section-head > div { display: flex; align-items: center; gap: 9px; }
@@ -241,8 +255,12 @@ small { color: var(--muted); }
 .field { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 650; }
 .field input, .field select { width: 100%; min-width: 0; min-height: 48px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 13px; outline: none; background: var(--bg); color: var(--text); font-size: 13px; }
 .field input:focus, .field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
-.station-grid { display: grid; grid-template-columns: 1fr 24px 1fr; align-items: end; gap: 8px; }
-.route-arrow { display: grid; place-items: center; height: 48px; color: var(--accent); }
+.station-grid { display: grid; grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr); align-items: end; gap: 8px; }
+
+.route-middle { display: grid; place-items: center; align-self: end; height: 52px; }
+/* 출발·도착 두 칸 사이의 둥근 바꾸기 버튼(터치 48px). 칸 높이(52px)의 가운데에 와요. */
+.route-swap { display: grid; place-items: center; width: 48px; height: 48px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--accent-ink); box-shadow: var(--shadow); }
+.route-swap svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .two-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .choice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 17px 0 0; padding: 0; border: 0; }
 .choice-grid legend, .advanced legend { grid-column: 1 / -1; margin-bottom: 7px; color: var(--muted); font-size: 12px; font-weight: 700; }
@@ -289,14 +307,15 @@ small { color: var(--muted); }
 .train-list { display: grid; gap: 9px; margin: 18px 0; padding-bottom: 88px; }
 .train-card { min-height: 84px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 17px; background: var(--surface); text-align: left; }
 /* Chosen as a whole or with seats picked: the same look a selected column chip has. */
-.train-card.selected { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 4px 0 0 var(--accent); }
+.train-card.selected { border-color: var(--accent); background: var(--accent-soft); }
 .train-card.selected .seat-action:not(.selected) { background: var(--surface); } /* keeps the pill visible on the tinted card */
 /* The card's text is the button that takes the train as a whole; it keeps the card's typography.
    체크 표시가 앞에 붙어 카드를 누른 것이 곧 "이 열차의 어떤 자리든" 고른 것임을 보여줘요. */
 .train-main { min-width: 0; min-height: 48px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; padding: 0; background: transparent; color: inherit; text-align: left; font: inherit; }
 .train-main-text { min-width: 0; display: grid; gap: 3px; }
-.train-check { display: grid; place-items: center; width: 22px; height: 22px; border: 1.5px solid var(--line); border-radius: 7px; color: transparent; font-size: 12px; line-height: 1; }
-.train-main[aria-pressed="true"] .train-check { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.train-check { display: grid; place-items: center; width: 22px; height: 22px; border: 1.5px solid var(--line); border-radius: 7px; }
+.train-main[aria-pressed="true"] .train-check { border-color: var(--accent); background: var(--accent); }
+.train-main[aria-pressed="true"] .train-check::after { content: ""; width: 70%; height: 70%; background: var(--on-accent); -webkit-mask: var(--check) center / contain no-repeat; mask: var(--check) center / contain no-repeat; }
 .train-main-text > small { font-size: 12px; }
 .train-main-text > b { font-size: 17px; white-space: nowrap; }
 .train-main-text b i { margin: 0 5px; color: var(--hint); font-size: 12px; font-style: normal; }
@@ -310,7 +329,8 @@ small { color: var(--muted); }
 .seat-action.selected { background: var(--accent); color: var(--on-accent); box-shadow: 0 7px 18px color-mix(in srgb, var(--accent) 24%, transparent); }
 /* A corner badge that hangs off the button's top-right, the way the car-tab count does, so the label never wraps the button text. */
 .seat-action em { position: absolute; top: -9px; right: -4px; display: inline-flex; padding: 3px 7px; border-radius: 999px; border: 1.5px solid var(--surface); background: var(--success-soft); color: var(--success); font-size: 12px; font-style: normal; font-weight: 800; line-height: 1.2; white-space: nowrap; }
-.sticky-action { position: sticky; bottom: calc(82px + env(safe-area-inset-bottom)); z-index: 5; }
+.sticky-action { position: sticky; bottom: calc(var(--nav-height) + var(--cta-gap)); z-index: 5; }
+.screen:has(.sticky-action) { padding-bottom: calc(var(--nav-height) + var(--cta-gap)); }
 
 .grade-picker { display: grid; gap: 9px; margin: 0; padding: 0; border: 0; }
 .choice-grid { align-items: stretch; }
@@ -340,14 +360,12 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 /* A car holding picked seats looks like a selected column chip; the car on screen is told apart by a heavier outline. */
 .car-tab.picked { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
 .car-tab.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-ink); }
-.car-tab.trimmed { opacity: .38; border-style: dashed; }
+.car-tab.trimmed { opacity: .35; }
 .car-tab.trimmed b { text-decoration: line-through; }
 .car-tab em { position: absolute; top: -6px; right: -6px; display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; background: var(--accent-strong); color: var(--on-accent); font-size: 12px; font-style: normal; font-weight: 800; }
 .seat-filter { display: grid; gap: 8px; padding: 10px; border-radius: 14px; background: var(--bg); }
 .seat-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
-.seat-filter-row > span { flex: none; width: 28px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .seat-columns { align-items: flex-start; }
-.seat-columns > span { height: 48px; display: grid; place-items: center; }
 .seat-chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 /* 열 글자와 창가·복도는 각각 한 덩어리다. 좁으면 덩어리째 다음 줄로 넘어가서, 복도 하나만 가로로 늘어나지 않는다. */
 .seat-filter .seat-chips { align-items: stretch; gap: 6px; }
@@ -394,6 +412,10 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .seat-cell.occupied { background: color-mix(in srgb, var(--muted) 13%, var(--surface)); color: var(--muted); }
 .seat-cell.selected { border-color: var(--accent); background: var(--accent); color: var(--on-accent); box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 24%, transparent); }
 .seat-cell.selected small { color: var(--on-accent); }
+/* 조건이 빼는 자리·줄은 판매 여부와 상관없이 흐리게, 뺀 줄은 번호에 취소선. */
+.seat-cell.excluded, .seat-row.excluded .seat-cell { opacity: .35; box-shadow: none; }
+
+.seat-row.excluded > span { text-decoration: line-through; }
 .seat-loading { min-height: 180px; display: grid; place-items: center; align-content: center; gap: 10px; color: var(--muted); }
 .seat-loading .spinner { border-color: color-mix(in srgb, var(--accent) 20%, transparent); border-top-color: var(--accent); }
 .seat-dialog-error { min-height: 180px; display: grid; place-items: center; align-content: center; gap: 8px; padding: 20px; color: var(--muted); text-align: center; }
@@ -416,7 +438,8 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .date-picker.open .date-field > svg:last-child, .time-picker.open .date-field > svg:last-child { transform: rotate(180deg); }
 .date-calendar { padding: 6px 0 8px; border-radius: 18px; background: var(--bg); }
 /* 7칸 날짜가 48px 터치 영역을 갖도록 카드 안쪽 여백까지 써요. */
-.form-card .date-calendar, .action-sheet .date-calendar, .schedule-panel .date-calendar { margin-inline: -10px; }
+/* 좁은 폰(갤럭시 폴드 커버 344dp)에서도 한 칸 44px(7칸 308px)이 되도록, 모자란 만큼 양옆으로 더 넓혀요. */
+.form-card .date-calendar, .action-sheet .date-calendar, .schedule-panel .date-calendar { margin-inline: min(-10px, calc((100% - 308px) / 2)); }
 .date-calendar-head { display: grid; grid-template-columns: 48px 1fr 48px; align-items: center; }
 .date-calendar-head h3 { margin: 0; font-size: 17px; font-weight: 760; letter-spacing: -.3px; text-align: center; font-variant-numeric: tabular-nums; }
 .date-nav { display: grid; place-items: center; width: 48px; height: 48px; padding: 0; border-radius: 50%; background: transparent; color: var(--accent-ink); }
@@ -444,29 +467,41 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 }
 @keyframes date-open { from { opacity: 0; transform: translateY(-6px); } }
 
-/* 시간 선택기: 날짜 칸과 같은 칸을 눌러 그 자리에 펼쳐요. 시는 오전·오후로 나눈 4칸 칩, 분은 10분 단위 한 줄이에요.
-   판은 달력처럼 카드 안쪽 여백까지 써서 360dp 폰에서도 분 칸이 48px 을 넘어요. */
+/* 시간 선택기: 날짜 칸과 같은 칸을 눌러 그 자리에 펼쳐요. 위에 고른 시각을 크게, 아래에 시·분 슬라이더(분은 5분 단위)를 둬요.
+   큰 시각의 시·분은 버튼이라 누르면 그 슬라이더로 돌아가요. 초점이 있는 줄을 옅게 칠해 지금 고르는 쪽을 보여요. */
 .time-picker { display: grid; gap: 10px; color: var(--text); font-size: 15px; font-weight: 400; }
 .time-field b { font-variant-numeric: tabular-nums; }
 .time-field:disabled { color: var(--muted); }
-.time-panel { display: grid; gap: 6px; margin-inline: -10px; padding: 4px 8px 10px; border-radius: 18px; background: var(--bg); }
-.time-panel > p { margin: 6px 2px 0; color: var(--muted); font-size: 12px; font-weight: 700; }
-.time-hours { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
-.time-panel .seat-chip { min-width: 0; padding: 0; font-size: 15px; font-variant-numeric: tabular-nums; }
-.time-panel .seat-chip.selected { border-color: var(--accent-strong); background: var(--accent-strong); color: var(--on-accent); font-weight: 800; box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 24%, transparent); }
-/* 분은 붙은 한 줄(세그먼트)이라 시 칩과 다른 무리로 읽혀요. */
-.time-minutes { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
-.time-minutes .seat-chip { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.time-minutes .seat-chip + .seat-chip { border-left: 1px solid var(--line); }
-.time-minutes .seat-chip:first-child { border-radius: 12px 0 0 12px; }
-.time-minutes .seat-chip:last-child { border-radius: 0 12px 12px 0; }
-.time-minutes .seat-chip:focus-visible { outline-offset: -3px; }
-.time-minutes .seat-chip.selected { box-shadow: none; }
+.time-panel { --time-rail: color-mix(in srgb, var(--muted) 28%, transparent); display: grid; gap: 4px; margin-inline: -10px; padding: 14px 10px 8px; border-radius: 18px; background: var(--bg); }
+.time-panel-cap { margin: 0; color: var(--muted); font-size: 13px; font-weight: 700; text-align: center; }
+.time-big { display: flex; justify-content: center; align-items: center; margin: 0 0 6px; font-size: 30px; font-weight: 800; letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
+.time-big button { min-width: 48px; min-height: 48px; padding: 0 6px; border-radius: 12px; background: transparent; font: inherit; letter-spacing: inherit; }
+.time-big button:not(:disabled):active { background: var(--accent-soft); }
+@media (hover: hover) { .time-big button:not(:disabled):hover { background: var(--accent-soft); } }
+.time-slider { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 8px; padding: 8px 12px 0; border-radius: 14px; transition: background-color .15s ease; }
+.time-slider > span { color: var(--muted); font-size: 14px; font-weight: 700; }
+.time-slider > b { justify-self: end; font-size: 15px; font-variant-numeric: tabular-nums; }
+.time-slider:focus-within { background: var(--accent-soft); }
+.time-slider:focus-within > span, .time-slider:focus-within > b { color: var(--accent-ink); }
+/* 기본 슬라이더를 앱 색으로. 손잡이는 28px 이지만 입력 칸 높이가 48px 이라 누를 곳이 넉넉해요.
+   채운 구간은 --fill 로 그려요(Firefox 는 ::-moz-range-progress). .field input 의 칸 모양은 걷어 내요. */
+.time-slider input[type="range"], .time-slider input[type="range"]:focus { grid-column: 1 / -1; width: 100%; min-height: 0; height: 48px; margin: 0; padding: 0; border: 0; border-radius: 0; outline: none; background: transparent; box-shadow: none; cursor: pointer; -webkit-appearance: none; appearance: none; }
+.time-slider input[type="range"]:disabled { opacity: .4; cursor: not-allowed; }
+.time-slider input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--accent-strong) var(--fill), var(--time-rail) var(--fill)); }
+.time-slider input[type="range"]::-webkit-slider-thumb { width: 28px; height: 28px; margin-top: -11px; border: 3px solid var(--accent-strong); border-radius: 50%; background: var(--surface); box-shadow: 0 2px 8px rgb(0 0 0 / 18%); -webkit-appearance: none; appearance: none; }
+.time-slider input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent); }
+.time-slider input[type="range"]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--time-rail); }
+.time-slider input[type="range"]::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--accent-strong); }
+.time-slider input[type="range"]::-moz-range-thumb { box-sizing: border-box; width: 28px; height: 28px; border: 3px solid var(--accent-strong); border-radius: 50%; background: var(--surface); }
+.time-slider input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent); }
 @media (prefers-reduced-motion: no-preference) {
   .time-panel.entering { animation: date-open .22s cubic-bezier(.2, 0, 0, 1) both; }
 }
+@media (prefers-reduced-motion: reduce) {
+  .time-slider { transition: none; }
+}
 /* 나란한 두 시간 칸: 이름·칸은 제자리에 두고, 펼친 판만 두 칸 아래에 카드 폭으로 깔려요. */
-.time-range { row-gap: 8px; }
+.time-range { row-gap: 8px; margin-top: var(--field-gap); }
 .time-range > .field, .time-range .time-picker { display: contents; }
 .time-range > .field > span { grid-row: 1; }
 .time-range .time-field { grid-row: 2; gap: 8px; padding-inline: 12px; }
@@ -517,7 +552,7 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .center { text-align: center; }
 .muted { color: var(--muted); }
 
-.empty { min-height: 260px; display: grid; place-items: center; align-content: center; gap: 8px; padding: 30px 18px; text-align: center; }
+.empty { min-height: 260px; display: grid; place-items: center; align-content: center; gap: 8px; padding: 30px 0; text-align: center; }
 .empty.compact { min-height: 80px; padding: 14px; }
 .empty-mark { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); }
 .empty-mark svg { width: 39px; height: 39px; }
@@ -527,11 +562,21 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .empty h2 { margin: 8px 0 0; font-size: 16px; }
 .empty p { max-width: 280px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .empty .button { margin-top: 12px; }
-.notification { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 15px 0; border-bottom: 1px solid var(--line); }
-.notification-icon { display: grid; place-items: center; width: 37px; height: 37px; border-radius: 13px; background: var(--accent-soft); color: var(--accent); }
-.notification div { display: grid; gap: 6px; }
-.notification b { font-size: 12px; line-height: 1.55; white-space: pre-line; }
-.notification small { font-size: 12px; }
+/* 알림 한 건: 종류 그림(색 원) · 제목과 상대 시각 · 열차 한 줄 · 본문. 이모지나 글자 배지 대신 그림과 색으로 종류를 알려요.
+   색은 data-tone 으로: .muted 같은 클래스는 전역 글자색 유틸리티와 겹쳐 카드 전체가 흐려져요. */
+.notification { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 14px; margin-bottom: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow); }
+.notification-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); }
+.notification-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.notification[data-tone="success"] .notification-icon { background: var(--success-soft); color: var(--success); }
+.notification[data-tone="warning"] .notification-icon { background: var(--warning-soft); color: var(--warning); }
+.notification[data-tone="danger"] .notification-icon { background: var(--danger-soft); color: var(--danger); }
+.notification[data-tone="muted"] .notification-icon { background: color-mix(in srgb, var(--muted) 13%, var(--surface)); color: var(--muted); }
+.notification-body { display: grid; gap: 3px; }
+.notification-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-height: 22px; }
+.notification-head b { font-size: 16px; line-height: 1.35; }
+.notification-head small { flex: none; color: var(--hint); font-size: 12px; }
+.notification-detail { margin: 0; color: var(--text); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.notification-text { margin: 6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; white-space: pre-line; }
 
 .profile-card { display: flex; align-items: center; gap: 13px; padding: 18px; border-radius: 18px; background: var(--accent-soft); }
 .profile-avatar { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%; background: var(--accent); color: var(--surface); font-weight: 800; }
@@ -573,6 +618,8 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .segmented { display: grid; grid-template-columns: 1fr 1fr; margin: 22px 0 18px; padding: 4px; border-radius: 13px; background: color-mix(in srgb, var(--muted) 11%, transparent); }
 .segmented button { min-height: 38px; border-radius: 10px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 650; }
 .segmented button.active { background: var(--surface); color: var(--text); box-shadow: 0 3px 12px rgb(20 30 45 / 8%); }
+/* 좌석표 위 "바로 예약 | 취소표 대기": 좌석이 남은 열차에서만 보여요. */
+.segmented.seat-mode { margin: 0; }
 .gate-list { display: grid; gap: 10px; margin: 22px 0 8px; }
 .gate-card {
   display: grid; gap: 4px; width: 100%; padding: 16px 18px; border-radius: 16px;
@@ -583,7 +630,7 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .gate-card small { color: var(--muted); font-size: 12px; line-height: 1.45; }
 .invite-card { margin: 10px 0 0; padding: 14px; border-radius: 14px; background: var(--accent-soft); }
 .invite-card p { margin: 0 0 10px; color: var(--accent-ink); font-size: 12px; line-height: 1.5; }
-.invite-card code { display: block; padding: 10px; border-radius: 10px; background: var(--surface); font-size: 12px; word-break: break-all; }
+.invite-card code { display: block; padding: 10px; border-radius: 10px; background: var(--surface); font-size: 18px; font-weight: 700; text-align: center; overflow-wrap: anywhere; }
 .invite-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
 .auth-note { margin: 21px 0 0; color: var(--muted); font-size: 12px; line-height: 1.65; text-align: center; }
 .demo-enter { display: block; margin: 12px auto 0; }
@@ -599,7 +646,7 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
    시트·좌석표가 열려 있으면 그 뒤에 머물러 시트의 버튼을 가리지 않아요(z-index 80 아래). */
 .toast {
   --toast-lift: 0px;
-  position: fixed; right: 20px; left: 20px; z-index: 70;
+  position: fixed; right: var(--gutter); left: var(--gutter); z-index: 70;
   bottom: calc(var(--nav-height) + var(--toast-shell-gap, 0px) + 10px + var(--toast-lift));
   max-width: 480px; min-height: 48px; margin: auto;
   display: flex; align-items: center; gap: 10px; padding: 13px 18px;
@@ -611,7 +658,7 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 }
 .toast::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--inverse-accent); }
 /* 버튼 높이(54px) + 화면 아래 여백(탭바 + 여유)만큼. 목록 끝까지 내려 버튼이 가장 높이 올라와도 겹치지 않아요. */
-.toast.above-action { --toast-lift: calc(var(--nav-clearance) + 54px); }
+.toast.above-action { --toast-lift: calc(var(--cta-gap) + 54px); }
 .toast.leaving { animation: toast-out .18s cubic-bezier(.3, 0, .8, .15) var(--toast-age, 0ms) both; }
 .toast.dragging { animation: none; transition: none; }
 .toast:empty { display: none; }
@@ -631,10 +678,10 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 }
 
 @media (max-width: 350px) {
-  .screen { padding-inline: 16px; }
-  .topbar { padding-inline: 16px; }
+  :root { --gutter: 16px; }
   .station-grid { grid-template-columns: 1fr; }
-  .route-arrow { height: 20px; transform: rotate(90deg); }
+  .route-middle { height: 48px; }
+  .route-swap svg { transform: rotate(90deg); }
   .choice-grid { grid-template-columns: 1fr; }
   .route-hero span { font-size: 20px; }
 }
@@ -670,14 +717,14 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
 .availability, .field-note, .intro, .notice, .summary-card dl,
 .activity-card > .muted, .empty p { font-size: 14px; }
 .search-last-check, .stats small, .payment-row small, .favourite-main small,
-.train-main-text > small, .notification small,
+.train-main-text > small,
 .profile-card small, .settings-row small, .account-state small,
 .auth-note, .auth-card > p:not(.eyebrow, .auth-note) { font-size: 13px; }
 .section-head h2, .empty h2 { font-size: 20px; }
 .payment-row > b { font-size: 13px; }
 .payment-row strong, .context-line b { font-size: 17px; }
 .favourite-main b, .account-state b { font-size: 16px; }
-.route-symbol, .notification-icon {
+.route-symbol {
   width: auto; min-width: 48px; height: 40px; padding: 0 10px; border-radius: 11px;
   font-size: 12px; font-weight: 800;
 }
@@ -698,12 +745,12 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
 .seat-column b { font-size: 16px; }
 .seat-column small, .aisle { font-size: 12px; }
 .train-card { min-height: 96px; grid-template-columns: 1fr auto; }
-.train-check { width: 26px; height: 26px; font-size: 14px; }
+.train-check { width: 26px; height: 26px; }
 .train-main-text > b { font-size: 20px; }
 .profile-card b { font-size: 18px; }
 .settings-row { min-height: 72px; padding: 13px 4px; }
 .settings-row em { font-size: 14px; }
-.invite-card p, .invite-card code { font-size: 14px; }
+.invite-card p { font-size: 14px; }
 .segmented button { min-height: 48px; font-size: 15px; }
 .gate-card { min-height: 72px; }
 .gate-card b { font-size: 19px; }
@@ -727,12 +774,12 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
   .topbar {
     min-height: calc(68px + env(safe-area-inset-top));
     height: calc(68px + env(safe-area-inset-top));
-    padding: env(safe-area-inset-top) 20px 0;
+    padding: env(safe-area-inset-top) var(--gutter) 0;
   }
   .brand-mark { width: 42px; height: 42px; }
   .brand small { font-size: 12px; letter-spacing: 0; }
   .screen {
-    min-height: calc(100dvh - 68px); padding: 18px 20px calc(var(--nav-height) + var(--nav-clearance));
+    min-height: calc(100dvh - 68px); padding: 18px var(--gutter) calc(var(--nav-height) + var(--nav-clearance));
     /* overflow-x: hidden here also sets overflow-y: auto per spec, turning .screen into an unwanted scroll container that
        breaks position: sticky footers (they stick to .screen's scrollport, not the viewport); clip avoids that coupling,
        but is unsupported on WebView < Chromium 90 (possible on minSdk 23), so keep hidden as the fallback for those. */
@@ -761,15 +808,13 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
   .empty.compact { min-height: 150px; }
 
   #conditions-form { display: block; width: 100%; }
-  .form-card { margin: 14px 0; }
+  .form-card { margin: var(--stack-gap) 0; }
   .form-section-head { align-items: flex-start; flex-wrap: wrap; }
   .form-section-head > div { min-width: 0; }
   .form-section-head h2 { white-space: nowrap; }
   .form-section-head > .text-button {
     flex: 0 0 100%; justify-content: flex-end; min-height: 48px; margin-top: -4px;
   }
-  .station-grid { grid-template-columns: minmax(0, 1fr) 42px minmax(0, 1fr); gap: 8px; }
-  .route-arrow { width: 42px; min-height: 52px; align-self: end; }
   .choice-grid { gap: 10px; }
   .choice-card span, .choice-disabled { padding-inline: 12px; }
   #conditions-form > .button { margin-top: 18px; }
@@ -786,7 +831,7 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
 
   .screen-activity .empty, .screen-favourites .empty,
   .screen-notifications .empty { min-height: 310px; }
-  .screen-rail-account .form-stack { display: grid; gap: 14px; }
+  .screen-rail-account .form-stack { display: grid; gap: var(--stack-gap); }
 
   .auth-shell, .auth-shell.with-demo {
     width: 100%; max-width: 520px; min-height: 100dvh; margin: 0 auto;
@@ -796,17 +841,16 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
   .auth-art { min-height: 0; }
   .auth-card { margin: -24px 14px 0; padding: 28px 24px max(30px, env(safe-area-inset-bottom)); }
   .auth-card h1 { font-size: 31px; }
-  .auth-card .form-stack { display: grid; gap: 14px; }
-  .sticky-action { bottom: calc(66px + env(safe-area-inset-bottom)); }
+  .auth-card .form-stack { display: grid; gap: var(--stack-gap); }
 }
 
 @media (orientation: portrait) and (max-width: 370px) {
-  .screen { padding-inline: 16px; }
-  .topbar { padding-inline: 16px; }
+  :root { --gutter: 16px; }
   .bottom-nav button { font-size: 12px; }
   .subhead h1 { font-size: 24px; }
   .station-grid { grid-template-columns: 1fr; }
-  .route-arrow { width: 100%; height: 42px; min-height: 42px; transform: rotate(90deg); }
+  .route-middle { height: 48px; }
+  .route-swap svg { transform: rotate(90deg); }
   .choice-grid { grid-template-columns: 1fr; }
 }
 
@@ -833,7 +877,12 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
 }
 .choice-card input[type="checkbox"] + span::after { border-radius: 6px; }
 .choice-card input[type="radio"]:checked + span::after { border-color: var(--accent-strong); background: var(--accent-strong); box-shadow: inset 0 0 0 4px var(--surface); }
-.choice-card input[type="checkbox"]:checked + span::after { content: "✓"; border-color: var(--accent-strong); background: var(--accent-strong); }
+.choice-card input[type="checkbox"]:checked + span::after { border-color: var(--accent-strong); background: var(--accent-strong); }
+.choice-card input[type="checkbox"]:checked + span::before { content: ""; position: absolute; z-index: 1; top: 15px; right: 15px; width: 14px; height: 14px; background: var(--on-accent); -webkit-mask: var(--check) center / contain no-repeat; mask: var(--check) center / contain no-repeat; }
+/* 줄 모양 체크(마지막 열차까지 찾기 등)도 폰 기본 체크 대신 같은 네모·같은 체크 표시. */
+.check-row input[type="checkbox"] { appearance: none; flex: none; display: grid; place-items: center; border: 2px solid var(--line); border-radius: 6px; background: var(--surface); }
+.check-row input[type="checkbox"]:checked { border-color: var(--accent-strong); background: var(--accent-strong); }
+.check-row input[type="checkbox"]:checked::after { content: ""; width: 70%; height: 70%; background: var(--on-accent); -webkit-mask: var(--check) center / contain no-repeat; mask: var(--check) center / contain no-repeat; }
 /* 두 칸 격자 안에서는 버튼 사이 세로 여백이 필요 없어요(두 번째 버튼만 내려가던 문제). */
 .invite-actions .button + .button { margin-top: 0; }
 

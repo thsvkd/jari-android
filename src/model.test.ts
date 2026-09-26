@@ -11,15 +11,15 @@ import {
 } from "./model";
 
 describe("booking payload", () => {
-  it("defaults a new journey to today, the next ten minutes, and a two-hour window", () => {
+  it("defaults a new journey to today, the next five minutes, and a two-hour window", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 8, 14, 7, 54));
+    vi.setSystemTime(new Date(2026, 8, 14, 7, 52));
 
     const draft = conditionsToDraft(null);
 
     expect(draft.depDate).toBe("2026-09-14");
-    expect(draft.depTime).toBe("08:00");
-    expect(draft.maxDepTime).toBe("10:00");
+    expect(draft.depTime).toBe("07:55");
+    expect(draft.maxDepTime).toBe("09:55");
     expect(draft.unlimitedTime).toBe(false);
     vi.useRealTimers();
   });

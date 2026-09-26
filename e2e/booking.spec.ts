@@ -1,5 +1,6 @@
 import { expect, nextPoll, test } from "./fixtures";
 import { keepOnlyTrains, searchTrains, startSearching, trainLine, waitForPaymentCard } from "./flows";
+import { expectCleanLayout } from "./layout";
 
 // 코레일만 가짜예요. 로그인·조회·예약 워커·결제 감시·알림은 운영 코드가 그대로 돌아요.
 
@@ -32,10 +33,11 @@ test.describe("빈자리를 찾아 예약하기", () => {
     await page.locator("[data-view='notifications']").first().click();
     const notice = page.locator(".notification", { hasText: "좌석을 잡았어요" }).first();
     await expect(notice).toBeVisible();
-    await expect(notice.locator(".notification-icon")).toHaveText("예약");
-    const text = await notice.locator("b").innerText();
-    expect(text.split("\n")[0]).toBe("🎉 좌석을 잡았어요");
-    expect(text.split("\n")[1]).toBe(trainLine());
+    // 종류는 그림과 색으로, 제목에서는 서버가 붙인 그림 글자를 뗐어요.
+    await expect(notice.locator(".notification-icon")).toHaveAttribute("aria-label", "예약");
+    await expect(notice.locator(".notification-head b")).toHaveText("좌석을 잡았어요");
+    await expect(notice.locator(".notification-detail")).toHaveText(trainLine());
+    const text = await notice.innerText();
     for (const leftover of ["/notify_off", "/tickets", "봇", "===", "출발역"]) expect(text).not.toContain(leftover);
   });
 
@@ -102,5 +104,23 @@ test.describe("빈자리를 찾아 예약하기", () => {
     await expect(page.locator(".payment-card .payment-row strong").first()).toHaveText(trainLine());
     await expect(page.locator(".payment-card .payment-row small").first()).toContainText("1호차");
     expect((await control.korailLog()).filter((call) => call.event === "reserve_designated")).toHaveLength(1);
+  });
+
+  test("좌석이 남은 열차에서 매진 좌석을 누르면 취소표 대기로 바뀌고 빈 좌석 선택은 풀려요", async ({ signedIn: page }) => {
+    await searchTrains(page, { seatMode: "specific", seatClasses: ["general"] });
+    await page.locator("[data-seat-map][data-train-no='00101'][data-seat-class='general']").click();
+    await page.locator(".seat-cell.available:not([disabled])").first().click();
+    await expect(page.locator("[data-action='confirm-seat-dialog']")).toHaveText("1/1석 선택 · 예약하기");
+
+    await page.locator(".seat-cell.occupied").first().click();
+    await expect(page.locator(".seat-mode [aria-checked='true']")).toHaveText("취소표 대기");
+    await expect(page.locator(".seat-mode-notice")).toHaveText("빈 좌석 1석 선택을 풀었어요");
+    await expect(page.locator(".seat-cell.selected")).toHaveCount(1);
+    await expect(page.locator(".seat-cell.selected")).toHaveClass(/occupied/);
+    await expectCleanLayout(page, "seat-dialog-mode-switch");
+    await page.locator("[data-action='confirm-seat-dialog']").click();
+
+    await expect(page.locator(".seat-dialog")).toHaveCount(0);
+    await expect(page.locator(".train-card", { has: page.locator("[data-train-toggle='00101']") })).toContainText("1석 지정");
   });
 });

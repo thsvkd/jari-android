@@ -239,7 +239,7 @@ export function conditionsToDraft(conditions?: Conditions | null): BookingDraft 
     String(now.getDate()).padStart(2, "0"),
   ].join("-");
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const roundedStartMinutes = Math.min(23 * 60 + 59, Math.ceil(currentMinutes / 10) * 10);
+  const roundedStartMinutes = Math.min(23 * 60 + 59, Math.ceil(currentMinutes / 5) * 5);
   const suggestedEndMinutes = roundedStartMinutes + 120;
   const defaultUnlimitedTime = suggestedEndMinutes >= 24 * 60;
   const defaultEndMinutes = Math.min(23 * 60 + 59, suggestedEndMinutes);

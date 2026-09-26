@@ -12,6 +12,8 @@ from pathlib import Path
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from .invite_words import WORDS
+
 PASSWORD_METHOD = "scrypt:32768:8:3"
 _DUMMY_HASH = generate_password_hash("no such account", method=PASSWORD_METHOD)
 
@@ -24,6 +26,14 @@ class AuthError(ValueError):
 
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def invite_code(value: str) -> str | None:
+    """대소문자와 구분자를 무시하고 세 단어 초대 코드를 표준형으로 바꾼다."""
+    words = re.findall(r"[a-z]+", value.lower())
+    if len(words) == 3 and all(word in WORDS for word in words):
+        return "-".join(words)
+    return None
 
 
 def timestamp(value: float) -> str:
@@ -75,12 +85,20 @@ class IdentityStore:
     def create_invite(self, ttl=86400):
         if not 1 <= ttl <= 30 * 86400:
             raise ValueError("Invitation lifetime must be 1 second to 30 days")
-        token = secrets.token_urlsafe(32)
-        with self.connect() as db:
-            db.execute(
-                "INSERT INTO invites VALUES (?, ?, NULL)", (digest(token), self.clock() + ttl)
-            )
-        return token
+        # 단어 1,295개 세 개라 약 2.2e9 가지다. 가입 시도는 전체 60회/5분으로 막혀
+        # (api.py auth-any) 7일짜리 코드를 맞힐 확률은 약 5e-5 이다.
+        for _ in range(5):
+            token = "-".join(secrets.choice(WORDS) for _ in range(3))
+            try:
+                with self.connect() as db:
+                    db.execute(
+                        "INSERT INTO invites VALUES (?, ?, NULL)",
+                        (digest(token), self.clock() + ttl),
+                    )
+                return token
+            except sqlite3.IntegrityError:
+                continue
+        raise RuntimeError("Could not allocate a unique invitation")
 
     @staticmethod
     def credentials(username, password):
@@ -92,16 +110,20 @@ class IdentityStore:
 
     def register(self, username, password, invite):
         username = self.credentials(username, password)
-        if not isinstance(invite, str) or not 16 <= len(invite) <= 128:
+        if not isinstance(invite, str) or not invite.strip() or len(invite) > 128:
             raise AuthError("초대 코드가 올바르지 않거나 만료됐어요.", 403)
+        # 예전 긴 토큰은 그대로, 세 단어 코드는 표준형으로 찾는다.
+        raw = invite.strip()
+        hashes = (digest(raw), digest(invite_code(raw) or raw))
         # Hash before the write transaction: password stretching must not hold
         # SQLite's exclusive writer lock while another friend is signing up.
         hashed = generate_password_hash(password, method=PASSWORD_METHOD)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             changed = db.execute(
-                "UPDATE invites SET redeemed=? WHERE hash=? AND redeemed IS NULL AND expires>?",
-                (self.clock(), digest(invite), self.clock()),
+                "UPDATE invites SET redeemed=? WHERE hash IN (?, ?) AND redeemed IS NULL"
+                " AND expires>?",
+                (self.clock(), *hashes, self.clock()),
             ).rowcount
             if not changed:
                 raise AuthError("초대 코드가 올바르지 않거나 만료됐어요.", 403)

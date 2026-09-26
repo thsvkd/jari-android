@@ -85,6 +85,10 @@ interface SeatDialogState {
   // Set by "모든 호차에 적용": from then on a condition change re-picks every kept car from the cached inventories,
   // instead of only the car on screen and leaving the others - and the count on the confirm button - as they were.
   appliedToAll: boolean;
+  // The line under the map that says a tap switched the mode; toasts sit behind the dialog, so it's said here.
+  modeNotice: string;
+  // Opened on a train with seats for sale: both modes make sense, so the dialog shows the 바로 예약 | 취소표 대기 switch.
+  canBookNow: boolean;
 }
 
 // One bottom sheet serves both the in-app confirmations and the idle card's date pick.
@@ -123,14 +127,46 @@ const SEAT_OPTIONS: Record<string, string> = {
 
 const NOTIFY_STEPS = [0, 1, 3, 5, 10, 15, 30, 60, 120, 180];
 
+// 이 폰에서 열차를 조회한 구간, 최근 것부터. 서버는 반쯤 쓴 여정 하나만 돌려줘서 목록은 기기에 둬요.
+const RECENT_KEY = "jari.recentRoutes";
+const RECENT_LIMIT = 5;
+function recentRoutes(): Conditions[] {
+  try {
+    const list: unknown = JSON.parse(window.localStorage.getItem(RECENT_KEY) ?? "[]");
+    return Array.isArray(list) ? (list as Conditions[]) : [];
+  } catch {
+    return [];
+  }
+}
+function rememberRoute(conditions: Conditions): void {
+  const same = (item: Conditions) => item.src_station === conditions.src_station && item.dst_station === conditions.dst_station;
+  try {
+    window.localStorage.setItem(RECENT_KEY, JSON.stringify([conditions, ...recentRoutes().filter((item) => !same(item))].slice(0, RECENT_LIMIT)));
+  } catch {
+    // 저장하지 못해도 바로가기에서만 빠져요.
+  }
+}
+
 
 // True when a seat's label is the real seat number rather than the synthetic column letter the grid uses to lay it out (e.g. 무궁화 "23" vs KTX "3A").
 function isNumericSeatLabel(seat: SeatMapSeat): boolean {
   return Boolean(seat.column) && !seat.label.endsWith(seat.column);
 }
 
-// 서버 알림 종류마다 앞에 붙는 두 글자. 그 밖의 소식은 "찾기"예요.
-const NOTICE_MARKS: Record<string, string> = { reservation: "예약", payment: "결제", error: "문제" };
+// 서버 알림 종류마다 앞에 붙는 선 그림과 색. 그 밖의 소식은 "찾기"(돋보기)예요. 이름은 화면 낭독기가 읽어요.
+const NOTICE_KINDS: Record<string, { name: string; title: string; tone: Tone; icon: string }> = {
+  reservation: { name: "예약", title: "예약 소식", tone: "success", icon: '<path d="M4 8a2 2 0 0 0 2-2h12a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H6a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4z"/><path d="m9.5 12.2 1.8 1.8 3.4-3.6"/>' },
+  payment: { name: "결제", title: "결제 알림", tone: "warning", icon: '<rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 14.5h3"/>' },
+  error: { name: "문제", title: "문제가 생겼어요", tone: "danger", icon: '<path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4.2M12 17h.01"/>' },
+  search: { name: "찾기", title: "자리 찾기", tone: "muted", icon: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/>' },
+};
+// 서버 알림 글은 "🎉 제목\n열차 한 줄\n\n본문" 모양이에요. 제목 앞 그림 글자는 떼고 세 부분으로 나눠 그려요.
+// 한 줄짜리(결제 재촉 등)는 종류 이름을 제목으로 두고 글을 본문으로 내려요. 긴 문장이 굵은 제목이 되지 않게요.
+function splitNotice(text: string, fallbackTitle: string): { title: string; detail: string; body: string } {
+  if (!text.includes("\n")) return { title: fallbackTitle, detail: "", body: text.trim() };
+  const [first = "", second = "", ...rest] = text.split("\n");
+  return { title: first.replace(/^[\p{Extended_Pictographic}️‍\s]+/u, ""), detail: second.trim(), body: rest.join("\n").trim() };
+}
 // 찾기 상태 배지 색. 정상은 기본 파랑, 문제는 주황, 아직 모르는 상태는 회색이에요.
 const RADAR_TONE: Partial<Record<RadarKind, Tone>> = { error: "warning", stale: "warning", offline: "warning", idle: "muted", "running-unverified": "muted" };
 
@@ -550,32 +586,22 @@ export class JariApp {
       </aside></div>`;
   }
 
-  // The shortcuts on the idle card: the search the server restored, then up to three favourites, never the same route and window twice.
+  // The shortcuts under the heading: the search the server restored, then the routes this phone searched lately.
+  // Favourites have their own list below, so they stay off the shelf. One chip per route, at most five.
   private homeChips(): RouteChip[] {
     const state = this.state!;
+    const sources: Array<[string, Conditions]> = state.draft ? [["recent", state.draft]] : [];
+    recentRoutes().forEach((conditions, index) => sources.push([`recent:${index}`, conditions]));
+    const seen = new Set<string>();
     const chips: RouteChip[] = [];
-    const seen = new Map<string, RouteChip>();
-    const add = (key: string, when: string, conditions: Conditions) => {
+    for (const [key, conditions] of sources) {
+      if (!conditions.src_station || !conditions.dst_station) continue;
       const route = `${conditions.src_station} → ${conditions.dst_station}`;
-      const mark = `${route}|${formatTimeWindow(conditions)}`;
-      if (!conditions.src_station || !conditions.dst_station) return;
-      const twin = seen.get(mark);
-      if (twin) {
-        // The favourite's own name says more than "최근"; keep the earlier chip's place, take the later label.
-        if (twin.key === "recent") Object.assign(twin, { key, when });
-        return;
-      }
-      const chip = { key, route, when, conditions };
-      seen.set(mark, chip);
-      chips.push(chip);
-    };
-    if (state.draft) add("recent", `최근 · ${formatTimeWindow(state.draft)}`, state.draft);
-    for (const favourite of state.favourites.slice(0, 3)) {
-      // A favourite left with its default name is just the route, which the chip already shows above.
-      const label = favourite.name === favourite.route ? "즐겨찾기" : favourite.name;
-      add(favourite.id, `${label} · ${favourite.window}`, favourite.conditions);
+      if (seen.has(route)) continue;
+      seen.add(route);
+      chips.push({ key, route, when: formatTimeWindow(conditions), conditions });
     }
-    return chips;
+    return chips.slice(0, RECENT_LIMIT);
   }
 
   // 찾는 중 카드: 배지·구간·조건 한 줄과 두 개의 글자 버튼만. 나머지는 자세히 보기에서 봐요.
@@ -649,10 +675,10 @@ export class JariApp {
     return `${this.renderSubhead("새 여정", "여행 조건을 알려 주세요")}
       <form id="conditions-form" class="form-stack">
         <section class="card form-card">
-          <div class="form-section-head"><div><span>01</span><h2>어디로 떠나세요?</h2></div>${button({ variant: "text", action: "swap", label: "출발·도착 바꾸기 ⇄" })}</div>
+          <div class="form-section-head"><div><span>01</span><h2>어디로 떠나세요?</h2></div></div>
           <div class="station-grid">
             <label class="field"><span>출발역</span><input name="src_station" list="stations" value="${escapeHtml(this.draft.srcStation)}" required autocomplete="off"></label>
-            <span class="route-arrow">→</span>
+            <span class="route-middle"><button type="button" class="route-swap" data-action="swap" aria-label="출발·도착 바꾸기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5 4 8l3 3M4 8h13M17 13l3 3-3 3M20 16H7"/></svg></button></span>
             <label class="field"><span>도착역</span><input name="dst_station" list="stations" value="${escapeHtml(this.draft.dstStation)}" required autocomplete="off"></label>
           </div>
           <datalist id="stations">${stationOptions}</datalist>
@@ -750,7 +776,7 @@ export class JariApp {
             const targets = this.cancellationTargets.filter((target) => target.trainNo === train.no);
             const selectedCount = targets.reduce((sum, target) => sum + target.targets.length, 0);
             const wholeTrain = targets.some((target) => !target.targets.length);
-            return `<article class="train-card ${targets.length ? "selected" : ""}"><button type="button" class="train-main" data-train-toggle="${escapeHtml(train.no)}" aria-pressed="${wholeTrain}"><span class="train-check" aria-hidden="true">✓</span><span class="train-main-text"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b></span></button>${badge({ shape: "tag", className: "seat-badge", tone: wholeTrain ? "solid" : anyAvailable ? "success" : "danger", label: wholeTrain ? "좌석 무관 선택" : selectedCount ? `${selectedCount}석 지정` : anyAvailable ? "좌석 있음" : "매진" })}<div class="train-actions">${anyAction}${official}</div></article>`;
+            return `<article class="train-card ${targets.length ? "selected" : ""}"><button type="button" class="train-main" data-train-toggle="${escapeHtml(train.no)}" aria-pressed="${wholeTrain}"><span class="train-check" aria-hidden="true"></span><span class="train-main-text"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b></span></button>${badge({ shape: "tag", className: "seat-badge", tone: wholeTrain ? "solid" : anyAvailable ? "success" : "danger", label: wholeTrain ? "좌석 무관 선택" : selectedCount ? `${selectedCount}석 지정` : anyAvailable ? "좌석 있음" : "매진" })}<div class="train-actions">${anyAction}${official}</div></article>`;
           })
           .join("")
       : emptyState({ mark: "train", title: "조회된 열차가 없어요", text: "시간이나 구간을 바꿔 다시 조회해 주세요." });
@@ -786,7 +812,7 @@ export class JariApp {
       const trimmed = !kept.has(car.carNo);
       return `<button type="button" class="car-tab ${dialog.carNo === car.carNo ? "selected" : ""} ${count ? "picked" : ""} ${trimmed ? "trimmed" : ""}" data-seat-car="${escapeHtml(car.carNo)}" ${locked ? "disabled" : ""}><b>${escapeHtml(car.carNo)}호차</b><small>${trimmed ? "제외" : dialog.layoutReference ? "좌석표" : `${escapeHtml(car.remainingSeatCount)}석 가능`}</small>${count ? `<em>${escapeHtml(count)}</em>` : ""}</button>`;
     }).join("");
-    const selectable = (seat: SeatMapSeat) => this.seatSelectable(dialog, seat);
+    const selectable = this.seatSelectable(dialog);
     const layout = dialog.inventory ? groupSeatsByLayout(dialog.inventory.seats) : [];
     // Window columns read from the layout once per car; a per-cell "first/last in this row" check mislabels the aisle seat next to a short row (door, wheelchair space) as a window seat.
     const windowColumns = dialog.inventory ? new Set(seatColumnSets(dialog.inventory.seats).window) : new Set<string>();
@@ -794,8 +820,16 @@ export class JariApp {
       const [previous, seat] = [row[index - 1], row[index]];
       return Boolean(previous?.adjacencyGroup && seat?.adjacencyGroup && previous.adjacencyGroup !== seat.adjacencyGroup);
     };
+    // 조건(열·앞뒤 줄·가족석)이 빼는 자리. 판매 여부와 상관없이 빗금으로 덮어 매진 좌석과 헷갈리지 않아요.
+    const { filter } = dialog;
+    const filtering = Boolean(dialog.inventory) && (filter.columns.length > 0 || filter.trimRows > 0 || filter.excludeFamily);
+    const keptSeats = filtering
+      ? new Set(filterSeats(dialog.inventory!.seats, { ...filter, trimRows: Math.min(filter.trimRows, maxTrimRows(dialog.inventory!.seats)) }).map((seat) => seat.seatNo))
+      : null;
+    const excluded = (seat: SeatMapSeat) => keptSeats !== null && !keptSeats.has(seat.seatNo);
     const rows = dialog.inventory
       ? layout.map((row) => {
+          const wholeRowOut = row.every(excluded);
           const cells = row.map((seat, index) => {
             const groupChanged = aisleBefore(row, index);
             const selected = selectedKeys.has(`${seat.carNo}:${seat.seatNo}`);
@@ -804,9 +838,9 @@ export class JariApp {
             const windowSeat = seat.column ? windowColumns.has(seat.column) : index === 0 || index === row.length - 1;
             // A numeric-label car (무궁화 등) has a synthetic column letter; show the real seat number instead.
             const cellText = seat.column && !isNumericSeatLabel(seat) ? seat.column : seat.label;
-            return `${groupChanged ? '<span class="train-aisle" aria-hidden="true"><b>통</b><b>로</b></span>' : ""}<button type="button" class="seat-cell ${available ? "available" : "occupied"} ${selected ? "selected" : ""} ${windowSeat ? "window-seat" : ""}" data-seat-no="${escapeHtml(seat.seatNo)}" aria-pressed="${selected}" ${selectable(seat) && !locked ? "" : "disabled"} title="${escapeHtml(description)}"><b>${escapeHtml(cellText)}</b><small>${seat.familyLabel ? "가족" : windowSeat ? "창가" : available ? "가능" : "대기"}</small></button>`;
+            return `${groupChanged ? '<span class="train-aisle" aria-hidden="true"><b>통</b><b>로</b></span>' : ""}<button type="button" class="seat-cell ${available ? "available" : "occupied"} ${selected ? "selected" : ""} ${windowSeat ? "window-seat" : ""} ${!wholeRowOut && excluded(seat) ? "excluded" : ""}" data-seat-no="${escapeHtml(seat.seatNo)}" aria-pressed="${selected}" ${selectable && !locked ? "" : "disabled"} title="${escapeHtml(description)}"><b>${escapeHtml(cellText)}</b><small>${seat.familyLabel ? "가족" : windowSeat ? "창가" : available ? "가능" : "대기"}</small></button>`;
           }).join("");
-          return `<div class="seat-row"><span>${escapeHtml(row[0]?.row ?? "")}</span><div class="seat-row-track">${cells}</div></div>`;
+          return `<div class="seat-row ${wholeRowOut ? "excluded" : ""}"><span>${escapeHtml(row[0]?.row ?? "")}</span><div class="seat-row-track">${cells}</div></div>`;
         }).join("") || (dialog.inventory.seats.length
           ? '<div class="seat-dialog-error" role="alert"><b>이 열차의 좌석표 형식을 아직 읽지 못했어요.</b><p>다른 호차를 선택하거나 나중에 다시 시도해 주세요.</p></div>'
           : "")
@@ -826,12 +860,13 @@ export class JariApp {
       : dialog.selected.length === 0);
     return overlay({ className: "seat-dialog", labelledBy: "seat-dialog-title", content: `
       <header><div><p class="eyebrow">${escapeHtml(`${dialog.train.name || "열차"} ${dialog.train.no}`)} · ${classLabel}</p><h2 id="seat-dialog-title">${title}</h2></div>${button({ variant: "icon", action: "close-seat-dialog", ariaLabel: "좌석 선택 닫기", content: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>' })}</header>
+      ${dialog.canBookNow && !dialog.layoutReference ? `<div class="segmented seat-mode" role="radiogroup" aria-label="좌석을 고르는 방식">${(["immediate", "wait"] as const).map((mode) => `<button type="button" role="radio" class="${dialog.mode === mode ? "active" : ""}" aria-checked="${dialog.mode === mode}" data-seat-mode-switch="${mode}" ${locked ? "disabled" : ""}>${mode === "immediate" ? "바로 예약" : "취소표 대기"}</button>`).join("")}</div>` : ""}
       <div class="car-tabs" aria-label="호차 선택">${cars}</div>
       ${dialog.inventory ? this.renderSeatFilter(dialog, dialog.inventory.seats) : ""}
-      <div class="seat-legend">${dialog.layoutReference ? "" : '<span><i class="available"></i>현재 예약 가능</span>'}<span><i class="occupied"></i>${dialog.mode === "wait" ? "취소표 대기 가능" : "선택 불가"}</span><span><i class="selected"></i>선택</span></div>
+      <div class="seat-legend">${dialog.layoutReference ? "" : '<span><i class="available"></i>현재 예약 가능</span>'}<span><i class="occupied"></i>${dialog.mode === "wait" || !dialog.layoutReference ? "취소표 대기 가능" : "선택 불가"}</span><span><i class="selected"></i>선택</span></div>
       <div class="seat-map-live">${rows}</div>
       ${dialog.inventory && dialog.error ? notice({ tone: "warning", className: "seat-inline-error", alert: true, text: dialog.error }) : ""}
-      <footer><div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || dialog.filter.columns.length || dialog.filter.trimRows || dialog.filter.excludeFamily ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div>${button({ action: "confirm-seat-dialog", content: confirmText, disabled: confirmDisabled })}</footer>` });
+      <footer>${dialog.modeNotice ? `<p class="seat-mode-notice" role="status">${escapeHtml(dialog.modeNotice)}</p>` : ""}<div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || dialog.filter.columns.length || dialog.filter.trimRows || dialog.filter.excludeFamily ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div>${button({ action: "confirm-seat-dialog", content: confirmText, disabled: confirmDisabled })}</footer>` });
   }
 
   private renderSheet(): string {
@@ -921,7 +956,7 @@ export class JariApp {
     // which is how "복도" became a full-width bar on narrow phones.
     const pairChips = `${chip("pair:window", "창가", allOn(sets.window))}${sets.aisle.length ? chip("pair:aisle", "복도", allOn(sets.aisle)) : ""}`;
     return `<div class="seat-filter">
-      <div class="seat-filter-row seat-columns"><span>열</span><div class="seat-chips">${columnChips ? `<div class="seat-chip-letters">${columnChips}</div>` : ""}<div class="seat-chip-pairs">${pairChips}</div></div></div>
+      <div class="seat-filter-row seat-columns"><div class="seat-chips" role="group" aria-label="좌석 열">${columnChips ? `<div class="seat-chip-letters">${columnChips}</div>` : ""}<div class="seat-chip-pairs">${pairChips}</div></div></div>
       <div class="seat-filter-row seat-steppers">${stepper("trim", "좌석 앞뒤 제외", trimLabel, filter.trimRows <= 0, filter.trimRows >= maxTrimRows(seats))}${carStepper}${family}</div>
       ${applyAll}
     </div>`;
@@ -932,7 +967,8 @@ export class JariApp {
     if (!train || !trainKey) return;
     const dialog: SeatDialogState = {
       train, seatClass, mode, cars: [], inventory: null, inventories: new Map(), carNo: null,
-      selected: [], filter: emptySeatFilter(), layoutReference: false, loading: true, error: "", bulkApplying: false, trimCars: 0, appliedToAll: false,
+      selected: [], filter: emptySeatFilter(), layoutReference: false, loading: true, error: "", bulkApplying: false, trimCars: 0, appliedToAll: false, modeNotice: "",
+      canBookNow: mode === "immediate",
     };
     this.seatDialog = dialog;
     this.render();
@@ -1113,16 +1149,25 @@ export class JariApp {
     return seat.salePossible && !dialog.layoutReference;
   }
 
-  // Wait mode can pick any seat to wait for; immediate reservation can only take one that's actually available now.
-  private seatSelectable(dialog: SeatDialogState, seat: SeatMapSeat): boolean {
-    return dialog.mode === "wait" || this.seatAvailable(dialog, seat);
+  // Wait mode can pick any seat to wait for. In immediate mode a sold seat is a tap that switches to waiting (see toggleSeat),
+  // except on a reference layout, where "sold" is unknown and only a real map may start a wait from a train with seats.
+  private seatSelectable(dialog: SeatDialogState): boolean {
+    return dialog.mode === "wait" || !dialog.layoutReference;
   }
 
   private toggleSeat(seatNo: string): void {
     const dialog = this.seatDialog;
     if (!dialog || dialog.bulkApplying) return;
     const seat = dialog.inventory?.seats.find((item) => item.seatNo === seatNo);
-    if (!seat || !this.seatSelectable(dialog, seat)) return;
+    if (!seat || !this.seatSelectable(dialog)) return;
+    dialog.modeNotice = "";
+    // A sold seat tapped while booking now means "wait for this one"; a for-sale seat tapped while waiting means "book now".
+    // The two can't mix in one confirm, so the other mode's picks (and the conditions that picked them) are let go.
+    const available = this.seatAvailable(dialog, seat);
+    if (available !== (dialog.mode === "immediate")) {
+      this.switchSeatMode(dialog, available ? "immediate" : "wait", seat);
+      return;
+    }
     const index = dialog.selected.findIndex((item) => item.carNo === seat.carNo && item.seatNo === seat.seatNo);
     if (index >= 0) dialog.selected.splice(index, 1);
     else {
@@ -1130,6 +1175,20 @@ export class JariApp {
       if (dialog.mode === "immediate" && dialog.selected.length >= this.draft.passengerCount) dialog.selected.shift();
       dialog.selected.push(seat);
     }
+    this.refreshSeatDialog(true);
+  }
+
+  // The two modes can't mix in one confirm, so switching lets go of the other mode's picks and the conditions that made them.
+  // The switch above the map says which mode is on; the line under it says what was let go.
+  private switchSeatMode(dialog: SeatDialogState, mode: SeatSelectionMode, seat?: SeatMapSeat): void {
+    if (dialog.mode === mode) return;
+    const dropped = dialog.selected.length;
+    dialog.mode = mode;
+    dialog.selected = seat ? [seat] : [];
+    dialog.filter = emptySeatFilter();
+    dialog.appliedToAll = false;
+    dialog.trimCars = 0;
+    dialog.modeNotice = dropped ? `${mode === "immediate" ? "대기 좌석" : "빈 좌석"} ${dropped}석 선택을 풀었어요` : "";
     this.refreshSeatDialog(true);
   }
 
@@ -1168,14 +1227,16 @@ export class JariApp {
     // Turning the last condition off clears the car rather than selecting every seat in it.
     const empty = !filter.columns.length && !filter.trimRows && !filter.excludeFamily;
     const perCar = (seats: SeatMapSeat[]) => empty ? [] : filterSeats(seats, { ...filter, trimRows: Math.min(filter.trimRows, maxTrimRows(seats)) });
+    // 대기는 팔린 자리를 기다리는 것이라, 조건이 고르는 자리에서도 지금 살 수 있는 좌석은 빼요(좌석을 누를 때 모드가 바뀌는 규칙과 같아요).
+    const waitable = (seats: SeatMapSeat[]) => perCar(seats).filter((seat) => !this.seatAvailable(dialog, seat));
     if (dialog.mode === "immediate") {
       dialog.selected = perCar(inventory.seats).filter((seat) => seat.salePossible).slice(0, this.draft.passengerCount);
     } else if (dialog.appliedToAll) {
       // Every kept car follows the new condition, from the inventories the bulk apply cached; no request needed.
       const kept = keptCarNos(dialog);
-      dialog.selected = [...dialog.inventories.values()].filter((cached) => kept.has(cached.carNo)).flatMap((cached) => perCar(cached.seats));
+      dialog.selected = [...dialog.inventories.values()].filter((cached) => kept.has(cached.carNo)).flatMap((cached) => waitable(cached.seats));
     } else {
-      dialog.selected = [...dialog.selected.filter((seat) => seat.carNo !== inventory.carNo), ...perCar(inventory.seats)];
+      dialog.selected = [...dialog.selected.filter((seat) => seat.carNo !== inventory.carNo), ...waitable(inventory.seats)];
     }
     this.refreshSeatDialog(true);
   }
@@ -1380,7 +1441,11 @@ export class JariApp {
           : ["알림을 불러오는 중이에요", "잠시만 기다려 주세요."];
     const items = this.notificationsLoaded && this.notifications.length
       ? this.notifications
-          .map((item) => `<article class="notification"><span class="notification-icon">${NOTICE_MARKS[item.kind] ?? "찾기"}</span><div><b>${escapeHtml(item.text)}</b><small>${escapeHtml(formatStamp(item.createdAt))}</small></div></article>`)
+          .map((item) => {
+            const kind = NOTICE_KINDS[item.kind] ?? NOTICE_KINDS.search!;
+            const { title, detail, body } = splitNotice(item.text, kind.title);
+            return `<article class="notification" data-tone="${kind.tone}"><span class="notification-icon" role="img" aria-label="${kind.name}"><svg viewBox="0 0 24 24" aria-hidden="true">${kind.icon}</svg></span><div class="notification-body"><div class="notification-head"><b>${escapeHtml(title)}</b><small title="${escapeHtml(formatStamp(item.createdAt))}">${escapeHtml(relativeTime(item.createdAt, Date.now()))}</small></div>${detail ? `<p class="notification-detail">${escapeHtml(detail)}</p>` : ""}${body ? `<p class="notification-text">${escapeHtml(body)}</p>` : ""}</div></article>`;
+          })
           .join("")
       : emptyState({ mark: "bell", title, text });
     return `${this.renderSubhead("알림", "자리 찾기와 예약 소식")}${this.renderError()}${items}`;
@@ -1396,7 +1461,7 @@ export class JariApp {
     return `<div class="settings-layout"><aside class="settings-profile"><section class="profile-card"><span class="profile-avatar">${escapeHtml((state.user?.username || "나").slice(0, 1))}</span><div><b>${escapeHtml(state.user?.username || "여행자")}</b><small>${state.user?.role === "admin" ? "관리자 계정" : "초대로 가입한 계정"}</small></div></section></aside>
       <div class="settings-groups"><section class="settings-section"><p class="eyebrow">철도 계정</p>${listRow({ view: "rail-account", title: "코레일 계정", hint: state.rail.registered ? "연결됨 · 모든 고속열차 예약 준비 완료" : "연결되지 않음", value: `${state.rail.registered ? "관리" : "연결"} →` })}${listRow({ title: "수서 출발 고속열차", hint: "별도 SRT 계정 없이 코레일 계정으로 이용해요", trailing: badge({ tone: "success", className: "integrated-badge", label: "통합됨" }) })}</section>
       <section class="settings-section"><p class="eyebrow">알림</p>${listRow({ title: "찾기 상황 알림", hint: notifyAvailable ? "찾는 중 진행 상황을 알려드리는 간격" : "현재 서버에서는 알림 간격을 바꿀 수 없어요", trailing: stepper({ small: true, label: "찾기 상황 알림 간격", value: notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가", decrease: "notify-minus", increase: "notify-plus", disabled: !notifyAvailable, atMin: state.notifyMinutes <= NOTIFY_STEPS[0]!, atMax: state.notifyMinutes >= NOTIFY_STEPS[NOTIFY_STEPS.length - 1]! }) })}${listRow({ action: "request-push", disabled: !pushAvailable, title: "휴대폰 알림", hint: pushAvailable ? "Android 알림 권한 열기" : "휴대폰 알림 서비스가 아직 준비되지 않았어요", value: pushAvailable ? "설정" : "이용 불가" })}</section>
-      ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p>${badge({ className: "admin-only-badge", label: "관리자 전용" })}</div><p class="settings-section-copy">회원 가입 권한은 관리자만 발급할 수 있어요.</p>${listRow({ action: "create-invite", disabled: this.inviteLoading, title: "회원 초대 코드", hint: "관리자만 만들 수 있는 일회용 가입 코드예요", trailing: this.inviteLoading ? '<em><span class="inline-spinner" aria-hidden="true"></span><span class="sr-only">만드는 중</span></em>' : undefined, value: "만들기 →" })}${this.invitePreview ? `<div class="invite-card"><p>코드는 이 화면을 닫으면 다시 볼 수 없어요. 가입할 분에게 바로 전달해 주세요.</p><code>${escapeHtml(this.invitePreview)}</code><div class="invite-actions">${button({ action: "copy-invite", label: "복사" })}${button({ variant: "ghost", action: "dismiss-invite", label: "닫기" })}</div></div>` : ""}</section>` : ""}
+      ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p>${badge({ className: "admin-only-badge", label: "관리자 전용" })}</div><p class="settings-section-copy">회원 가입 권한은 관리자만 발급할 수 있어요.</p>${listRow({ action: "create-invite", disabled: this.inviteLoading, title: "회원 초대 코드", hint: "관리자만 만들 수 있는 일회용 가입 코드예요", trailing: this.inviteLoading ? '<em><span class="inline-spinner" aria-hidden="true"></span><span class="sr-only">만드는 중</span></em>' : undefined, value: "만들기 →" })}${this.invitePreview ? `<div class="invite-card"><p>코드는 이 화면을 닫으면 다시 볼 수 없어요. 가입할 분에게 바로 전달해 주세요. 띄어쓰기나 대소문자는 상관없어요.</p><code>${escapeHtml(this.invitePreview)}</code><div class="invite-actions">${button({ action: "copy-invite", label: "복사" })}${button({ variant: "ghost", action: "dismiss-invite", label: "닫기" })}</div></div>` : ""}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">앱</p>${listRow({ action: "theme", title: "화면 테마", hint: "시스템과 별도로 바꿀 수 있어요", value: this.theme === "dark" ? "다크" : "라이트" })}${listRow({ title: "앱 버전", hint: `서버 ${state.version}`, value: `v${appPackage.version}` })}</section>${button({ variant: "ghost-danger", action: "app-logout", label: "앱에서 로그아웃" })}</div></div>`;
   }
 
@@ -1441,7 +1506,7 @@ export class JariApp {
         <form id="auth-form" class="form-stack">
           <label class="field"><span>앱 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label>
           <label class="field"><span>앱 비밀번호</span><input name="password" type="password" minlength="12" maxlength="128" autocomplete="${register ? "new-password" : "current-password"}" required></label>
-          ${register ? '<label class="field"><span>초대 코드</span><input name="invite" minlength="16" maxlength="128" autocomplete="one-time-code" required></label>' : ""}
+          ${register ? '<label class="field"><span>비밀번호 확인</span><input name="password_confirm" type="password" minlength="12" maxlength="128" autocomplete="new-password" required></label><label class="field"><span>초대 코드</span><input name="invite" maxlength="128" placeholder="예: apple river cloud" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" required></label>' : ""}
           ${this.renderError()}
           ${button({ type: "submit", label: register ? "가입하고 시작하기" : "로그인", trailing: "→" })}
         </form>
@@ -1468,7 +1533,7 @@ export class JariApp {
   }
 
   private renderSubhead(eyebrow: string, title: string): string {
-    return `<header class="subhead"><button class="back-button" data-action="back" type="button" aria-label="뒤로가기" title="뒤로가기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path><path d="M9 12h10"></path></svg></button><div><p class="eyebrow">${escapeHtml(eyebrow)}</p><h1>${escapeHtml(title)}</h1></div></header>`;
+    return `<header class="subhead"><button class="back-button" data-action="back" type="button" aria-label="뒤로가기" title="뒤로가기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 18-6-6 6-6"></path></svg></button><div><p class="eyebrow">${escapeHtml(eyebrow)}</p><h1>${escapeHtml(title)}</h1></div></header>`;
   }
 
   private renderAccessRequest(): string {
@@ -1615,6 +1680,7 @@ export class JariApp {
     await this.run(async (isCurrent) => {
       const result = await this.api.trains({ conditions: this.conditions! });
       if (!isCurrent()) return;
+      rememberRoute(this.conditions!);
       this.trainOptions = result.trains;
       this.trainListTruncated = result.truncated;
       this.selectedTrains = this.selectedTrains.filter((number) =>
@@ -1717,9 +1783,8 @@ export class JariApp {
 
   // A chip or a favourite row carries the whole trip but not its day: ask for the date, then run the same search the journey form would.
   private async searchFromSaved(key: string): Promise<void> {
-    const source = key === "recent"
-      ? this.state?.draft
-      : this.state?.favourites.find((favourite) => favourite.id === key)?.conditions;
+    const source = this.homeChips().find((chip) => chip.key === key)?.conditions
+      ?? this.state?.favourites.find((favourite) => favourite.id === key)?.conditions;
     if (!source) return;
     const wanted = source.trains?.map(String) ?? [];
     const note = [`인원 ${source.passenger_count}명`, formatTimeWindow(source), wanted.length ? `고른 열차 ${wanted.length}편` : ""]
@@ -1756,6 +1821,7 @@ export class JariApp {
     await this.run(async (isCurrent) => {
       const result = await this.api.trains({ conditions });
       if (!isCurrent()) return;
+      rememberRoute(conditions);
       this.trainOptions = result.trains;
       this.trainListTruncated = result.truncated;
       const kept = wanted.filter((number) => result.trains.some((train) => train.no === number));
@@ -2003,6 +2069,10 @@ export class JariApp {
       );
       return;
     }
+    if (button.dataset.seatModeSwitch && this.seatDialog && !this.seatDialog.bulkApplying) {
+      this.switchSeatMode(this.seatDialog, button.dataset.seatModeSwitch as SeatSelectionMode);
+      return;
+    }
     if (button.dataset.seatCar) {
       void this.loadSeatCar(Number(button.dataset.seatCar));
       return;
@@ -2216,6 +2286,8 @@ export class JariApp {
         // Start revocation with A's token, then invalidate all A UI work immediately.
         const revocation = this.api.logoutApp().catch(() => undefined);
         const clearing = this.options.onLogout?.();
+        // 다음에 이 폰으로 로그인하는 사람에게 이전 사람의 구간을 보여 주지 않아요.
+        try { window.localStorage.removeItem(RECENT_KEY); } catch { /* 없으면 그만 */ }
         this.resetSession();
         this.render();
         void Promise.all([revocation, clearing]).catch(() => undefined);
@@ -2286,9 +2358,16 @@ export class JariApp {
     const username = String(data.get("username") || "").trim();
     const password = String(data.get("password") || "");
     const invite = String(data.get("invite") || "").trim();
+    const register = this.authMode === "register" && this.authGate === "guest";
+    // 확인 칸은 앱에서만 비교하고 서버로 보내지 않아요.
+    if (register && password !== String(data.get("password_confirm") || "")) {
+      this.error = "비밀번호가 서로 달라요.";
+      this.render();
+      return;
+    }
     await this.run(async (isCurrent) => {
       const result =
-        this.authMode === "register" && this.authGate === "guest"
+        register
           ? await this.api.registerApp({ username, password, invite })
           : await this.api.login({
               username,

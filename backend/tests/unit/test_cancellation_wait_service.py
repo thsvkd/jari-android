@@ -108,6 +108,19 @@ def test_independent_capture_reserves_one_matching_seat_and_honours_exclusion():
     }
 
 
+def test_picked_sold_seats_on_a_train_with_free_seats_wait_instead_of_taking_a_free_one():
+    # The app lets a train that still sells seats wait for sold ones; the free
+    # seat next to them is not what the user asked for.
+    wait, rail = service(
+        payload(),
+        [target("1A", 1, possible="N"), target("1B", 2, possible="N"), target("2A", 3)],
+    )
+
+    assert wait.poll_once() is None
+    rail.reserve_designated.assert_not_called()
+    rail.reserve_train.assert_not_called()
+
+
 def test_a_train_taken_whole_is_booked_like_a_plain_search_in_its_class():
     from korail2 import ReserveOption
 
