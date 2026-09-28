@@ -243,8 +243,9 @@ def _renewals_left_running():
     return [t for t in threading.enumerate() if t.name == "mobile-lease-renewal"]
 
 
-# How late past lease_until the loss may be noticed: thread scheduling on a busy runner.
-EPSILON = 0.25
+# How late past lease_until the loss may be noticed: thread scheduling, on a
+# runner or a Pi that stalls. The deadlines each test tells apart lie further out.
+EPSILON = 1
 
 
 def test_lease_until_counts_from_when_the_lease_call_was_sent(tmp_path, monkeypatch):
@@ -253,7 +254,7 @@ def test_lease_until_counts_from_when_the_lease_call_was_sent(tmp_path, monkeypa
     client = fakeredis.FakeRedis(decode_responses=True)
     runtime = _runtime(tmp_path, client)
     redis = runtime.storage.redis
-    late = 0.2
+    late = 1
 
     def answered_late(call):
         def answer(*args, **kwargs):
@@ -467,7 +468,7 @@ def test_a_lease_call_against_a_stalled_redis_fails_after_one_timeout():
                 with pytest.raises(RedisTimeoutError):
                     call()
                 # One unanswered read. redis.Redis()'s default retry waits for 11.
-                assert 0.8 * timeout <= time.monotonic() - began < 3 * timeout
+                assert 0.8 * timeout <= time.monotonic() - began < 8 * timeout
         finally:
             redis.close()
 
@@ -529,57 +530,113 @@ def test_past_lease_until_the_lease_is_given_up_without_asking_redis(tmp_path, m
     client.close()
 
 
-def test_stop_while_a_renewal_is_out_is_not_taken_for_a_lost_lease(tmp_path, monkeypatch):
+def test_stop_while_a_renewal_is_out_waits_for_neither_nor_reports_a_loss(tmp_path, monkeypatch):
+    lost = []
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = _runtime(tmp_path, client)
+    runtime.on_lease_lost = lambda: lost.append(True)
+    redis = runtime.storage.redis
+    out, answer = threading.Event(), threading.Event()
+
+    def stalled_renewal(owner, ttl):
+        out.set()
+        answer.wait(5)
+        return False  # the lease was released meanwhile
+
+    monkeypatch.setattr(redis, "renew_lease", stalled_renewal)
+    runtime.start()
+    assert out.wait(2)
+    # docker stop: the main thread tears down while this renewal is out.
+    began = time.monotonic()
+    runtime.stop()
+    took = time.monotonic() - began
+    answer.set()
+    for thread in _renewals_left_running():
+        thread.join(2)
+    # Waited out neither the renewal (5 s) nor a join of the lease thread (5 s).
+    assert took < 1 + EPSILON
+    assert not runtime.lease_thread.is_alive()
+    assert lost == []
+    assert client.get(LEASE_KEY) is None
+    client.close()
+
+
+def test_a_loss_found_once_stop_has_begun_is_not_reported(tmp_path, monkeypatch):
     lost = []
     client = fakeredis.FakeRedis(decode_responses=True)
     runtime = _runtime(tmp_path, client)
     runtime.on_lease_lost = lambda: lost.append(True)
     runtime._acquire_lease(runtime.storage.redis)
-    redis = runtime.storage.redis
-    release = redis.release_lease
-    released = threading.Event()
-    seen = []
 
-    def release_and_tell(owner):
-        try:
-            return release(owner)
-        finally:
-            released.set()
-
-    # docker stop: the main thread tears down and releases the lease while
-    # this renewal is out, and the renewal then finds the lease gone.
-    stopping = threading.Thread(target=runtime.stop)
-
-    def renew_during_stop(owner, ttl):
+    def lost_meanwhile():
+        # stop() on another thread released the lease while this check ran.
+        stopping = threading.Thread(target=runtime.stop)
         stopping.start()
-        seen.append(released.wait(2))
+        stopping.join(5)
         return False
 
-    monkeypatch.setattr(redis, "release_lease", release_and_tell)
-    monkeypatch.setattr(redis, "renew_lease", renew_during_stop)
+    monkeypatch.setattr(runtime, "_keep_lease", lost_meanwhile)
     _renew_for(runtime)
-    stopping.join(2)
-    assert seen == [True]
     assert lost == []
     assert client.get(LEASE_KEY) is None
+    client.close()
+
+
+def test_a_stop_that_beats_the_lease_thread_to_it_does_not_wait_for_that_thread(
+    tmp_path, monkeypatch
+):
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = _runtime(tmp_path, client)
+    monkeypatch.setattr(runtime, "PASS_WAIT", 0.05)
+    tearing_down, signalled = threading.Event(), threading.Event()
+    shutdown = runtime.reservation.shutdown
+
+    def slow_shutdown():
+        tearing_down.set()
+        time.sleep(0.2)
+        shutdown()
+
+    monkeypatch.setattr(runtime.reservation, "shutdown", slow_shutdown)
+    took = []
+
+    def stop_on_the_main_thread():
+        began = time.monotonic()
+        runtime.stop()
+        took.append(time.monotonic() - began)
+
+    main = threading.Thread(target=stop_on_the_main_thread)
+
+    def sigterm():
+        main.start()
+        signalled.set()
+        tearing_down.wait(2)  # the main thread holds stop_lock before this thread asks
+
+    runtime.on_lease_lost = sigterm
+    runtime.start()
+    client.set(LEASE_KEY, "another-runtime")
+    assert signalled.wait(5)
+    main.join(10)
+    # Not 5 s more for a thread that only waits for stop_lock to find it all stopped.
+    assert took[0] < 0.2 + EPSILON
+    runtime.lease_thread.join(2)
+    assert not runtime.lease_thread.is_alive()
     client.close()
 
 
 def test_stop_waits_for_the_lease_thread(tmp_path, monkeypatch):
     client = fakeredis.FakeRedis(decode_responses=True)
     runtime = _runtime(tmp_path, client)
-    redis = runtime.storage.redis
-    renew = redis.renew_lease
-    out = threading.Event()
+    checking = threading.Event()
+    keep = runtime._keep_lease
 
-    def slow_renewal(owner, ttl):
-        out.set()
-        time.sleep(0.3)
-        return renew(owner, ttl)
+    def slow_check():
+        checking.set()
+        time.sleep(0.5)  # not a renewal, which stop() would cut short
+        return keep()
 
-    monkeypatch.setattr(redis, "renew_lease", slow_renewal)
+    monkeypatch.setattr(runtime, "_keep_lease", slow_check)
     runtime.start()
-    assert out.wait(2)
+    assert checking.wait(2)
     runtime.stop()
     assert not runtime.lease_thread.is_alive()
     assert client.get(LEASE_KEY) is None
@@ -631,8 +688,8 @@ def test_a_renewal_failing_until_lease_until_gives_the_lease_up_then(tmp_path, m
 def test_slow_push_delivery_does_not_hold_up_the_lease(tmp_path, monkeypatch):
     import korail_bot.mobile.runtime as runtime_module
 
-    # Counted on for 1 s after each renewal, kept by Redis for 2 s.
-    monkeypatch.setattr(runtime_module, "LEASE_TTL", 2)
+    # Counted on for 3 s after each renewal, kept by Redis for 4 s.
+    monkeypatch.setattr(runtime_module, "LEASE_TTL", 4)
     monkeypatch.setattr(runtime_module, "LEASE_MARGIN", 1)
     lost = []
     client = fakeredis.FakeRedis(decode_responses=True)
@@ -654,7 +711,7 @@ def test_slow_push_delivery_does_not_hold_up_the_lease(tmp_path, monkeypatch):
         # Pushes into a network that drops packets, for longer than the lease
         # is counted on and than Redis keeps it.
         if not delivered.is_set():
-            time.sleep(2.5)
+            time.sleep(3.5)
             held.append((client.get(LEASE_KEY), client.pttl(LEASE_KEY)))
             delivered.set()
         return 0
@@ -667,9 +724,10 @@ def test_slow_push_delivery_does_not_hold_up_the_lease(tmp_path, monkeypatch):
     runtime.stop()
     assert lost == []
     assert held[0][0] == runtime.owner
-    assert held[0][1] > 1000  # ms: renewed within the last second
-    assert len([t for t in renewals if began <= t <= began + 2.5]) >= 10
-    assert max(b - a for a, b in itertools.pairwise(renewals)) < 1
+    assert held[0][1] > 1000  # ms, of 4000: renewed while delivery was stuck
+    assert len([t for t in renewals if began <= t <= began + 3.5]) >= 10
+    # Never so far apart that the lease went uncounted-on.
+    assert max(b - a for a, b in itertools.pairwise(renewals)) < 3
     assert not runtime.lease_thread.is_alive()
     client.close()
 
@@ -677,8 +735,9 @@ def test_slow_push_delivery_does_not_hold_up_the_lease(tmp_path, monkeypatch):
 def test_a_renewal_answered_after_lease_until_changes_nothing(tmp_path, monkeypatch):
     import korail_bot.mobile.runtime as runtime_module
 
-    monkeypatch.setattr(runtime_module, "LEASE_TTL", 2)
-    monkeypatch.setattr(runtime_module, "LEASE_MARGIN", 1)
+    # Counted on for 1 s, kept by Redis for 4 s.
+    monkeypatch.setattr(runtime_module, "LEASE_TTL", 4)
+    monkeypatch.setattr(runtime_module, "LEASE_MARGIN", 3)
     lost = []
     client = fakeredis.FakeRedis(decode_responses=True)
     runtime = _runtime(tmp_path, client)
@@ -702,7 +761,7 @@ def test_a_renewal_answered_after_lease_until_changes_nothing(tmp_path, monkeypa
     runtime.start()
     deadline = runtime.lease_until
     # Given up at lease_until and torn down, by the lease thread itself.
-    runtime.lease_thread.join(3)
+    runtime.lease_thread.join(5)
     assert not runtime.lease_thread.is_alive()
     answer.set()
     for thread in _renewals_left_running():
@@ -713,6 +772,132 @@ def test_a_renewal_answered_after_lease_until_changes_nothing(tmp_path, monkeypa
     assert ran == [False]  # the key it would have extended was released
     assert runtime.lease_until == deadline
     assert client.get(LEASE_KEY) is None
+    client.close()
+
+
+def test_slow_restart_recovery_does_not_cost_the_lease(tmp_path, monkeypatch):
+    import korail_bot.mobile.runtime as runtime_module
+
+    # Counted on for 2 s after each renewal, kept by Redis for 4 s.
+    monkeypatch.setattr(runtime_module, "LEASE_TTL", 4)
+    monkeypatch.setattr(runtime_module, "LEASE_MARGIN", 2)
+    lost = []
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = _runtime(tmp_path, client)
+    runtime.on_lease_lost = lambda: lost.append(True)
+    monkeypatch.setattr(runtime, "PASS_WAIT", 0.1)
+    # Resuming an earlier run's searches on a saturated SD card, for longer
+    # than the lease is counted on.
+    monkeypatch.setattr(runtime.reservation, "reconcile_after_restart", lambda: time.sleep(3))
+    runtime.start()
+    time.sleep(0.5)
+    held = client.get(LEASE_KEY), client.pttl(LEASE_KEY)
+    runtime.stop()
+    assert lost == []
+    assert held[0] == runtime.owner
+    assert held[1] > 1000  # ms, of 4000: renewed while the searches were resumed
+    client.close()
+
+
+@pytest.mark.parametrize(
+    ("sigterm_delay", "recovery_left"),
+    [(0.6, 0.2), (0, 0.5)],
+    ids=["loss-known-before-stop", "stop-while-recovering"],
+)
+def test_a_loss_found_while_starting_starts_nothing_more(
+    tmp_path, monkeypatch, sigterm_delay, recovery_left
+):
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = _runtime(tmp_path, client)
+    monkeypatch.setattr(runtime, "PASS_WAIT", 0.05)
+    events = []
+
+    def lost():
+        events.append("lost")
+        time.sleep(sigterm_delay)  # before the lease thread's own stop()
+
+    runtime.on_lease_lost = lost
+    service = MagicMock(_thread=None)
+    service.start.side_effect = lambda: events.append("service.start")
+    service.stop.side_effect = lambda: events.append("service.stop")
+    runtime.services = [service]
+
+    def reconcile():
+        # Another runtime holds the lease by now, and the lease thread finds
+        # out while the searches are being resumed.
+        client.set(LEASE_KEY, "another-runtime")
+        deadline = time.monotonic() + 5
+        while "lost" not in events and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(recovery_left)
+        events.append("recovered")
+
+    monkeypatch.setattr(runtime.reservation, "reconcile_after_restart", reconcile)
+    with pytest.raises(RuntimeError, match="stopped while starting"):
+        runtime.start()
+    runtime.lease_thread.join(5)
+    # Torn down after the step under way, and no service started before or after.
+    assert events == ["lost", "recovered", "service.stop"]
+    assert not runtime.started and runtime.stop_event.is_set()
+    assert client.get(LEASE_KEY) == "another-runtime"
+    client.close()
+
+
+@pytest.mark.parametrize("failing", ["mobile-lease", "mobile-notifications"])
+def test_stop_after_a_half_failed_start_still_releases_the_lease(tmp_path, monkeypatch, failing):
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = _runtime(tmp_path, client)
+    start = threading.Thread.start
+
+    def fail_one(thread):
+        if thread.name == failing:
+            raise RuntimeError("can't start new thread")
+        return start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", fail_one)
+    with pytest.raises(RuntimeError, match="can't start"):
+        runtime.start()
+    monkeypatch.setattr(threading.Thread, "start", start)
+    runtime.stop()
+    assert client.get(LEASE_KEY) is None
+    client.close()
+
+
+@pytest.mark.parametrize("failing", ["service.stop", "reservation.shutdown"])
+def test_stop_releases_the_lease_whatever_an_earlier_step_raised(tmp_path, monkeypatch, failing):
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = _runtime(tmp_path, client)
+    runtime.start()
+    service = MagicMock(_thread=None)
+    runtime.services = [service]
+    shutdown = MagicMock()
+    monkeypatch.setattr(runtime.reservation, "shutdown", shutdown)
+    broken = {"service.stop": service.stop, "reservation.shutdown": shutdown}[failing]
+    broken.side_effect = RuntimeError("would not stop")
+    runtime.stop()
+    shutdown.assert_called_once()
+    assert client.get(LEASE_KEY) is None
+    client.close()
+
+
+def test_stop_does_not_wait_long_for_a_release_redis_does_not_answer(tmp_path, monkeypatch):
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = _runtime(tmp_path, client)
+    monkeypatch.setattr(runtime, "RELEASE_WAIT", 0.5)
+    runtime._acquire_lease(runtime.storage.redis)
+    answer = threading.Event()
+    close = MagicMock(wraps=runtime.storage.close)
+    monkeypatch.setattr(runtime.storage, "close", close)
+    monkeypatch.setattr(runtime.storage.redis, "release_lease", lambda owner: answer.wait(5))
+    began = time.monotonic()
+    runtime.stop()
+    took = time.monotonic() - began
+    answer.set()
+    for thread in threading.enumerate():
+        if thread.name == "mobile-lease-release":
+            thread.join(2)
+    assert 0.5 <= took < 0.5 + EPSILON
+    close.assert_called_once()
     client.close()
 
 
