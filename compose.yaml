@@ -19,7 +19,9 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    stop_grace_period: 30s
+    # 종료는 검색 워커를 멈추고(워커마다 최대 6초) 스레드를 기다린 뒤 Redis 런타임 리스를 놓는다.
+    # 그 전에 SIGKILL 되면 리스가 남아, 다음 시작이 리스 TTL(120초)이 끝나기를 기다린다.
+    stop_grace_period: 60s
     logging:
       driver: json-file
       options:

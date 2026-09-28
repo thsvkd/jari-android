@@ -1,9 +1,38 @@
 """All shared railway records use a mobile-only key namespace and key."""
 
 import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 
 from korail_bot.storage.redis import RedisStorage
 from korail_bot.utils.crypto import SecretBox
+
+# Redis runs next to the app and answers a lease call in milliseconds, so this
+# much silence is a stall. Failing then costs nothing: the next pass tries again.
+LEASE_SOCKET_TIMEOUT = 2
+LEASE_CONNECT_TIMEOUT = 2
+
+
+def lease_client_for(
+    url, *, socket_timeout=LEASE_SOCKET_TIMEOUT, socket_connect_timeout=LEASE_CONNECT_TIMEOUT
+):
+    """
+    A client for the runtime lease alone: every call is one attempt.
+
+    A retrying client stretches one call against a stalled Redis over many
+    timeouts - redis.Redis() defaults to 10 retries, about a minute at 5 s
+    each - and until the call returns the runtime cannot tell whether its
+    lease still holds. redis-py 8 does not retry for a client from from_url,
+    but that is a default, and it differs between constructors; here it is
+    set. See LEASE_MARGIN in runtime.py for the timing this bounds.
+    """
+    return redis.Redis.from_url(
+        url,
+        decode_responses=True,
+        socket_connect_timeout=socket_connect_timeout,
+        socket_timeout=socket_timeout,
+        retry=Retry(NoBackoff(), 0),
+    )
 
 
 class NamespacedRedis:
@@ -14,8 +43,11 @@ class NamespacedRedis:
         {"get", "set", "expire", "incr", "ttl", "sadd", "sismember", "smembers", "srem"}
     )
 
-    def __init__(self, client):
+    def __init__(self, client, lease_client=None):
         self.client = client
+        # Every lease call goes through this one (see lease_client_for). A
+        # caller that hands in a single client, as the tests do, gets it for both.
+        self.lease_client = client if lease_client is None else lease_client
 
     def __getattr__(self, name):
         if name not in self.SINGLE_KEY:
@@ -54,24 +86,50 @@ class NamespacedRedis:
         return self.delete(*list(self.scan_iter()))
 
     def close(self):
-        self.client.close()
+        try:
+            self.client.close()
+        finally:
+            if self.lease_client is not self.client:
+                self.lease_client.close()
+
+    LEASE_KEY = "runtime_owner"
+    LEASE_ATTEMPTS = 3
+
+    def acquire_lease(self, owner, ttl):
+        """True if this SET NX took the lease; None if the key was already there."""
+        return self.lease_client.set(self.PREFIX + self.LEASE_KEY, owner, nx=True, ex=ttl)
+
+    def lease_ttl(self):
+        return self.lease_client.ttl(self.PREFIX + self.LEASE_KEY)
 
     def _lease(self, owner, ttl=None):
-        key = self.PREFIX + "runtime_owner"
-        with self.client.pipeline() as transaction:
-            try:
-                transaction.watch(key)
-                if transaction.get(key) != owner:
-                    return False
-                transaction.multi()
-                if ttl is None:
-                    transaction.delete(key)
-                else:
-                    transaction.expire(key, ttl)
-                transaction.execute()
-                return True
-            except redis.WatchError:
-                return False
+        """
+        True if `owner` held the lease and it was renewed (ttl) or released.
+
+        False only once Redis has answered that another owner, or none, holds
+        it. A WatchError is not that answer: redis-py also raises it when the
+        connection fails while watching - a TimeoutError during a host stall
+        becomes one - so the check is made again. One that keeps coming back
+        is raised, for the caller to treat as a failed pass.
+        """
+        key = self.PREFIX + self.LEASE_KEY
+        for attempt in range(1, self.LEASE_ATTEMPTS + 1):
+            with self.lease_client.pipeline() as transaction:
+                try:
+                    transaction.watch(key)
+                    if transaction.get(key) != owner:
+                        return False
+                    transaction.multi()
+                    if ttl is None:
+                        transaction.delete(key)
+                    else:
+                        transaction.expire(key, ttl)
+                    transaction.execute()
+                    return True
+                except redis.WatchError:
+                    if attempt == self.LEASE_ATTEMPTS:
+                        raise
+        raise AssertionError("unreachable")
 
     def renew_lease(self, owner, ttl):
         return self._lease(owner, ttl)
@@ -87,16 +145,19 @@ class MobileStorage(RedisStorage):
         if client is None and not url:
             raise ValueError("MOBILE_REDIS_URL must be explicitly configured")
         self.box = SecretBox(secret)
-        self.redis = NamespacedRedis(
-            client
-            if client is not None
-            else redis.Redis.from_url(
-                url,
-                decode_responses=True,
-                socket_connect_timeout=3,
-                socket_timeout=5,
+        if client is not None:
+            self.redis = NamespacedRedis(client)
+        else:
+            self.redis = NamespacedRedis(
+                redis.Redis.from_url(
+                    url,
+                    decode_responses=True,
+                    socket_connect_timeout=3,
+                    socket_timeout=5,
+                ),
+                # Connects on first use; only the runtime ever takes a lease.
+                lease_client_for(url),
             )
-        )
         self.redis.ping()
 
     def _secret_box(self):

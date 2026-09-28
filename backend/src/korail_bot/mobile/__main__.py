@@ -50,6 +50,9 @@ def main():
         runtime = MobileRuntime(config, on_lease_lost=lambda: os.kill(os.getpid(), signal.SIGTERM))
 
         def shutdown(signum, frame):
+            # Once: a second SIGTERM (docker stop during a lost-lease exit)
+            # must not cut short the teardown that releases the lease.
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
             raise KeyboardInterrupt
 
         signal.signal(signal.SIGINT, shutdown)
@@ -67,6 +70,10 @@ def main():
                 clear_untrusted_proxy_headers=True,
             )
         finally:
+            # However the server ended - a signal, or start() or the server
+            # failing - a SIGTERM now (docker stop) must not cut short the
+            # teardown that stops the searches and releases the lease.
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
             runtime.stop()
     except ValueError as exc:
         parser.error(str(exc))
