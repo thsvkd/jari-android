@@ -8,7 +8,7 @@ from korail_bot.storage.redis import RedisStorage
 from korail_bot.utils.crypto import SecretBox
 
 # Redis runs next to the app and answers a lease call in milliseconds, so this
-# much silence is a stall. Failing then costs nothing: the next pass tries again.
+# much silence is a stall. Failing then costs nothing: the next renewal tries again.
 LEASE_SOCKET_TIMEOUT = 2
 LEASE_CONNECT_TIMEOUT = 2
 
@@ -22,9 +22,10 @@ def lease_client_for(
     A retrying client stretches one call against a stalled Redis over many
     timeouts - redis.Redis() defaults to 10 retries, about a minute at 5 s
     each - and until the call returns the runtime cannot tell whether its
-    lease still holds. redis-py 8 does not retry for a client from from_url,
-    but that is a default, and it differs between constructors; here it is
-    set. See LEASE_MARGIN in runtime.py for the timing this bounds.
+    lease still holds. Failing fast leaves time for another renewal before
+    the runtime stops waiting at lease_until (see LEASE_MARGIN in
+    runtime.py). redis-py 8 does not retry for a client from from_url, but
+    that is a default, and it differs between constructors; here it is set.
     """
     return redis.Redis.from_url(
         url,

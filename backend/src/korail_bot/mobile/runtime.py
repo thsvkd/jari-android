@@ -26,24 +26,28 @@ from korail_bot.utils.timezone import as_utc, utc_now
 
 logger = get_logger(__name__)
 
-# The owner renews its lease on every background pass. One it stopped renewing
-# - killed, or cut off from Redis - expires after this.
+# The owner renews its lease every PASS_WAIT on a thread that does nothing else.
+# One it stopped renewing - killed, or cut off from Redis - expires after this.
 LEASE_TTL = 120
 # A renewal sent at s keeps the key until at least s + LEASE_TTL. The runtime
 # counts on its lease only until lease_until = s + LEASE_TTL - LEASE_MARGIN, and
 # has to have stopped its searches before Redis could expire the key and let
-# another runtime take it. Past lease_until the loss is noticed within 12 s:
-# - each pass checks lease_until before it renews, and a pass whose renewal
-#   failed ends there, so a check follows a failed renewal within PASS_WAIT;
-# - a renewal still waiting on Redis at lease_until counts as lost when it
-#   returns. Lease calls never retry (storage.lease_client_for), so against a
-#   stalled Redis each of the LEASE_ATTEMPTS tries ends at its first unanswered
-#   read: a renewal takes at most 3 x (2 s connect + 2 s read) = 12 s.
-# That leaves 18 s of the margin to stop the searches. A pass that renewed goes
-# on to reminders and push delivery, on the main client and FCM: those have
-# LEASE_TTL - LEASE_MARGIN - PASS_WAIT = 80 s before they could hold up a check,
-# against 8 s for a stalled main-client call (3 s connect + 5 s read; redis-py 8
-# does not retry for a from_url client) and 50 s for five pushes at 10 s each.
+# another runtime take it. It gives the lease up at lease_until, late only by
+# its own thread's scheduling:
+# - the lease thread does nothing but renew, so no background pass can delay a
+#   check. One can take minutes: up to five pushes, and firebase-admin retries
+#   a push's connect and read once each and a 500/503 four times, with
+#   httpTimeout for every connect and every read. A busy SQLite or a stalled
+#   main-client call adds to that;
+# - a renewal still out at lease_until is not waited for any longer. How long
+#   one takes is up to redis-py, not a sum of socket timeouts: every reconnect
+#   is a four-round-trip handshake, and a failed WATCH reconnects just to
+#   UNWATCH. Against a Redis answering just within the timeout, one failing
+#   renewal took 26 socket timeouts - 52 s at 2 s;
+# - after a failed renewal the thread tries again by lease_until.
+# The whole margin is left to stop the searches, one worker after another: 3 s
+# for one that ignores SIGTERM (6 s if even the kill hangs), for up to
+# MAX_CONCURRENT_SEARCHES (5) of them.
 LEASE_MARGIN = 30
 
 
@@ -52,7 +56,7 @@ class MobileRuntime:
     # A live owner keeps renewing, so it outlasts this and is still refused.
     LEASE_WAIT = LEASE_TTL + 15
     LEASE_POLL = 5
-    # Between background passes.
+    # Between background passes, and between lease renewals.
     PASS_WAIT = 10
 
     def __init__(self, config, *, redis_client=None, push=None, on_lease_lost=None):
@@ -73,6 +77,7 @@ class MobileRuntime:
         self.stop_event = threading.Event()
         self.stop_lock = threading.Lock()
         self.thread = None
+        self.lease_thread = None
         self.services = []
         self.owner = secrets.token_hex(24)
         self.lease_until = 0.0
@@ -125,6 +130,11 @@ class MobileRuntime:
             for service in self.services:
                 service.start()
         self.started = True
+        if self.storage:
+            self.lease_thread = threading.Thread(
+                target=self._keep_renewing, daemon=True, name="mobile-lease"
+            )
+            self.lease_thread.start()
         self.thread = threading.Thread(target=self._run, daemon=True, name="mobile-notifications")
         self.thread.start()
 
@@ -175,24 +185,37 @@ class MobileRuntime:
             self.stop_event.wait(self.LEASE_POLL)
 
     def _renew_lease(self, redis):
-        # False once the lease is gone. A Redis error is not that - the lease
-        # may still be ours - so it is raised and the next pass tries again,
-        # until the lease could have expired: then it counts as lost anyway.
-        # Any other exception is a bug, not a lost lease: raised for _keep_lease.
+        # True once renewed, False once lost; raises what the renewal raised.
+        # It runs on a thread of its own, waited for only until lease_until.
+        # One still out then is lost - the runtime ends - and is left to end
+        # by its socket timeouts, or when stop() closes the lease client under
+        # it. Nothing reads its answer, so a late renewal moves no lease_until;
+        # in Redis it can only extend a key still holding this runtime's token,
+        # which stop() then releases - or, landing after, WATCH aborts it.
+        answer = {}
+        answered = threading.Event()
+
+        def renew():
+            try:
+                answer["renewed"] = redis.renew_lease(self.owner, LEASE_TTL)
+            except Exception as exc:
+                answer["error"] = exc
+            finally:
+                answered.set()
+
         sent = time.monotonic()
-        try:
-            renewed = redis.renew_lease(self.owner, LEASE_TTL)
-        except RedisError:
-            if time.monotonic() < self.lease_until:
-                raise
+        threading.Thread(target=renew, daemon=True, name="mobile-lease-renewal").start()
+        if not answered.wait(max(0.0, self.lease_until - sent)):
             logger.error("Mobile runtime lease could not be renewed in time")
             return False
-        if renewed:
+        if "error" in answer:
+            raise answer["error"]
+        if answer["renewed"]:
             self.lease_until = sent + LEASE_TTL - LEASE_MARGIN
-        return renewed
+        return answer["renewed"]
 
     def _keep_lease(self):
-        """True once renewed, False once lost; raises when this pass could not tell."""
+        """True once renewed, False once lost, None when this try could not tell."""
         if time.monotonic() >= self.lease_until:
             # From here Redis may expire it within LEASE_MARGIN: the time left
             # to stop the searches, not to wait on a renewal (see LEASE_MARGIN).
@@ -200,33 +223,37 @@ class MobileRuntime:
             return False
         try:
             return self._renew_lease(self.storage.redis)
-        except RedisError:
-            raise  # a failed pass: _renew_lease found the lease may still hold
+        except RedisError as exc:
+            # Not an answer: the lease may still be ours until lease_until.
+            logger.warning(
+                "Mobile runtime lease renewal failed (%s); trying again", type(exc).__name__
+            )
         except Exception:
-            # Not Redis failing but this code. Try again next pass while the
-            # lease still holds; once it may not, one runtime per namespace
-            # matters more than this one staying up.
-            if time.monotonic() < self.lease_until:
-                logger.exception("Mobile runtime lease renewal failed; trying again next pass")
-                raise
-            logger.exception("Mobile runtime lease renewal failed and the lease may have expired")
-            return False
+            # Not Redis failing but this code. Tried again all the same: it
+            # moves no lease_until, so it cannot keep the lease past it.
+            logger.exception("Mobile runtime lease renewal failed; trying again")
+        return None
+
+    def _keep_renewing(self):
+        while not self.stop_event.is_set():
+            if self._keep_lease() is False:
+                if self.stop_event.is_set():
+                    return  # stop() released it while this renewal ran
+                logger.error("Mobile runtime lease lost; stopping searches")
+                # Another runtime may own the namespace now, and the HTTP
+                # server would go on writing to it. End the process before
+                # tearing down, so requests are refused rather than failed.
+                if self.on_lease_lost:
+                    self.on_lease_lost()
+                self.stop()
+                return
+            # No later than lease_until, where a lease no renewal extended is given up.
+            self.stop_event.wait(min(self.PASS_WAIT, max(0.0, self.lease_until - time.monotonic())))
 
     def _run(self):
         while not self.stop_event.is_set():
             try:
                 if self.storage:
-                    if not self._keep_lease():
-                        if self.stop_event.is_set():
-                            return  # stop() released it while this pass ran
-                        logger.error("Mobile runtime lease lost; stopping searches")
-                        # Another runtime may own the namespace now, and the HTTP
-                        # server would go on writing to it. End the process before
-                        # tearing down, so requests are refused rather than failed.
-                        if self.on_lease_lost:
-                            self.on_lease_lost()
-                        self.stop()
-                        return
                     self.remind_pending()
                 self.notifications.deliver()
             except Exception as exc:
@@ -257,7 +284,7 @@ class MobileRuntime:
 
     def stop(self):
         # A second caller waits for the first to finish. On a lost lease the
-        # notification thread tears down while the main thread, woken by the
+        # lease thread tears down while the main thread, woken by the
         # SIGTERM, calls this too; returning at once would let the interpreter
         # exit and kill that daemon thread before it stopped the searches and
         # released the lease - which the next start then finds still held.
@@ -273,8 +300,9 @@ class MobileRuntime:
                 thread = getattr(service, "_thread", None)
                 if thread and thread is not threading.current_thread():
                     thread.join(timeout=5)
-            if self.thread and self.thread is not threading.current_thread():
-                self.thread.join(timeout=5)
+            for thread in (self.thread, self.lease_thread):
+                if thread and thread is not threading.current_thread():
+                    thread.join(timeout=5)
             if self.storage:
                 try:
                     self.storage.redis.release_lease(self.owner)
