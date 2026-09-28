@@ -229,11 +229,13 @@ def test_start_raises_without_the_lease_when_redis_never_answers(tmp_path, monke
     client.close()
 
 
-def _renew_for(runtime, seconds=2):
-    """Run the lease thread's loop until it returns, or for `seconds`, then stop it."""
+def _renew_for(runtime, seconds=5, until=None):
+    """Run the lease thread's loop until it returns or `until()` holds, then stop it."""
     renewing = threading.Thread(target=runtime._keep_renewing)
     renewing.start()
-    renewing.join(seconds)
+    deadline = time.monotonic() + seconds
+    while renewing.is_alive() and not (until and until()) and time.monotonic() < deadline:
+        time.sleep(0.01)
     runtime.stop_event.set()
     renewing.join(2)
     assert not renewing.is_alive()
@@ -325,6 +327,37 @@ def test_redis_keeps_a_given_up_lease_while_every_search_is_stopped(tmp_path):
     # Workers are stopped one after another, up to the concurrent-search ceiling.
     assert settings.MAX_CONCURRENT_SEARCHES * stopping < held_after
     client.close()
+
+
+def test_the_teardown_fits_the_margin_and_the_rest_the_stop_grace_period(tmp_path):
+    import pathlib
+    import re
+
+    from korail_bot.config.settings import settings
+    from korail_bot.mobile.config import MobileConfig
+    from korail_bot.mobile.runtime import LEASE_MARGIN, MobileRuntime
+
+    # Searches stop one after another. One that ignores SIGTERM and whose kill
+    # hangs takes the two 3 s waits of process.py, and does nothing more once
+    # SIGKILL is sent: the last is sent this long into the margin.
+    last_sigkill = (settings.MAX_CONCURRENT_SEARCHES - 1) * (3 + 3) + 3
+    assert last_sigkill < LEASE_MARGIN
+    # The rest of stop() comes after the searches, so it is not held to the
+    # margin, only to docker's stop_grace_period: a join per thread (services,
+    # notifications, lease) and the release.
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = MobileRuntime(
+        MobileConfig(str(tmp_path / "identity.sqlite3"), "a" * 40, "redis://localhost:1/1"),
+        redis_client=client,
+    )
+    rest = (len(runtime.services) + 2) * runtime.JOIN_WAIT + runtime.RELEASE_WAIT
+    compose = (pathlib.Path(__file__).parents[3] / "compose.yaml").read_text()
+    grace = int(re.search(r"stop_grace_period: (\d+)s", compose).group(1))
+    assert rest < grace
+    # Everything at its worst overruns it (see RELEASE_WAIT): the lease is
+    # then left to expire, which only delays the next start.
+    assert last_sigkill + 3 + rest - grace <= 5
+    runtime.storage.close()
 
 
 def _shut(connection):
@@ -643,6 +676,74 @@ def test_stop_waits_for_the_lease_thread(tmp_path, monkeypatch):
     client.close()
 
 
+def test_stop_kills_the_searches_before_it_waits_for_threads_or_releases_the_lease(
+    tmp_path, monkeypatch
+):
+    import subprocess
+    import sys
+
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = _runtime(tmp_path, client)
+    runtime._acquire_lease(runtime.storage.redis)
+    order = []
+    # A service whose thread is still finishing its pass when stop() asks it to stop.
+    stopping = threading.Event()
+
+    def finishing_its_pass():
+        stopping.wait(10)
+        time.sleep(0.3)
+
+    service_thread = threading.Thread(target=finishing_its_pass, name="service")
+    service_thread.start()
+    join = service_thread.join
+
+    def recorded_join(timeout=None):
+        order.append("join")
+        join(timeout)
+
+    monkeypatch.setattr(service_thread, "join", recorded_join)
+    runtime.services = [MagicMock(_thread=service_thread, stop=MagicMock(side_effect=stopping.set))]
+    worker = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(60)",
+            "korail_bot.mobile.worker",
+            runtime.reservation.tag,
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert worker.stdout.readline() == "ready\n"
+        runtime.reservation._children[worker.pid] = worker
+        shutdown = runtime.reservation.shutdown
+        release = runtime.storage.redis.release_lease
+
+        def recorded_shutdown():
+            order.append("shutdown")
+            shutdown()
+
+        def recorded_release(owner):
+            order.append(("release", "search stopped" if worker.poll() is not None else "running"))
+            return release(owner)
+
+        monkeypatch.setattr(runtime.reservation, "shutdown", recorded_shutdown)
+        monkeypatch.setattr(runtime.storage.redis, "release_lease", recorded_release)
+        runtime.stop()
+    finally:
+        stopping.set()
+        worker.kill()
+        worker.wait()
+        worker.stdout.close()
+        join(5)
+    # The searches stop first: the joins can take the margin's time, and the
+    # lease must not be given back while a search could still run.
+    assert order == ["shutdown", "join", ("release", "search stopped")]
+    assert client.get(LEASE_KEY) is None
+    client.close()
+
+
 FAILED_RENEWALS = pytest.mark.parametrize(
     "error", [RedisTimeoutError("stall"), AttributeError("bug")], ids=["redis-error", "bug"]
 )
@@ -660,7 +761,7 @@ def test_a_failed_renewal_is_tried_again_while_the_lease_holds(
     renew = MagicMock(side_effect=error)
     monkeypatch.setattr(runtime.storage.redis, "renew_lease", renew)
     with caplog.at_level(logging.WARNING, logger="korail_bot.mobile.runtime"):
-        _renew_for(runtime, 0.5)
+        _renew_for(runtime, until=lambda: renew.call_count >= 3)
     assert renew.call_count >= 3
     assert lost == []
     # Once for each failure; a bug with its traceback.
@@ -964,6 +1065,30 @@ def test_a_sigterm_leaves_sigterm_ignored_from_its_handler_on(tmp_path, monkeypa
 
     _serve(monkeypatch, tmp_path, serve, seen)
     assert seen == [signal.SIG_IGN, signal.SIG_IGN]
+
+
+def test_a_sigterm_handled_as_the_teardown_begins_still_stops_the_runtime(tmp_path, monkeypatch):
+    import signal
+
+    seen = []
+    pending = []
+    install = signal.signal
+
+    def serve(*args, **kwargs):
+        # The server returns, and a SIGTERM (docker stop) is on its way.
+        pending.append(signal.getsignal(signal.SIGTERM))
+
+    def a_sigterm_first(signum, handler):
+        # Python runs a pending signal's handler between two bytecodes: here,
+        # just before the teardown's own SIG_IGN takes effect.
+        if pending and signum == signal.SIGTERM and handler == signal.SIG_IGN:
+            pending.pop()(signal.SIGTERM, None)
+        return install(signum, handler)
+
+    monkeypatch.setattr(signal, "signal", a_sigterm_first)
+    _serve(monkeypatch, tmp_path, serve, seen)
+    assert pending == []
+    assert seen == [signal.SIG_IGN]
 
 
 def test_failed_process_stop_does_not_claim_search_stopped(tmp_path, monkeypatch):

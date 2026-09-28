@@ -37,8 +37,10 @@ LEASE_TTL = 120
 # - the lease thread does nothing but renew, and starts the moment start() has
 #   the lease, so no other work can delay a check. Resuming an earlier run's
 #   searches takes a 1 s start grace, about nine main-client round trips and a
-#   SQLite write for each of up to five, past lease_until on a saturated SD
-#   card. A background pass can take minutes: up to five pushes, and
+#   SQLite write for each - usually no more than five, though resuming has no
+#   cap - and can run past lease_until on a saturated SD card (simulated: 103 s
+#   at 1.5 s per Redis reply and 4 s per SQLite write). A background pass can
+#   take minutes: up to five pushes, and
 #   firebase-admin retries a push's connect and read once each and a 500/503
 #   four times, with httpTimeout for every connect and every read;
 # - a renewal still out at lease_until is not waited for any longer. How long
@@ -52,8 +54,9 @@ LEASE_TTL = 120
 # MAX_CONCURRENT_SEARCHES (5) of them. Five hung kills take all 30 s, but a
 # worker does nothing more once SIGKILL is sent - the last at 4 x 6 + 3 = 27 s.
 # This holds while Redis keeps the key for its TTL (AOF, no wall-clock step)
-# and this process is not frozen for longer than LEASE_TTL - PASS_WAIT; there
-# is no fencing of the search workers beyond that.
+# and a freeze of this process plus the time to stop the searches stays under
+# LEASE_TTL - PASS_WAIT - no freeze past about 80 s with five hung kills;
+# there is no fencing of the search workers beyond that.
 LEASE_MARGIN = 30
 
 
@@ -66,8 +69,9 @@ def _answer_by(deadline, call, *args, name, unless=None):
     call(*args) on a thread of its own: what it returned or raised, if it did
     so by `deadline` (monotonic) and before `unless` was set; else _NoAnswer.
 
-    A call not waited for any longer is left to end by its socket timeouts, or
-    when stop() closes the lease client under it. Nothing reads its answer.
+    A call not waited for any longer is left to run out. Closing the lease
+    client ends it at its next read, or redis-py's own timeouts do: it may
+    reconnect and go on for its remaining tries. Nothing reads its answer.
     """
     answer = {}
     answered = threading.Event()
@@ -97,11 +101,14 @@ class MobileRuntime:
     LEASE_POLL = 5
     # Between background passes, and between lease renewals.
     PASS_WAIT = 10
-    # How long stop() waits for Redis to take the lease back. Measured against
-    # compose.yaml's stop_grace_period of 60 s: the searches take up to 30 s
-    # (see LEASE_MARGIN), and each thread join 5 s only for a thread that is
-    # stuck. A lease not released expires within LEASE_TTL, and the next start
-    # waits it out.
+    # How long stop() waits for each thread, and for Redis to take the lease
+    # back. Against compose.yaml's stop_grace_period of 60 s: five joins and
+    # the release take up to 35 s, and the searches up to 30 s (LEASE_MARGIN).
+    # Only with all of them at their worst - searches whose kills hang, stuck
+    # threads, a Redis that does not answer - does stop() run to about 65 s.
+    # A SIGKILL then comes before the release, and the lease left behind only
+    # delays the next start, by up to LEASE_TTL, which it waits out.
+    JOIN_WAIT = 5
     RELEASE_WAIT = 10
 
     def __init__(self, config, *, redis_client=None, push=None, on_lease_lost=None):
@@ -185,7 +192,9 @@ class MobileRuntime:
         # The lease thread may find the lease lost while these run. Each runs
         # whole before stop() or not at all, so none starts a search, service
         # or thread after stop() tore them down; start() ends instead. On a
-        # lost lease the SIGTERM also ends the step the main thread is in.
+        # lost lease the SIGTERM also ends the step the main thread is in, once
+        # it is back in Python: a SQLite write on a busy database holds it up
+        # to 15 s.
         for step in steps:
             with self.stop_lock:
                 if self.lease_lost or self.stop_event.is_set():
@@ -361,7 +370,7 @@ class MobileRuntime:
             for thread in threads:
                 # join() refuses a thread never started, as after a failed start().
                 if thread and thread.is_alive() and thread is not threading.current_thread():
-                    thread.join(timeout=5)
+                    thread.join(timeout=self.JOIN_WAIT)
             if self.storage:
                 try:
                     _answer_by(
@@ -375,5 +384,5 @@ class MobileRuntime:
                 except Exception:
                     # The next start waits it out; it expires within LEASE_TTL.
                     logger.exception("Mobile runtime lease not released")
-                # Closes the lease client too, ending a release not waited for.
+                # Closes the lease client too, under a release not waited for.
                 self.storage.close()

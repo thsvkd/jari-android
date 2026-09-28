@@ -72,9 +72,13 @@ def main():
         finally:
             # However the server ended - a signal, or start() or the server
             # failing - a SIGTERM now (docker stop) must not cut short the
-            # teardown that stops the searches and releases the lease.
-            signal.signal(signal.SIGTERM, signal.SIG_IGN)
-            runtime.stop()
+            # teardown that stops the searches and releases the lease. One
+            # handled before SIG_IGN takes effect raises KeyboardInterrupt
+            # here; the teardown runs all the same.
+            try:
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            finally:
+                runtime.stop()
     except ValueError as exc:
         parser.error(str(exc))
     except KeyboardInterrupt:
