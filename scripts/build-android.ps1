@@ -1,8 +1,6 @@
 [CmdletBinding()]
 param(
     [switch]$SkipWebBuild,
-    # 로컬 e2e 스택용 com.jari.app.e2e 를 만든다. 실서버·Firebase 설정 없이, adb reverse 로 넘긴 PC 의 서버에만 붙는다.
-    [int]$E2ePort = 0,
     # 릴리스 서명(assembleRelease)으로 빌드한다. android\keystore.properties 또는
     # JARI_RELEASE_* 환경 변수로 서명 설정이 없으면 Gradle을 부르기 전에 중단한다.
     [switch]$Release
@@ -10,54 +8,42 @@ param(
 
 $ErrorActionPreference = "Stop"
 $mobileRoot = Split-Path -Parent $PSScriptRoot
-if ($E2ePort) {
-    # 두 빌드는 dist/ 를 같이 써요. 남아 있던 실서버 번들을 e2e 앱에 싣지 않게 늘 새로 만들어요.
-    if ($SkipWebBuild) {
-        throw "-E2ePort 는 -SkipWebBuild 와 함께 쓸 수 없어요. e2e 번들은 매번 새로 만들어요."
-    }
-    if ($Release) {
-        throw "-E2ePort 는 -Release 와 함께 쓸 수 없어요. e2e 빌드는 항상 디버그 서명이에요."
-    }
-    $env:VITE_API_BASE_URL = "http://127.0.0.1:$E2ePort"
+$firebaseConfig = Join-Path $mobileRoot 'android\app\google-services.json'
+if (-not (Test-Path $firebaseConfig -PathType Leaf)) {
+    throw "Firebase 설정 파일이 없어 실서버용 디버그 APK 빌드를 중단합니다: $firebaseConfig"
 }
-else {
-    $firebaseConfig = Join-Path $mobileRoot 'android\app\google-services.json'
-    if (-not (Test-Path $firebaseConfig -PathType Leaf)) {
-        throw "Firebase 설정 파일이 없어 실서버용 디버그 APK 빌드를 중단합니다: $firebaseConfig"
-    }
-    $productionEnvironment = Join-Path $mobileRoot '.env.production.local'
-    $configuredApiBase = [Environment]::GetEnvironmentVariable('VITE_API_BASE_URL', 'Process')
-    if (-not $configuredApiBase -and (Test-Path $productionEnvironment -PathType Leaf)) {
-        $configuredApiBase = Get-Content $productionEnvironment |
-            Where-Object { $_ -match '^\s*VITE_API_BASE_URL\s*=\s*https://.+' } |
-            Select-Object -First 1
-    }
-    if (-not $configuredApiBase) {
-        throw "VITE_API_BASE_URL이 없어 실서버용 디버그 APK 빌드를 중단합니다. .env.production.local에 HTTPS API 주소를 설정해 주세요."
-    }
-    if ($Release) {
-        $keystoreProps = Join-Path $mobileRoot 'android\keystore.properties'
-        $signingEnvNames = @('JARI_RELEASE_STORE_FILE', 'JARI_RELEASE_STORE_PASSWORD', 'JARI_RELEASE_KEY_ALIAS', 'JARI_RELEASE_KEY_PASSWORD')
-        $signingEnvComplete = -not ($signingEnvNames | Where-Object { -not [Environment]::GetEnvironmentVariable($_, 'Process') })
-        # build.gradle only attaches signingConfigs.release when all 4 keys are
-        # present, so a keystore.properties that exists but is missing a key
-        # (e.g. keyPassword) must not be treated as configured here -- that would
-        # let assembleRelease "succeed" as an unsigned app-release-unsigned.apk
-        # while this script still reports the app-release.apk path below.
-        $keystorePropsComplete = $false
-        if (Test-Path $keystoreProps -PathType Leaf) {
-            $props = @{}
-            foreach ($line in Get-Content $keystoreProps) {
-                if ($line -match '^\s*([^#=\s][^=]*)=(.*)$') {
-                    $props[$Matches[1].Trim()] = $Matches[2].Trim()
-                }
+$productionEnvironment = Join-Path $mobileRoot '.env.production.local'
+$configuredApiBase = [Environment]::GetEnvironmentVariable('VITE_API_BASE_URL', 'Process')
+if (-not $configuredApiBase -and (Test-Path $productionEnvironment -PathType Leaf)) {
+    $configuredApiBase = Get-Content $productionEnvironment |
+        Where-Object { $_ -match '^\s*VITE_API_BASE_URL\s*=\s*https://.+' } |
+        Select-Object -First 1
+}
+if (-not $configuredApiBase) {
+    throw "VITE_API_BASE_URL이 없어 실서버용 디버그 APK 빌드를 중단합니다. .env.production.local에 HTTPS API 주소를 설정해 주세요."
+}
+if ($Release) {
+    $keystoreProps = Join-Path $mobileRoot 'android\keystore.properties'
+    $signingEnvNames = @('JARI_RELEASE_STORE_FILE', 'JARI_RELEASE_STORE_PASSWORD', 'JARI_RELEASE_KEY_ALIAS', 'JARI_RELEASE_KEY_PASSWORD')
+    $signingEnvComplete = -not ($signingEnvNames | Where-Object { -not [Environment]::GetEnvironmentVariable($_, 'Process') })
+    # build.gradle only attaches signingConfigs.release when all 4 keys are
+    # present, so a keystore.properties that exists but is missing a key
+    # (e.g. keyPassword) must not be treated as configured here -- that would
+    # let assembleRelease "succeed" as an unsigned app-release-unsigned.apk
+    # while this script still reports the app-release.apk path below.
+    $keystorePropsComplete = $false
+    if (Test-Path $keystoreProps -PathType Leaf) {
+        $props = @{}
+        foreach ($line in Get-Content $keystoreProps) {
+            if ($line -match '^\s*([^#=\s][^=]*)=(.*)$') {
+                $props[$Matches[1].Trim()] = $Matches[2].Trim()
             }
-            $keystorePropsComplete = -not (@('storeFile', 'storePassword', 'keyAlias', 'keyPassword') |
-                    Where-Object { -not $props[$_] })
         }
-        if (-not $keystorePropsComplete -and -not $signingEnvComplete) {
-            throw "릴리스 서명 설정이 없어 릴리스 빌드를 중단합니다: $keystoreProps 에 storeFile/storePassword/keyAlias/keyPassword 4개를 모두 두거나 $($signingEnvNames -join '/') 환경 변수를 모두 설정하세요."
-        }
+        $keystorePropsComplete = -not (@('storeFile', 'storePassword', 'keyAlias', 'keyPassword') |
+                Where-Object { -not $props[$_] })
+    }
+    if (-not $keystorePropsComplete -and -not $signingEnvComplete) {
+        throw "릴리스 서명 설정이 없어 릴리스 빌드를 중단합니다: $keystoreProps 에 storeFile/storePassword/keyAlias/keyPassword 4개를 모두 두거나 $($signingEnvNames -join '/') 환경 변수를 모두 설정하세요."
     }
 }
 $jdkCandidates = @()
@@ -113,9 +99,9 @@ try {
             throw "npm run build failed (exit $LASTEXITCODE)."
         }
     }
-    elseif (-not $E2ePort -and (Get-ChildItem (Join-Path $mobileRoot 'dist') -Recurse -Filter '*.js' -ErrorAction SilentlyContinue |
-            Select-String -SimpleMatch 'http://127.0.0.1:' -Quiet)) {
-        # 검증이 남긴 e2e 번들이에요. 이대로 실제 앱을 만들면 PC 의 로컬 서버를 바라봐요.
+    elseif (Get-ChildItem (Join-Path $mobileRoot 'dist') -Recurse -Filter '*.js' -ErrorAction SilentlyContinue |
+            Select-String -SimpleMatch 'http://127.0.0.1:' -Quiet) {
+        # 검증(npm run verify)이 남긴 e2e 번들이에요. 이대로 실제 앱을 만들면 PC 의 로컬 서버를 바라봐요.
         throw "dist/ 에 e2e 번들(로컬 서버 주소)이 남아 있어요. -SkipWebBuild 없이 다시 빌드하세요."
     }
     npx cap sync android
@@ -124,7 +110,7 @@ try {
     }
     Push-Location ".\android"
     try {
-        $variant = if ($Release) { 'Release' } elseif ($E2ePort) { 'E2e' } else { 'Debug' }
+        $variant = if ($Release) { 'Release' } else { 'Debug' }
         & ".\gradlew.bat" "assemble$variant"
         if ($LASTEXITCODE -ne 0) {
             throw "Gradle $variant APK 빌드가 실패했습니다."

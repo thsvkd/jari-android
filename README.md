@@ -121,6 +121,15 @@ for the Capacitor origin. Android release builds therefore do not allow
 cleartext HTTP. A debug-only network policy permits `localhost` and `10.0.2.2`
 for emulator API verification; it is not included in release builds.
 
+There is no separate e2e app. The device stage of `npm run verify` builds the
+normal app (`com.jari.app`, `assembleDebug -PjariNoFirebase`) with
+`VITE_API_BASE_URL=http://127.0.0.1:18281`, installs it on an Android emulator,
+clears its data and reaches the local e2e server through `adb reverse`. It
+refuses a physical device unless `JARI_ALLOW_PHYSICAL_DEVICE=1` is set, because
+it overwrites and clears the installed app. `npm run verify` leaves that
+local-server bundle in `dist/`; rebuild the web bundle before building an app to
+install for real use.
+
 ## Prerequisites
 
 - Node dependencies supplied by the frontend package owner, including the

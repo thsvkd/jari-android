@@ -56,12 +56,12 @@ export class Control {
   }
 }
 
-/** 앱을 처음부터 열어요. 기기에서는 지난 테스트의 로그인이 Keystore 에 남아 있으니 먼저 로그아웃해요. */
+/** 앱을 처음부터 열어요. 기기에서는 앞 테스트의 로그인이 Keystore 에 남아 있으니(실행 전 앱 데이터는 verify.mjs 가 비워요) 먼저 로그아웃해요. */
 export async function openApp(page: Page): Promise<void> {
   // 기기 WebView 에 CDP 로 붙은 페이지에는 baseURL 이 없어요. 이미 열린 앱 주소(https://localhost/)를 기준으로 해요.
   const current = page.url();
   const home = current.startsWith("http") ? new URL("/", current).href : "/";
-  // 앱을 막 띄운 기기의 첫 로딩(WebView 준비·Keystore 읽기)은 에뮬레이터와 느린 폰에서 10초를 넘기기도 하고, 가끔 시작
+  // 앱을 막 띄운 기기의 첫 로딩(WebView 준비·Keystore 읽기)은 에뮬레이터에서 10초를 넘기기도 하고, 가끔 시작
   // 화면("여정을 불러오고 있어요")에 머물러요. warmUpDevice 와 같이 새로고침해서 다시 열어 보고, 세 번을 넘기면 실패예요.
   const attempts = process.env.JARI_DEVICE_CDP ? 3 : 1;
   for (let attempt = 1; ; attempt++) {
@@ -113,7 +113,7 @@ async function warmUpDevice(endpoint: string): Promise<void> {
   const browser = await chromium.connectOverCDP(endpoint, { noDefaults: true });
   try {
     const webview = browser.contexts()[0]?.pages()[0];
-    if (!webview) throw new Error("기기의 e2e 앱 WebView 를 찾지 못했어요.");
+    if (!webview) throw new Error("기기 앱의 WebView 를 찾지 못했어요.");
     const deadline = Date.now() + 240_000;
     for (;;) {
       const current = webview.url();
@@ -140,7 +140,7 @@ export const test = base.extend<{ control: Control; user: User; app: Page; signe
     },
     { scope: "worker", auto: true, timeout: 300_000 },
   ],
-  // 헤드리스에서는 Playwright 의 새 페이지, 기기에서는 e2e 앱의 WebView 에 CDP 로 붙은 페이지예요.
+  // 헤드리스에서는 Playwright 의 새 페이지, 기기에서는 에뮬레이터 앱의 WebView 에 CDP 로 붙은 페이지예요.
   app: async ({ page }, use, testInfo) => {
     if (testInfo.project.name !== "device") return use(page);
     const endpoint = process.env.JARI_DEVICE_CDP;
@@ -149,7 +149,7 @@ export const test = base.extend<{ control: Control; user: User; app: Page; signe
     // 구글 WebView(에뮬레이터)는 다운로드 설정 명령(Browser.setDownloadBehavior)을 거부해 연결부터 실패해요.
     const browser = await chromium.connectOverCDP(endpoint, { noDefaults: true });
     const webview = browser.contexts()[0]?.pages()[0];
-    if (!webview) throw new Error("기기의 e2e 앱 WebView 를 찾지 못했어요.");
+    if (!webview) throw new Error("기기 앱의 WebView 를 찾지 못했어요.");
     await use(webview);
     await browser.close();
   },

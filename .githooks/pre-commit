@@ -1,7 +1,7 @@
 #!/bin/sh
 # 커밋 전 빠른 검사(30초 안팎): 타입·vitest·ruff.
 # 무거운 검증(서버 유닛·통합·헤드리스 e2e·스크린샷·에뮬레이터 기기 단계)은 푸시하면 GitHub Actions(.github/workflows/verify.yml)가,
-# 실폰 확인은 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 맡아요.
+# 에뮬레이터 기기 검증 기록은 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 확인해요.
 # 스테이징 여부와 상관없이 지금 작업 트리를 검사해요.
 set -e
 echo "커밋 전 빠른 검사(타입·vitest·ruff)..." >&2

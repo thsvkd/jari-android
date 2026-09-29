@@ -16,9 +16,9 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     continue
   fi
   cat >&2 <<MSG
-릴리스 태그 ${remote_ref#refs/tags/} 는 기기 검증을 통과한 커밋에만 붙일 수 있어요.
+릴리스 태그 ${remote_ref#refs/tags/} 는 기기(에뮬레이터) 검증을 통과한 커밋에만 붙일 수 있어요.
   태그의 커밋 내용(트리 $tree)이 기기 단계 포함 npm run verify 기록에 없어요.
-  그 커밋의 내용을 스테이징한 채로 npm run verify(에뮬레이터 또는 폰이 켜져 있고 잠금이 풀려 있어야 해요)를 돌리고 다시 푸시해 주세요.
+  그 커밋의 내용을 스테이징한 채로 npm run verify(에뮬레이터를 띄우고 잠금 해제)를 돌리고 다시 푸시해 주세요.
   기기가 여러 대면 ANDROID_SERIAL=<serial> npm run verify
 MSG
   status=1

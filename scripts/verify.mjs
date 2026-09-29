@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-// 전체 검증. 실기기까지 모두 통과하면 지금 스테이징된 내용(트리 해시)을 실기기 검증 기록에 남기고,
+// 전체 검증. 에뮬레이터 기기 단계까지 모두 통과하면 지금 스테이징된 내용(트리 해시)을 기기 검증 기록에 남기고,
 // 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 그 기록을 봐요. 커밋 훅은 빠른 검사만 해요.
 //
-//   npm run verify            실기기 e2e → 유닛·모듈 → 통합(실서버+가짜 코레일) → 헤드리스 e2e·레이아웃·스크린샷 → 기록
+//   npm run verify            에뮬레이터 e2e → 유닛·모듈 → 통합(실서버+가짜 코레일) → 헤드리스 e2e·레이아웃·스크린샷 → 기록
 //   npm run verify -- --ci    기기 없이(GitHub Actions). 기록은 남기지 않아요.
-//   npm run verify -- --ci --device --only=실기기   GitHub Actions 의 Android 에뮬레이터로 기기 단계만.
-//   npm run verify -- --only=실기기   이름에 그 말이 든 단계만(고치는 동안). 기록은 남기지 않아요.
+//   npm run verify -- --ci --device --only=에뮬레이터   GitHub Actions 의 Android 에뮬레이터로 기기 단계만.
+//   npm run verify -- --only=에뮬레이터   이름에 그 말이 든 단계만(고치는 동안). 기록은 남기지 않아요.
 //
-// 실제 코레일에는 닿지 않아요. 실기기 단계는 com.jari.app.e2e 를 따로 설치해 실제 앱의 로그인·데이터를 건드리지 않아요.
+// 실제 코레일에는 닿지 않아요. 기기 단계는 에뮬레이터에 평소 앱(com.jari.app, 디버그 빌드)을 그대로 깔고 앱 데이터를 비운 채 돌려요.
+// 그래서 실폰에서는 거부해요(폰의 실제 앱을 덮어쓰고 지워요). 정말 폰에서 돌릴 때만 JARI_ALLOW_PHYSICAL_DEVICE=1 을 줘요.
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync } from "node:fs";
@@ -21,7 +22,7 @@ const DEVICE = !CI || process.argv.includes("--device");
 const ONLY = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length);
 const E2E_API_PORT = 18281; // playwright.config.ts 의 E2E.api
 const DEVTOOLS_PORT = 9377; // 이 PC 의 9222 는 다른 프로그램이 써요.
-const E2E_APP = "com.jari.app.e2e";
+const APP = "com.jari.app";
 
 // macOS(brew)에서는 JDK 21 과 Android SDK 위치를 따로 알려 주지 않아도 기기 단계가 APK 를 빌드할 수 있게 해요.
 if (process.platform === "darwin") {
@@ -75,7 +76,14 @@ function prepareDevice() {
     throw new Error(
       serial
         ? `ANDROID_SERIAL=${serial} 기기가 연결돼 있지 않아요. \`adb devices\` 로 이름을 확인해 주세요.`
-        : `연결된 기기가 ${devices.length}대예요. 실기기 한 대를 연결하거나, 여러 대면 ANDROID_SERIAL 로 하나를 골라 주세요(무선 디버깅이면 \`! adb connect <IP>:<포트>\`).`,
+        : `연결된 기기가 ${devices.length}대예요. 에뮬레이터 한 대만 띄우거나, 여러 대면 ANDROID_SERIAL 로 하나를 골라 주세요.`,
+    );
+  }
+  // 이 단계는 평소 앱(com.jari.app)을 덮어쓰고 데이터를 지워요. 실폰의 실제 앱·로그인을 지키려고 에뮬레이터에서만 돌려요.
+  const target = serial || devices[0].split("\t")[0];
+  if (!target.startsWith("emulator-") && process.env.JARI_ALLOW_PHYSICAL_DEVICE !== "1") {
+    throw new Error(
+      `기기 ${target} 는 에뮬레이터가 아니에요. 기기 검증은 평소 앱(${APP})을 덮어쓰고 앱 데이터를 지워서, 실폰의 실제 앱과 로그인이 사라져요. 에뮬레이터(emulator-…)를 띄워 ANDROID_SERIAL 로 고르거나, 폰의 앱을 지워도 좋다면 JARI_ALLOW_PHYSICAL_DEVICE=1 을 주세요.`,
     );
   }
   // 잠긴 화면·꺼진 화면에서는 WebView 가 그리지 않고 타이머도 늦어져요. 잠금은 풀지 않고(보안 설정이에요) 사람에게 부탁해요.
@@ -86,24 +94,30 @@ function prepareDevice() {
       "기기 화면이 꺼져 있거나 잠겨 있어요. 잠금을 풀고 검증이 끝날 때까지 화면을 켜 두세요(개발자 옵션의 '화면 켜진 상태로 유지'가 편해요).",
     );
   }
-  if (process.platform === "win32") {
-    run(`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1 -E2ePort ${E2E_API_PORT}`);
-  } else {
-    // build-android.ps1 -E2ePort 와 같은 세 단계(리눅스 CI 러너용): 로컬 서버 주소로 웹 번들 → Capacitor 동기화 → e2e APK.
-    run("npm run build", { env: { VITE_API_BASE_URL: `http://127.0.0.1:${E2E_API_PORT}` } });
-    run("npx cap sync android");
-    run("./gradlew assembleE2e", { cwd: join(ROOT, "android") });
+  // 로컬 서버 주소로 웹 번들 → Capacitor 동기화 → 디버그 APK(평소 앱과 같은 com.jari.app). 푸시(Firebase)는 빼서 알림 권한·토큰 등록이 끼지 않게 해요.
+  run("npm run build", { env: { VITE_API_BASE_URL: `http://127.0.0.1:${E2E_API_PORT}` } });
+  run("npx cap sync android");
+  run(`${process.platform === "win32" ? "gradlew.bat" : "./gradlew"} assembleDebug -PjariNoFirebase`, { cwd: join(ROOT, "android") });
+  const apk = join(ROOT, "android/app/build/outputs/apk/debug/app-debug.apk");
+  try {
+    adb(`install -r "${apk}"`);
+  } catch (error) {
+    // 에뮬레이터에 릴리스 서명으로 깐 앱이 남아 있으면 서명이 달라 덮어쓸 수 없어요. 에뮬레이터니까 지우고 다시 깔아요.
+    if (!String(error.message).includes("INSTALL_FAILED_UPDATE_INCOMPATIBLE")) throw error;
+    spawnSync(`adb uninstall ${APP}`, { shell: true });
+    adb(`install "${apk}"`);
   }
-  run(`adb install -r "${join(ROOT, "android/app/build/outputs/apk/e2e/app-e2e.apk")}"`);
+  // 앞선 실행의 로그인·설정이 남지 않게 앱 데이터를 비워요. 테스트 사이의 로그아웃은 e2e/fixtures.ts 의 openApp 이 해요.
+  adb(`shell pm clear ${APP}`);
   adb(`reverse tcp:${E2E_API_PORT} tcp:${E2E_API_PORT}`);
-  adb(`shell am force-stop ${E2E_APP}`);
-  adb(`shell am start -n ${E2E_APP}/com.jari.app.MainActivity`);
+  adb(`shell am force-stop ${APP}`);
+  adb(`shell am start -n ${APP}/com.jari.app.MainActivity`);
   let pid = "";
   for (let attempt = 0; attempt < 30 && !pid; attempt++) {
-    pid = spawnSync(`adb shell pidof ${E2E_APP}`, { shell: true, encoding: "utf8" }).stdout.trim();
+    pid = spawnSync(`adb shell pidof ${APP}`, { shell: true, encoding: "utf8" }).stdout.trim();
     if (!pid) spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 500)"]);
   }
-  if (!pid) throw new Error("e2e 앱이 시작되지 않았어요.");
+  if (!pid) throw new Error("앱이 시작되지 않았어요.");
   // WebView 디버깅 소켓은 앱이 WebView 를 만든 뒤에 생겨요.
   let socket = "";
   for (let attempt = 0; attempt < 30 && !socket; attempt++) {
@@ -111,10 +125,10 @@ function prepareDevice() {
       .find((name) => name === `@webview_devtools_remote_${pid}`) ?? "";
     if (!socket) spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 500)"]);
   }
-  if (!socket) throw new Error("e2e 앱의 WebView 디버깅 소켓을 찾지 못했어요.");
+  if (!socket) throw new Error("앱의 WebView 디버깅 소켓을 찾지 못했어요.");
   adb(`forward tcp:${DEVTOOLS_PORT} localabstract:${socket.slice(1)}`);
   const top = adb(`shell "dumpsys activity activities | grep -E 'topResumedActivity|ResumedActivity:'"`);
-  if (!top.includes(E2E_APP)) throw new Error(`전면 앱이 ${E2E_APP} 가 아니에요. 기기를 잠시 그대로 두세요.\n${top}`);
+  if (!top.includes(APP)) throw new Error(`전면 앱이 ${APP} 가 아니에요. 기기를 잠시 그대로 두세요.\n${top}`);
   return `http://127.0.0.1:${DEVTOOLS_PORT}`;
 }
 
@@ -123,9 +137,9 @@ function releaseDevice() {
   spawnSync(`adb reverse --remove tcp:${E2E_API_PORT}`, { shell: true });
 }
 
-// 실기기 단계를 맨 앞에 둬요. 폰 잠금을 풀고 시작하면 처음 몇 분만 화면이 켜져 있으면 되고, 나머지는 폰 없이 돌아요.
+// 기기 단계를 맨 앞에 둬요. 에뮬레이터를 먼저 띄워 두면 되고, 나머지는 기기 없이 돌아요.
 const deviceStep = [
-  "실기기 e2e (com.jari.app.e2e)",
+  "에뮬레이터 e2e (com.jari.app)",
   () => {
     const cdp = prepareDevice();
     try {
@@ -154,7 +168,7 @@ const partial = CI || Boolean(ONLY);
 const before = partial ? null : stagedTree();
 if (before && !before.tree) {
   // 몇 분을 돌리고 나서 기록을 못 남긴다고 알리는 것보다 지금 멈추는 게 나아요.
-  console.error(`실기기 검증 기록을 남길 수 없는 상태예요.\n${before.reason}\n테스트만 돌리려면 npm run verify -- --ci`);
+  console.error(`기기 검증 기록을 남길 수 없는 상태예요.\n${before.reason}\n테스트만 돌리려면 npm run verify -- --ci`);
   process.exit(1);
 }
 const timings = [];
@@ -176,11 +190,11 @@ if (partial) process.exit(0);
 // 검증 중에 파일이 바뀌었다면 그 기록은 거짓이에요.
 const after = stagedTree();
 if (!before.tree || before.tree !== after.tree) {
-  console.error(`\n실기기 검증 기록은 남기지 않았어요. ${before.reason || after.reason || "검증 중에 스테이징된 내용이 바뀌었어요."}`);
+  console.error(`\n기기 검증 기록은 남기지 않았어요. ${before.reason || after.reason || "검증 중에 스테이징된 내용이 바뀌었어요."}`);
   process.exit(1);
 }
-// 실기기까지 통과한 트리는 따로 쌓아 둬요. 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 이 목록을 봐요.
+// 에뮬레이터 기기 단계까지 통과한 트리는 따로 쌓아 둬요. 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 이 목록을 봐요.
 // 워크트리끼리 같이 쓰도록 공용 git 디렉터리에 둬요.
 const deviceList = resolve(ROOT, git("rev-parse --git-common-dir"), "jari-device-verified");
 appendFileSync(deviceList, `${after.tree} ${new Date().toISOString()}\n`);
-console.log(`\n실기기 검증 기록: ${after.tree} (${deviceList})`);
+console.log(`\n기기 검증 기록: ${after.tree} (${deviceList})`);
