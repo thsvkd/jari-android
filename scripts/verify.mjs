@@ -10,7 +10,7 @@
 // 실제 코레일에는 닿지 않아요. 실기기 단계는 com.jari.app.e2e 를 따로 설치해 실제 앱의 로그인·데이터를 건드리지 않아요.
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -22,6 +22,15 @@ const ONLY = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--onl
 const E2E_API_PORT = 18281; // playwright.config.ts 의 E2E.api
 const DEVTOOLS_PORT = 9377; // 이 PC 의 9222 는 다른 프로그램이 써요.
 const E2E_APP = "com.jari.app.e2e";
+
+// macOS(brew)에서는 JDK 21 과 Android SDK 위치를 따로 알려 주지 않아도 기기 단계가 APK 를 빌드할 수 있게 해요.
+if (process.platform === "darwin") {
+  const jdk = "/opt/homebrew/opt/openjdk@21";
+  const sdk = "/opt/homebrew/share/android-commandlinetools";
+  if (!process.env.JAVA_HOME && existsSync(jdk)) process.env.JAVA_HOME = jdk;
+  if (!process.env.ANDROID_HOME && existsSync(sdk)) process.env.ANDROID_HOME = sdk;
+  if (process.env.JAVA_HOME) process.env.PATH = `${process.env.JAVA_HOME}/bin:${process.env.PATH}`;
+}
 
 function run(command, { cwd = ROOT, env = {}, capture = false } = {}) {
   const result = spawnSync(command, {

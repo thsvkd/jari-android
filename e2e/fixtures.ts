@@ -60,9 +60,22 @@ export class Control {
 export async function openApp(page: Page): Promise<void> {
   // 기기 WebView 에 CDP 로 붙은 페이지에는 baseURL 이 없어요. 이미 열린 앱 주소(https://localhost/)를 기준으로 해요.
   const current = page.url();
-  await page.goto(current.startsWith("http") ? new URL("/", current).href : "/");
-  // 앱을 막 띄운 기기의 첫 로딩(WebView 준비·Keystore 읽기)은 에뮬레이터와 느린 폰에서 10초를 넘기기도 해요.
-  await expect(page.locator(".auth-shell, main.screen").first()).toBeVisible({ timeout: 30_000 });
+  const home = current.startsWith("http") ? new URL("/", current).href : "/";
+  // 앱을 막 띄운 기기의 첫 로딩(WebView 준비·Keystore 읽기)은 에뮬레이터와 느린 폰에서 10초를 넘기기도 하고, 가끔 시작
+  // 화면("여정을 불러오고 있어요")에 머물러요. warmUpDevice 와 같이 새로고침해서 다시 열어 보고, 세 번을 넘기면 실패예요.
+  const attempts = process.env.JARI_DEVICE_CDP ? 3 : 1;
+  for (let attempt = 1; ; attempt++) {
+    await page.goto(home);
+    const drawn = await page
+      .locator(".auth-shell, main.screen")
+      .first()
+      .waitFor({ state: "visible", timeout: attempts > 1 ? 20_000 : 30_000 })
+      .then(() => true, () => false);
+    if (drawn) break;
+    if (attempt >= attempts) {
+      await expect(page.locator(".auth-shell, main.screen").first()).toBeVisible({ timeout: 1_000 });
+    }
+  }
   if (await page.locator(".auth-shell").count()) return;
   await page.locator(".bottom-nav [data-view='settings']").click();
   await page.locator("[data-action='app-logout']").click();

@@ -9,6 +9,6 @@
 - 커밋 훅은 빠른 검사(타입·vitest·ruff)만 합니다. 푸시하면 GitHub Actions가 서버 유닛·통합·헤드리스 E2E(레이아웃 측정)와 Android 에뮬레이터 기기 단계를 돌립니다. 결과는 `gh run watch`로 확인하고 실패를 남긴 채 다음 일로 넘어가지 않습니다.
 - main은 CI(`checks`·`device`)를 통과한 커밋만 받습니다(저장소 규칙). 작업 브랜치를 푸시해 초록불을 본 뒤 같은 커밋을 main에 fast-forward로 올립니다. 강제 푸시·삭제도 막혀 있습니다.
 - 화면은 스크린샷이 아니라 실제 렌더링을 재서 규칙으로 검사합니다(`e2e/layout.ts`: 겹침·넘침·잘린 글자·48px 터치·화면 여백선·붙박이 버튼 간격). 새 디자인 규칙이 생기면 여기에 규칙을 더합니다.
-- 기기가 여러 대면 `ANDROID_SERIAL=<serial>`로 고릅니다. 에뮬레이터는 폰이 없을 때의 보조이고 화면 최종 확인은 실기기로 합니다.
-- 릴리스 태그(`v*`)는 실폰 포함 `npm run verify`를 통과한 커밋에만 푸시됩니다(`.githooks/pre-push`). 실폰은 화면을 켜고 잠금을 풉니다. 태그를 로컬에서 푸시한 뒤 `gh release create --verify-tag`로 올립니다.
+- 기기가 여러 대면 `ANDROID_SERIAL=<serial>`로 고릅니다. 릴리스 검증의 기기 단계는 이 Mac의 에뮬레이터로 충분하고 실기기는 필수가 아닙니다. 화면·레이아웃을 크게 바꾼 릴리스만 실기기로도 봅니다.
+- 커밋은 빠른 검사만 통과하면 됩니다. 릴리스 태그(`v*`)는 기기 단계(에뮬레이터 가능)까지 도는 `npm run verify`를 통과한 커밋에만 푸시됩니다(`.githooks/pre-push`). 모두 이 Mac에서 끝냅니다(Windows 불필요): APK는 `scripts/release-android.sh`로 만들고(서명키는 Doppler `dev/dev`의 `JARI_ANDROID_DEBUG_*`·`JARI_ANDROID_RELEASE_*`에서 빌드 때만 꺼내며 인증서 지문을 확인합니다. 키를 올리는 것은 `scripts/doppler-store-android-keys.sh`), 태그를 푸시한 뒤 `gh release create --verify-tag`로 올립니다.
 - 커밋 메시지는 한국어 현재형 평서문으로 씁니다.
