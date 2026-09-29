@@ -36,7 +36,7 @@ from korail_mobile_api import (
 from korail_mobile_api import mutation_payloads as _mutation_payloads
 from korail_mobile_api import payloads as _read_payloads
 from korail_mobile_api.constants import KORAIL_STANDBY_WAIT_FLAG
-from korail_mobile_api.errors import KorailAppError
+from korail_mobile_api.errors import KorailAppError, KorailNoResultsError
 
 from korail_bot.config.settings import settings
 from korail_bot.models import ReservationOutcome, SeatPreference, SeatTarget
@@ -50,6 +50,12 @@ from korail_bot.utils.privacy import mask_phone
 from korail_bot.utils.timezone import RAIL_TIMEZONE
 
 logger = get_logger(__name__)
+
+# 매진이라 참고 편성이 꼭 필요할 때 훑는 날짜: 하루 뒤까지 일주일. 가장 먼 날부터 봐요.
+_SOLD_OUT_LOOKUP_OFFSETS = (7, 6, 5, 4, 3, 2, 1)
+# 목록은 왔는데 호차가 빠졌을 수 있어 편성만 채울 때는 같은 요일의 일주일·이주일 뒤를 봐요. 그 날의 목록도
+# 잔여석 있는 호차뿐이라 둘의 합집합을 쓰고, 열차마다 한 번이라 좌석표를 열 때의 대기를 검색 둘로 막아요.
+_FORMATION_LOOKUP_OFFSETS = (7, 14)
 
 # PNR-keyed unpaid seat detail. korail2 never calls this; ReservationView
 # (which it does call) lists bookings without the seats. letskorail and srtgo
@@ -205,6 +211,17 @@ class KorailService(RailService):
         self._modern_client: KorailClient | None = None
         self._modern_seat_context: tuple | None = None
         self._seat_layout_references: dict[tuple, object] = {}
+        # 코레일이 호차 목록에서 뺀 호차를 다른 날짜의 같은 열차 편성에서 채운 기록. 편성 조회는 열차·등급마다
+        # 한 번만 하고(찾지 못했다면 None), 채운 호차는 목록을 읽을 때마다 새로 계산해요.
+        # 열차·등급 → {호차 번호: (그 호차를 담은 참고 열차, 호차)}. 비어 있으면 찾지 못한 것이에요.
+        self._formation_references: dict[tuple, dict[int, tuple]] = {}
+        # 열차·등급·인원 → {목록에서 빠진 호차 번호: 그 배치를 읽을 참고 열차}
+        self._formation_gaps: dict[tuple, dict[int, object]] = {}
+        # 좌석표를 그리는 경로로 호차 목록을 한 번이라도 읽어 빠진 호차를 가려 본 열차·등급·인원
+        self._formation_checked: set[tuple] = set()
+        # 참고 열차를 읽지 못한 열차·등급·인원. 다음 호차 목록 읽기에서 편성을 다시 찾아요(호차마다 다시 찾지 않도록
+        # 그때까지 채운 호차는 그대로 둬요).
+        self._formation_stale: set[tuple] = set()
         # 열차가 이미 떠났는지 가를 때 쓰는 지금 시각(한국 시간). 테스트는 바꿔 끼워요.
         self.clock = lambda: datetime.now(RAIL_TIMEZONE)
 
@@ -520,13 +537,125 @@ class KorailService(RailService):
                 train, cabin.value, passenger_count
             )
             self._seat_layout_references[key] = layout_train
+            self._formation_gaps.pop(key, None)
         layout_passenger_count = 1 if layout_train is not train else passenger_count
         self._modern_seat_context = (
             self._seat_key(layout_train),
             cabin.value,
             layout_passenger_count,
         )
+        if allow_layout_reference:
+            if layout_train is train:
+                # 위 문맥 기록 뒤에 해야 해요: 편성을 찾으면 코레일 쪽 열차 문맥이 바뀌어 그 기록을 지워요.
+                response = self._with_unlisted_cars(
+                    train, cabin.value, passenger_count, key, response
+                )
+            else:
+                self._formation_checked.add(key)
         return response
+
+    def _with_unlisted_cars(self, train, room_class_code: str, passenger_count: int, key, response):
+        """
+        코레일이 목록에서 뺀 호차를 같은 열차의 다른 날짜 편성으로 채워요.
+
+        호차 목록은 지금 잔여석이 있는 호차만 담고, 일행이 많으면 그 인원이 앉을 호차만 담아요. 거의 매진된
+        열차는 한 호차만 와서, 앱은 그 목록을 편성 전체로 그렸어요. 취소표 대기는 매진 호차의 좌석도 골라야
+        하는데 그 호차가 탭에 없었어요. 채운 호차는 잔여석 0으로 두고, 좌석표는 참고 편성의 배치를 써서
+        모두 "팔 수 없음"으로 그려요(seat_inventory).
+
+        ponytail: 같은 열차번호라도 날짜에 따라 편성이 다를 수 있어요(복합·병결 운행). 없는 호차가 탭에 뜨면
+        그 호차는 워커가 예약할 수 없는 자리를 기다리게 될 뿐이에요.
+        """
+        self._formation_gaps.pop(key, None)
+        # 조회가 실패해도 확인한 것으로 세어요: 한 번에 읽는 동안 호차마다 실패한 검색을 되풀이하지 않도록. 실패는
+        # stale 로 남겨 다음 호차 목록 읽기가 다시 찾게 해요.
+        self._formation_checked.add(key)
+        reference_key = (self._seat_key(train), room_class_code)
+        if key in self._formation_stale:
+            self._formation_stale.discard(key)
+            self._formation_references.pop(reference_key, None)
+        if reference_key not in self._formation_references:
+            try:
+                self._formation_references[reference_key] = self._formation_lookup(
+                    train, room_class_code
+                )
+            except Exception as exc:
+                # 편성을 못 채워도 코레일이 준 목록은 그대로 보여 줘요. 실패는 기억하지 않아 다음에 다시 시도해요.
+                logger.warning(
+                    "Could not read a nearby formation to complete the car list (%s) %s",
+                    type(exc).__name__,
+                    self.describe_train_row(train),
+                )
+                self._formation_stale.add(key)
+                return response
+        listed = {car.car_no for car in response.cars}
+        missing = {
+            car_no: found
+            for car_no, found in self._formation_references[reference_key].items()
+            if car_no not in listed
+        }
+        if not missing:
+            return response
+        logger.info(
+            "Korail listed cars %s of a %d-car formation; adding %s as sold out %s",
+            sorted(listed),
+            len(listed) + len(missing),
+            sorted(missing),
+            self.describe_train_row(train),
+        )
+        self._formation_gaps[key] = {car_no: found[0] for car_no, found in missing.items()}
+        extras = tuple(replace(found[1], remaining_seat_count=0) for found in missing.values())
+        return replace(
+            response,
+            cars=tuple(sorted((*response.cars, *extras), key=lambda car: car.car_no)),
+        )
+
+    def _formation_lookup(self, train, room_class_code: str) -> dict[int, tuple]:
+        """같은 열차번호의 다른 날짜들이 내놓는 호차의 합집합. 못 찾은 날짜는 건너뛰고, 하나도 없으면 빈 사전이에요."""
+        found: dict[int, tuple] = {}
+        for offset in _FORMATION_LOOKUP_OFFSETS:
+            try:
+                reference = self._reference_train(train, offset)
+                if reference is None:
+                    continue
+                response = self._modern_client.get_seat_cars(
+                    reference, passenger_count=1, room_class_code=room_class_code
+                )
+            except KorailNoResultsError:
+                # 예약 가능 기간 밖이거나 그날 운행이 없어요. 다음 날짜를 봐요.
+                # (기록해 둔 좌석 문맥은 _reference_train 이 검색 전에 이미 지웠어요.)
+                continue
+            except KorailAppError as exc:
+                if not self._is_no_remaining_seats(exc):
+                    # 서비스 점검·요청 거절 같은 일시 오류를 "편성 없음"으로 기억하면 이 로그인 내내 못 채워요.
+                    raise
+                continue
+            for car in response.cars:
+                found.setdefault(car.car_no, (reference, car))
+        return found
+
+    def _unlisted_car_inventory(self, train, reference, car_no: int, room_class_code: str, key):
+        """참고 편성의 좌석 배치에 판매 가능 좌석이 없는 좌석표. 다른 날짜의 판매 여부는 이 열차와 무관해요."""
+        client = self._modern_client
+        context = (self._seat_key(reference), room_class_code, 1)
+        try:
+            if self._modern_seat_context != context:
+                # 호출이 실패해도 코레일 쪽 문맥이 바뀌었을 수 있어요.
+                self._modern_seat_context = None
+                client.get_seat_cars(reference, passenger_count=1, room_class_code=room_class_code)
+                self._modern_seat_context = context
+            response = client.get_seat_inventory(
+                reference, car_no, passenger_count=1, room_class_code=room_class_code
+            )
+        except Exception:
+            # 참고 열차가 그 사이 매진됐거나 조회가 막혔어요. 낡은 편성을 붙들지 말고 다음 호차 목록 읽기가 다시 찾게 해요.
+            self._formation_stale.add(key)
+            raise
+        return replace(
+            response,
+            seats=tuple(replace(seat, sale_possible="N") for seat in response.seats),
+            remaining_count=0,
+        )
 
     def _departed(self, train) -> bool:
         """출발 일시가 지금(한국 시간)보다 이르면 True. 일시를 읽을 수 없으면 코레일에 맡겨요."""
@@ -558,6 +687,15 @@ class KorailService(RailService):
             raise ValueError("좌석을 조회하려면 먼저 로그인해 주세요.")
         cabin = self._seat_class(seat_class)
         key = (self._seat_key(train), cabin.value, passenger_count)
+        if allow_layout_reference:
+            if key not in self._formation_checked:
+                # 호차 목록을 읽은 인스턴스가 아니에요(세션이 새로 만들어졌어요). 앱이 가진 목록에는 채운 호차가
+                # 있을 수 있으니, 그 호차를 실제 열차에서 읽기 전에 빠진 호차를 다시 가려요.
+                self.seat_cars(train, seat_class, passenger_count)
+            reference = self._formation_gaps.get(key, {}).get(car_no)
+            if reference is not None:
+                # 코레일이 목록에서 뺀 호차예요. 판매할 좌석이 없으니 그릴 배치만 참고 편성에서 읽어요.
+                return self._unlisted_car_inventory(train, reference, car_no, cabin.value, key)
         layout_train = self._seat_layout_references.get(key, train)
         layout_passenger_count = 1 if layout_train is not train else passenger_count
         context = (self._seat_key(layout_train), cabin.value, layout_passenger_count)
@@ -597,8 +735,8 @@ class KorailService(RailService):
             getattr(exc, "message", "") or ""
         )
 
-    def _nearby_layout_reference(self, train, room_class_code: str, passenger_count: int):
-        """Read the same scheduled train's formation from a nearby service date."""
+    def _reference_train(self, train, offset: int):
+        """같은 열차번호의 `offset`일 뒤 운행. 그날 검색 결과에 없으면 None이에요."""
         client = self._modern_client
         if client is None:
             raise ValueError("좌석을 조회하려면 먼저 로그인해 주세요.")
@@ -609,39 +747,48 @@ class KorailService(RailService):
         # A reference is used only to describe the formation. Querying it for
         # one passenger keeps a nearly sold-out nearby train useful even when
         # the actual request is for a larger party.
-        layout_passenger_count = 1
+        # 열차 검색(ScheduleView)이 코레일 쪽 좌석 문맥을 이 검색의 것으로 바꿔요. 호출한 쪽이 그 열차의 문맥을 다시
+        # 세우기 전까지 기록해 둔 문맥은 믿을 수 없어요.
+        self._modern_seat_context = None
+        result = client.search_trains(
+            TrainSearchQuery(
+                departure_station_code=str(train.departure_station_name or ""),
+                arrival_station_code=str(train.arrival_station_name or ""),
+                departure_date=(base_date + timedelta(days=offset)).strftime("%Y%m%d"),
+                departure_time=str(train.departure_time or "000000"),
+                passengers=1,
+            )
+        )
+        return next(
+            (
+                item
+                for item in result.trains
+                if item.train_no == train.train_no
+                and (
+                    not train.train_class_code
+                    or not item.train_class_code
+                    or item.train_class_code == train.train_class_code
+                )
+            ),
+            None,
+        )
+
+    def _nearby_layout_reference(self, train, room_class_code: str, passenger_count: int):
+        """Read the same scheduled train's formation from a nearby service date."""
+        client = self._modern_client
+        if client is None:
+            raise ValueError("좌석을 조회하려면 먼저 로그인해 주세요.")
         # The nearest day can itself be almost sold out and expose only one
         # bookable car. Start at the far edge of this short window so the UI
         # can offer a useful formation while still matching the train number.
-        for offset in range(7, 0, -1):
-            result = client.search_trains(
-                TrainSearchQuery(
-                    departure_station_code=str(train.departure_station_name or ""),
-                    arrival_station_code=str(train.arrival_station_name or ""),
-                    departure_date=(base_date + timedelta(days=offset)).strftime("%Y%m%d"),
-                    departure_time=str(train.departure_time or "000000"),
-                    passengers=layout_passenger_count,
-                )
-            )
-            reference = next(
-                (
-                    item
-                    for item in result.trains
-                    if item.train_no == train.train_no
-                    and (
-                        not train.train_class_code
-                        or not item.train_class_code
-                        or item.train_class_code == train.train_class_code
-                    )
-                ),
-                None,
-            )
+        for offset in _SOLD_OUT_LOOKUP_OFFSETS:
+            reference = self._reference_train(train, offset)
             if reference is None:
                 continue
             try:
                 response = client.get_seat_cars(
                     reference,
-                    passenger_count=layout_passenger_count,
+                    passenger_count=1,
                     room_class_code=room_class_code,
                 )
             except KorailAppError as exc:

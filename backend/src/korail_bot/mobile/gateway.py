@@ -246,7 +246,11 @@ class MobileGateway(MiniAppGateway):
         failed = []
         reasons = []
         consecutive = 0
-        car_numbers = [car.car_no for car in cars.cars]
+        # 잔여석이 있는 호차를 먼저 읽어요. 목록에서 빠져 참고 편성으로 채운 호차(잔여석 0)는 그 뒤에 몰아 읽어야
+        # 코레일 쪽 열차 문맥을 오가는 일이 적고, 참고 편성을 읽지 못해도 실제 호차가 그 실패에 묻히지 않아요.
+        car_numbers = [
+            car.car_no for car in sorted(cars.cars, key=lambda car: car.remaining_seat_count <= 0)
+        ]
         for index, car_no in enumerate(car_numbers):
             try:
                 inventories.append(
@@ -277,7 +281,8 @@ class MobileGateway(MiniAppGateway):
         if failed and not inventories:
             raise MiniAppError("좌석표를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.", 502)
         return {
-            "inventories": inventories,
+            # 읽은 순서(실제 호차 먼저)가 아니라 호차 순서로 돌려줘요. 앱의 선택 요약과 대기 대상이 이 순서를 따라요.
+            "inventories": sorted(inventories, key=lambda inventory: inventory["carNo"]),
             "failedCars": failed,
             "layoutReference": bool(rail.seat_layout_is_reference(train, seat_class, count)),
         }

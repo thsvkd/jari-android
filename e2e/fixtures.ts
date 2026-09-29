@@ -17,6 +17,8 @@ export interface Scenario {
   outcome?: "OUTSTANDING" | "PAID" | "RELEASED" | "UNKNOWN";
   deadline_minutes?: number;
   sold_seats?: Record<string, string[]> | null;
+  /** 코레일이 호차 목록에서 뺀(잔여석 없는) 호차 번호 */
+  sold_out_cars?: number[];
 }
 
 /** e2e 스택의 제어 서버. 가짜 코레일 시나리오와 호출 기록을 다뤄요. */

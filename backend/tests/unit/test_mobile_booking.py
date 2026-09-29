@@ -620,6 +620,38 @@ def test_whole_formation_read_returns_every_car_in_one_request(tmp_path, monkeyp
     runtime.storage.close()
 
 
+def test_whole_formation_read_takes_the_cars_korail_listed_before_the_ones_filled_in(
+    tmp_path, monkeypatch
+):
+    # 목록에서 빠져 참고 편성으로 채운 호차(잔여석 0)는 코레일 쪽 열차 문맥을 오가게 하고, 참고 열차를 못 읽으면
+    # 연속 실패로 실제 호차까지 못 읽은 것이 돼요. 실제 호차를 먼저 읽어요.
+    runtime, http, headers, train_key, rail = listed_train(
+        tmp_path,
+        monkeypatch,
+        cars=(1, 2, 3, 4),
+        inventories=[car_inventory(4), RuntimeError("no"), RuntimeError("no"), RuntimeError("no")],
+    )
+    rail.seat_cars.return_value = SeatCarListResponse(
+        cars=(
+            SeatCar(1, "일반실", 0, ()),
+            SeatCar(2, "일반실", 0, ()),
+            SeatCar(3, "일반실", 0, ()),
+            SeatCar(4, "일반실", 2, ()),
+        )
+    )
+
+    response = http.get(
+        f"/api/mobile/trains/{train_key}/seats?seatClass=general&passengerCount=1",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.json
+    assert [call.args[1] for call in rail.seat_inventory.call_args_list] == [4, 1, 2, 3]
+    assert [item["carNo"] for item in response.json["inventories"]] == [4]
+    assert response.json["failedCars"] == [1, 2, 3]
+    runtime.storage.close()
+
+
 def test_one_unreadable_car_does_not_hide_the_rest_or_look_empty(tmp_path, monkeypatch):
     runtime, http, headers, train_key, rail = listed_train(
         tmp_path,

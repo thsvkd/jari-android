@@ -810,7 +810,7 @@ export class JariApp {
     const cars = dialog.cars.map((car) => {
       const count = selectedByCar.get(car.carNo) ?? 0;
       const trimmed = !kept.has(car.carNo);
-      return `<button type="button" class="car-tab ${dialog.carNo === car.carNo ? "selected" : ""} ${count ? "picked" : ""} ${trimmed ? "trimmed" : ""}" data-seat-car="${escapeHtml(car.carNo)}" ${locked ? "disabled" : ""}><b>${escapeHtml(car.carNo)}호차</b><small>${trimmed ? "제외" : dialog.layoutReference ? "좌석표" : `${escapeHtml(car.remainingSeatCount)}석 가능`}</small>${count ? `<em>${escapeHtml(count)}</em>` : ""}</button>`;
+      return `<button type="button" class="car-tab ${dialog.carNo === car.carNo ? "selected" : ""} ${count ? "picked" : ""} ${trimmed ? "trimmed" : ""}" data-seat-car="${escapeHtml(car.carNo)}" ${locked ? "disabled" : ""}><b>${escapeHtml(car.carNo)}호차</b><small>${trimmed ? "제외" : dialog.layoutReference ? "좌석표" : car.remainingSeatCount > 0 ? `${escapeHtml(car.remainingSeatCount)}석 가능` : this.draft.passengerCount > 1 ? "자리 부족" : "매진"}</small>${count ? `<em>${escapeHtml(count)}</em>` : ""}</button>`;
     }).join("");
     const selectable = this.seatSelectable(dialog);
     const layout = dialog.inventory ? groupSeatsByLayout(dialog.inventory.seats) : [];
@@ -992,7 +992,8 @@ export class JariApp {
       if (generation !== this.generation || this.seatDialog !== dialog) return;
       if (!result.cars.length) throw new Error(`${dialog.seatClass === "general" ? "일반실" : "특실"} 좌석표가 아직 제공되지 않아요.`);
       dialog.cars = result.cars;
-      dialog.carNo = result.cars[0]!.carNo;
+      // 잔여석이 없는 호차도 탭에 있으니, 시트는 좌석이 남은 첫 호차에서 열어요. 모두 매진이면 첫 호차예요.
+      dialog.carNo = (result.cars.find((car) => car.remainingSeatCount > 0) ?? result.cars[0]!).carNo;
       dialog.layoutReference = Boolean(result.layoutReference);
       this.refreshSeatDialog();
       const inventory = await this.api.seatInventory(trainKey, dialog.carNo, dialog.seatClass, this.draft.passengerCount);

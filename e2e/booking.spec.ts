@@ -123,4 +123,29 @@ test.describe("빈자리를 찾아 예약하기", () => {
     await expect(page.locator(".seat-dialog")).toHaveCount(0);
     await expect(page.locator(".train-card", { has: page.locator("[data-train-toggle='00101']") })).toContainText("1석 지정");
   });
+
+  test("거의 매진된 열차도 편성의 모든 호차가 탭에 보이고 매진 호차의 좌석을 취소표 대기로 고를 수 있어요 @layout", async ({ signedIn: page, control }) => {
+    // 코레일은 잔여석이 있는 호차만 목록에 줘서, 예전에는 3호차 한 개만 탭에 떴어요.
+    await control.scenario({ sold_out_cars: [1, 2] });
+    await searchTrains(page, { seatMode: "specific", seatClasses: ["general"] });
+    await page.locator("[data-seat-map][data-train-no='00101'][data-seat-class='general']").click();
+
+    await expect(page.locator(".car-tab")).toHaveCount(3);
+    await expect(page.locator(".car-tab small")).toHaveText(["매진", "매진", "40석 가능"]);
+    // 시트는 좌석이 남은 호차(3호차)에서 열려요.
+    await expect(page.locator("[data-seat-car='3']")).toHaveClass(/selected/);
+    await expect(page.locator(".seat-cell.available:not([disabled])").first()).toBeVisible();
+
+    await page.locator("[data-seat-car='1']").click();
+    await expect(page.locator(".seat-cell").first()).toBeVisible();
+    await expect(page.locator(".seat-cell.available")).toHaveCount(0);
+    await page.locator(".seat-cell.occupied").first().click();
+    await expect(page.locator(".seat-mode [aria-checked='true']")).toHaveText("취소표 대기");
+    await expect(page.locator("[data-seat-car='1'] em")).toHaveText("1");
+    await expectCleanLayout(page, "seat-dialog-sold-out-car");
+    await page.locator("[data-action='confirm-seat-dialog']").click();
+
+    await expect(page.locator(".seat-dialog")).toHaveCount(0);
+    await expect(page.locator(".train-card", { has: page.locator("[data-train-toggle='00101']") })).toContainText("1석 지정");
+  });
 });

@@ -155,6 +155,72 @@ describe("bulk apply to all cars locks the dialog for the whole run", () => {
   });
 });
 
+describe("a train whose car list is only partly free", () => {
+  // 코레일은 잔여석이 있는 호차만 목록에 줘요. 서버가 편성의 나머지를 잔여석 0 호차로 채워 보내면 앱은 전부 탭으로 보이고,
+  // 취소표 대기에서는 매진 호차의 좌석도 고를 수 있어야 해요.
+  const partlyFreeSeatCars = async () => ({
+    cars: [
+      { carNo: 3, roomClassName: "일반실", remainingSeatCount: 0, attributes: [] },
+      { carNo: 4, roomClassName: "일반실", remainingSeatCount: 2, attributes: [] },
+      { carNo: 5, roomClassName: "일반실", remainingSeatCount: 0, attributes: [] },
+    ],
+  });
+
+  it("shows every car of the formation and labels the ones with no seat left as sold out", async () => {
+    const { app, root } = await mountLive({
+      seatCars: partlyFreeSeatCars,
+      seatInventory: async (_trainKey: string, carNo: number) => makeCarInventory(carNo, carNo === 4),
+    });
+    await openThreeCarWaitDialog(root, app);
+
+    expect([...root.querySelectorAll(".car-tab b")].map((tab) => tab.textContent)).toEqual(["3호차", "4호차", "5호차"]);
+    expect([...root.querySelectorAll(".car-tab small")].map((tab) => tab.textContent)).toEqual(["매진", "2석 가능", "매진"]);
+  });
+
+  it("says a car has too few seats, not that it is sold out, when the party is more than one", async () => {
+    const { app, root } = await mountLive({
+      seatCars: partlyFreeSeatCars,
+      seatInventory: async (_trainKey: string, carNo: number) => makeCarInventory(carNo, carNo === 4),
+    });
+    app.navigate("journey");
+    root.querySelector<HTMLButtonElement>("[data-action='passenger-plus']")!.click();
+    root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+    await vi.waitFor(() => expect(root.querySelector("[data-train-no='015'][data-seat-class='general']")).not.toBeNull());
+    root.querySelector<HTMLButtonElement>("[data-train-no='015'][data-seat-class='general']")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".car-tab")).not.toBeNull());
+
+    expect([...root.querySelectorAll(".car-tab small")].map((tab) => tab.textContent)).toEqual(["자리 부족", "2석 가능", "자리 부족"]);
+  });
+
+  it("opens on the first car that still has a seat rather than on a sold-out car 3", async () => {
+    const seatInventory = vi.fn(async (_trainKey: string, carNo: number) => makeCarInventory(carNo, carNo === 4));
+    const { app, root } = await mountLive({ seatCars: partlyFreeSeatCars, seatInventory });
+    await openThreeCarWaitDialog(root, app);
+
+    expect(root.querySelector("[data-seat-car='4']")!.classList.contains("selected")).toBe(true);
+    expect(seatInventory).toHaveBeenCalledTimes(1);
+    expect(seatInventory.mock.calls[0]![1]).toBe(4);
+    expect(root.querySelector("[data-seat-no='4-1-A']")).not.toBeNull();
+  });
+
+  it("lets cancellation wait pick seats in a sold-out car", async () => {
+    const { app, root } = await mountLive({
+      seatCars: partlyFreeSeatCars,
+      seatInventory: async (_trainKey: string, carNo: number) => makeCarInventory(carNo, carNo === 4),
+    });
+    await openThreeCarWaitDialog(root, app);
+
+    root.querySelector<HTMLButtonElement>("[data-seat-car='5']")!.click();
+    await vi.waitFor(() => expect(root.querySelector("[data-seat-no='5-1-A']")).not.toBeNull());
+    const seat = root.querySelector<HTMLButtonElement>("[data-seat-no='5-1-A']")!;
+    expect(seat.disabled).toBe(false);
+    seat.click();
+
+    expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(1);
+    expect(root.querySelector("[data-seat-car='5'] em")?.textContent).toBe("1");
+  });
+});
+
 describe("designated reservation conflict caches the fresh inventory", () => {
   it("keeps the just-sold seat unavailable after switching cars away and back, instead of refetching the stale cache", async () => {
     let car3Calls = 0;

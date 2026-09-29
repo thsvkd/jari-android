@@ -94,6 +94,10 @@ DEFAULT_SCENARIO = {
     "deadline_minutes": 10,
     # 좌석표에서 팔린 좌석(호차별 좌석 표시 목록). 없으면 짝수 줄 D 석만 팔린 것으로 둬요.
     "sold_seats": None,
+    # 서버가 앱에 돌려주는 모양의 시나리오: 잔여석 0 으로 채워 넣은 호차 번호와 모두 "팔 수 없음"인 좌석표.
+    # 이 가짜는 KorailService 통째로 바꾸므로 채우는 로직(KorailService._with_unlisted_cars)은 여기서 돌지 않아요.
+    # 그쪽은 단위 테스트(test_korail_seat_map.py)가 검증하고, 이 시나리오는 그 결과를 그리는 앱 화면을 검증해요.
+    "sold_out_cars": [],
     "trains": DEFAULT_TRAINS,
 }
 
@@ -276,7 +280,10 @@ class FakeKorail:
         numbers = (1, 2, 3) if seat_class == "general" else (4,)
         return SeatCarListResponse(
             train_no=train.train_no,
-            cars=tuple(SeatCar(no, name, 40, ()) for no in numbers),
+            cars=tuple(
+                SeatCar(no, name, 0 if no in scenario()["sold_out_cars"] else 40, ())
+                for no in numbers
+            ),
         )
 
     def seat_layout_is_reference(self, train, seat_class, passenger_count=1) -> bool:
@@ -286,12 +293,13 @@ class FakeKorail:
         self, train, car_no, seat_class, passenger_count=1, *, allow_layout_reference=False
     ):
         sold = scenario()["sold_seats"]
+        car_sold_out = car_no in scenario()["sold_out_cars"]
         sold_here = set((sold or {}).get(str(car_no), [])) if sold is not None else None
         seats = []
         for row in range(1, 15):
             for index, column in enumerate("ABCD"):
                 label = f"{row}{column}"
-                taken = (
+                taken = car_sold_out or (
                     label in sold_here
                     if sold_here is not None
                     else (row % 2 == 0 and column == "D")

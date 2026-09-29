@@ -11,7 +11,7 @@ from korail_mobile_api import (
     SeatCarListResponse,
     SeatInventoryResponse,
 )
-from korail_mobile_api.errors import KorailAppError
+from korail_mobile_api.errors import KorailAppError, KorailNoResultsError
 
 from korail_bot.models import SeatTarget
 from korail_bot.services.korail_service import KorailService
@@ -128,6 +128,275 @@ def test_sold_out_train_uses_nearby_matching_formation_for_seat_selection():
     service._modern_client.get_seat_inventory.assert_called_once_with(
         reference, 3, passenger_count=1, room_class_code="1"
     )
+
+
+def nearly_sold_out_train(day: str = "20260914"):
+    return SimpleNamespace(
+        train_no="009",
+        train_class_code="00",
+        departure_date=day,
+        departure_time="063300",
+        departure_station_name="서울",
+        arrival_station_name="부산",
+    )
+
+
+def formation(*car_nos: int, remaining: int = 40, room: str = "일반실") -> SeatCarListResponse:
+    return SeatCarListResponse(
+        cars=tuple(SeatCar(car_no, room, remaining, ()) for car_no in car_nos)
+    )
+
+
+def wire_partial_train(service, train, *, real, nearby):
+    """코레일이 `train` 에는 `real` 호차만, 다른 날짜(일 단위 간격 → 호차)에는 `nearby` 호차만 주게 한다."""
+    references = {}
+    for offset in nearby:
+        day = (datetime.strptime(train.departure_date, "%Y%m%d") + timedelta(days=offset)).strftime(
+            "%Y%m%d"
+        )
+        references[day] = SimpleNamespace(
+            train_no=train.train_no,
+            train_class_code=train.train_class_code,
+            departure_date=day,
+            departure_time=train.departure_time,
+        )
+
+    def search(query):
+        reference = references.get(query.departure_date)
+        return SimpleNamespace(trains=[reference] if reference else [])
+
+    def cars(item, **_):
+        if item is train:
+            return formation(*real, remaining=2)
+        offset = (
+            datetime.strptime(item.departure_date, "%Y%m%d")
+            - datetime.strptime(train.departure_date, "%Y%m%d")
+        ).days
+        return formation(*nearby[offset])
+
+    service._modern_client.search_trains.side_effect = search
+    service._modern_client.get_seat_cars.side_effect = cars
+    return references
+
+
+def test_a_car_list_of_one_car_is_completed_from_the_same_trains_nearby_formations():
+    # 코레일은 잔여석이 있는 호차만 목록에 줘요. 거의 매진된 열차는 한 호차만 와서 앱은 그 목록을 편성 전체로
+    # 그렸고, 다른 호차의 좌석표(취소표 대기 후보)를 고를 수 없었어요. 다른 날짜의 목록도 일부만 올 수 있어 합쳐요.
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    wire_partial_train(service, train, real=[5], nearby={7: [3, 5], 14: [5, 7, 8]})
+
+    response = service.seat_cars(train, "general", 1)
+
+    assert {car.car_no: car.remaining_seat_count for car in response.cars} == {
+        3: 0,
+        5: 2,
+        7: 0,
+        8: 0,
+    }
+    assert [car.car_no for car in response.cars] == [3, 5, 7, 8]
+    # 편성은 다른 날짜 열차를 묻는 것이라 좌석표 전체가 참고용이 되지는 않아요.
+    assert not service.seat_layout_is_reference(train, "general", 1)
+
+
+def test_a_car_the_list_left_out_is_drawn_from_the_nearby_formation_with_no_seat_for_sale():
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    references = wire_partial_train(service, train, real=[5], nearby={7: [3, 5], 14: [5, 7]})
+    service.seat_cars(train, "general", 1)
+    # 다른 날짜의 좌석표라 그날 팔린 좌석은 이 열차와 상관없어요. 좌석 배치만 쓰고 모두 "팔 수 없음"으로 돌려줘요.
+    service._modern_client.get_seat_inventory.return_value = inventory(
+        physical_seat(seat_no="000041", label="5A", sale_possible="Y"),
+        physical_seat(seat_no="000042", label="5B", sale_possible="Y"),
+    )
+
+    response = service.seat_inventory(train, 7, "general", 1, allow_layout_reference=True)
+
+    assert [seat.specification for seat in response.seats] == ["5A", "5B"]
+    assert all(seat.sale_possible == "N" for seat in response.seats)
+    assert response.remaining_count == 0
+    # 7호차를 담은 날짜(14일 뒤)의 열차에서 읽어요.
+    (reference_day,) = [
+        day for day, item in references.items() if item.departure_date == "20260928"
+    ]
+    service._modern_client.get_seat_inventory.assert_called_once_with(
+        references[reference_day], 7, passenger_count=1, room_class_code="1"
+    )
+
+
+def test_a_car_the_list_named_is_still_read_from_the_actual_train():
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    wire_partial_train(service, train, real=[5], nearby={7: [3, 5], 14: [5, 7]})
+    real = inventory(physical_seat(label="5A", sale_possible="Y"))
+    service._modern_client.get_seat_inventory.return_value = real
+    service.seat_cars(train, "general", 1)
+
+    response = service.seat_inventory(train, 5, "general", 1, allow_layout_reference=True)
+
+    assert response is real
+    assert response.seats[0].sale_possible == "Y"
+    service._modern_client.get_seat_inventory.assert_called_once_with(
+        train, 5, passenger_count=1, room_class_code="1"
+    )
+    # 참고 열차를 물으면서 코레일 쪽 열차 문맥이 바뀌었으니 실제 열차의 문맥을 한 번 되살려요.
+    assert service._modern_client.get_seat_cars.call_args_list[-1].args == (train,)
+
+
+def test_booking_reads_a_car_the_list_left_out_from_the_actual_train():
+    # 예약 경로(allow_layout_reference=False)는 채운 호차를 절대 쓰지 않아요. 판매 가능 여부는 실제 열차만 알아요.
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    wire_partial_train(service, train, real=[5], nearby={7: [3, 5], 14: [5, 7]})
+    real = inventory(physical_seat(label="3A", sale_possible="Y"))
+    service._modern_client.get_seat_inventory.return_value = real
+    service.seat_cars(train, "general", 1)
+
+    assert service.seat_inventory(train, 3, "general", 1) is real
+    service._modern_client.get_seat_inventory.assert_called_once_with(
+        train, 3, passenger_count=1, room_class_code="1"
+    )
+
+
+def test_the_nearby_formations_are_looked_up_once_per_train_however_often_the_cars_are_listed():
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    wire_partial_train(service, train, real=[5], nearby={7: [3, 5], 14: [5, 7]})
+
+    for _ in range(3):
+        assert len(service.seat_cars(train, "general", 1).cars) == 3
+
+    # 7일 뒤와 14일 뒤, 처음 한 번만
+    assert service._modern_client.search_trains.call_count == 2
+
+
+def test_a_full_formation_is_left_as_listed():
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    listed = formation(3, 5)
+    wire_partial_train(service, train, real=[3, 5], nearby={7: [3, 5], 14: [5]})
+    service._modern_client.get_seat_cars.side_effect = None
+    service._modern_client.get_seat_cars.return_value = listed
+
+    assert service.seat_cars(train, "general", 1) is listed
+
+
+def test_a_nearby_formation_that_cannot_be_found_leaves_the_list_as_korail_gave_it():
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    listed = formation(5, remaining=2)
+    service._modern_client.get_seat_cars.return_value = listed
+    service._modern_client.search_trains.return_value = SimpleNamespace(trains=[])
+
+    assert service.seat_cars(train, "general", 1) is listed
+    # 못 찾았다는 사실도 기억해서, 목록을 볼 때마다 날짜를 다시 뒤지지 않아요.
+    assert service.seat_cars(train, "general", 1) is listed
+    assert service._modern_client.search_trains.call_count == 2
+
+
+def test_a_date_korail_refuses_does_not_stop_the_next_date_from_being_read():
+    # 예약 가능 기간(약 한 달)을 넘는 날은 검색이 "결과 없음"으로 실패해요. 앞 날짜가 그래도 다음 날짜를 봐요.
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    wire_partial_train(service, train, real=[5], nearby={7: [3, 5], 14: [5, 7]})
+    search = service._modern_client.search_trains.side_effect
+
+    def refuse_the_first_week(query):
+        if query.departure_date == "20260921":
+            raise KorailNoResultsError("ERI000", "결과가 없습니다.")
+        return search(query)
+
+    service._modern_client.search_trains.side_effect = refuse_the_first_week
+
+    assert [car.car_no for car in service.seat_cars(train, "general", 1).cars] == [5, 7]
+
+
+def test_a_failing_formation_lookup_does_not_fail_the_car_list_and_is_tried_again():
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    listed = formation(5, remaining=2)
+    service._modern_client.get_seat_cars.return_value = listed
+    service._modern_client.search_trains.side_effect = ConnectionError("timeout")
+
+    assert service.seat_cars(train, "general", 1) is listed
+    assert service.seat_cars(train, "general", 1) is listed
+    assert service._modern_client.search_trains.call_count == 2
+
+
+def test_a_reference_that_stops_answering_is_searched_again_by_the_next_car_list_not_by_each_car():
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    wire_partial_train(service, train, real=[5], nearby={7: [3, 5], 14: [5, 7]})
+    service.seat_cars(train, "general", 1)
+    searches = service._modern_client.search_trains.call_count
+    service._modern_client.get_seat_inventory.side_effect = KorailAppError(
+        "ERI411321", "잔여석이 없습니다."
+    )
+
+    for car_no in (3, 7):
+        with pytest.raises(KorailAppError):
+            service.seat_inventory(train, car_no, "general", 1, allow_layout_reference=True)
+    # 실패한 호차마다 날짜를 다시 뒤지지 않아요(한 번에 읽는 도중 요청이 늘어나 실제 호차까지 밀려요).
+    assert service._modern_client.search_trains.call_count == searches
+
+    service._modern_client.get_seat_inventory.side_effect = None
+    service.seat_cars(train, "general", 1)
+    assert service._modern_client.search_trains.call_count == searches + 2
+
+
+def test_a_transient_korail_error_is_not_remembered_as_no_formation():
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    listed = formation(5, remaining=2)
+    service._modern_client.get_seat_cars.return_value = listed
+    service._modern_client.search_trains.side_effect = KorailAppError("ERI999", "점검 중입니다.")
+
+    assert service.seat_cars(train, "general", 1) is listed
+    assert service.seat_cars(train, "general", 1) is listed
+    assert service._modern_client.search_trains.call_count == 2
+
+
+def test_a_new_session_works_out_the_missing_cars_before_reading_a_car_the_app_already_lists():
+    # 502 뒤에 세션이 새로 만들어지면 인스턴스는 호차 목록을 읽은 적이 없지만, 앱은 채운 호차를 탭으로 가지고 있어요.
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    references = wire_partial_train(service, train, real=[5], nearby={7: [3, 5], 14: [5, 7]})
+    service._modern_client.get_seat_inventory.return_value = inventory(physical_seat())
+
+    response = service.seat_inventory(train, 3, "general", 1, allow_layout_reference=True)
+
+    assert all(seat.sale_possible == "N" for seat in response.seats)
+    assert service._modern_client.get_seat_inventory.call_args.args[0] is references["20260921"]
+
+
+def test_a_partial_list_that_later_sells_out_draws_the_whole_train_from_one_reference():
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    wire_partial_train(service, train, real=[5], nearby={7: [3, 5], 14: [5, 7]})
+    service.seat_cars(train, "general", 1)
+    cars = service._modern_client.get_seat_cars.side_effect
+
+    def sold_out_now(item, **kwargs):
+        if item is train:
+            raise KorailAppError("ERI411321", "잔여석이 없습니다.")
+        return cars(item, **kwargs)
+
+    service._modern_client.get_seat_cars.side_effect = sold_out_now
+    service.seat_cars(train, "general", 1)
+
+    assert service.seat_layout_is_reference(train, "general", 1)
+    assert not service._formation_gaps.get((service._seat_key(train), "1", 1))
+
+
+def test_booking_reads_no_nearby_formation_for_a_partial_car_list():
+    # 대기 워커는 좌석표를 그리지 않고 예약해요. 다른 날짜 편성을 찾는 검색은 한 바퀴마다 늘어나는 비용이에요.
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    listed = formation(5, remaining=2)
+    service._modern_client.get_seat_cars.return_value = listed
+
+    assert service.seat_cars(train, "general", 1, allow_layout_reference=False) is listed
+    service._modern_client.search_trains.assert_not_called()
 
 
 def test_a_departed_train_says_so_without_asking_korail():
