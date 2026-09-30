@@ -16,10 +16,13 @@ DRY_RUN=0
 FORCE=0
 ALLOW_UNRESUMABLE=0
 # How long to wait, after the restart, for every search that was running to
-# be running again in the new container, and how often to look. The default
-# covers the old container's 60 s stop grace, a lease it failed to release
-# (LEASE_WAIT, 135 s) and the restarts themselves.
-RESUME_TIMEOUT="${DEPLOY_RESUME_TIMEOUT:-240}"
+# be running again in the new container, and how often to look. `up -d` only
+# returns once the old container has stopped, so its 60 s stop grace is already
+# spent. The default covers a lease it failed to release (LEASE_WAIT, 135 s),
+# then every resume retry the runtime makes before it gives up (10+20+40+80+160
+# = 310 s, reservation_service._RESUME_RETRY_SECONDS), then the start itself:
+# waiting less would fail a deploy whose searches were still coming back.
+RESUME_TIMEOUT="${DEPLOY_RESUME_TIMEOUT:-480}"
 RESUME_POLL="${DEPLOY_RESUME_POLL:-5}"
 # "<id> <runId>" per search the new container must bring back, one per line.
 EXPECTED_RESUMES=""

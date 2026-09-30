@@ -32,7 +32,7 @@
 
 **보장 밖**: 코레일이 좌석을 잡은 뒤 워커가 그것을 적기 전(수 ms)에 멈추면 알 길이 없어 재개하고, 좌석을 두 번 잡을 수 있다(코레일 예약 목록은 보지 않는다). 풀리지 않은 예전 결제 기록 위에 새 좌석을 적으면 `created_at`이 예전 것이라 `seat_held`로 보이지 않는다. SIGKILL·OOM·전원 차단처럼 정상 종료가 없어도 기록은 남아 다음 시작이 재개한다. 다만 놓아주지 못한 리스가 풀릴 때까지(최대 `LEASE_WAIT` 135초) 기다린다.
 
-**배포 확인**: `deploy-backend.sh`는 교체 전에 `docker compose exec -T api python -m korail_bot.mobile running --json`(읽기 전용, 비밀 없음: `id, runId, pid, workerAlive, resumable, reason, credentialTtlSeconds, startedAt`)으로 실행 목록을 적는다. 재개하지 못할 검색이 있거나 목록을 읽지 못하면 거부한다(`--allow-unresumable`로 감수). 재시작 뒤에는 5초마다 최대 240초(`DEPLOY_RESUME_POLL`·`DEPLOY_RESUME_TIMEOUT`; 옛 컨테이너 정리 60초 + 풀리지 않은 리스 대기 135초 + 시작) 동안 재개 가능했던 검색마다 새 `runId`와 살아 있는 워커를 기다리고, 못 채우면 id와 상태(기록 없음·아직 옛 run·워커 없음)를 적고 실패한다. 롤백 안내는 내지 않는다(옛 워커는 이미 없다).
+**배포 확인**: `deploy-backend.sh`는 교체 전에 `docker compose exec -T api python -m korail_bot.mobile running --json`(읽기 전용, 비밀 없음: `id, runId, pid, workerAlive, resumable, reason, credentialTtlSeconds, startedAt`)으로 실행 목록을 적는다. 재개하지 못할 검색이 있거나 목록을 읽지 못하면 거부한다(`--allow-unresumable`로 감수). 재시작 뒤에는 5초마다 최대 480초(`DEPLOY_RESUME_POLL`·`DEPLOY_RESUME_TIMEOUT`; `up -d`는 옛 컨테이너가 멈춘 뒤 돌아오므로 그 뒤의 풀리지 않은 리스 대기 135초 + 재개 재시도 합계 310초 + 시작) 동안 재개 가능했던 검색마다 새 `runId`와 살아 있는 워커를 기다리고, 못 채우면 id와 상태(기록 없음·아직 옛 run·워커 없음)를 적고 실패한다. 롤백 안내는 내지 않는다(옛 워커는 이미 없다).
 
 ## 2. 앱 구조
 
