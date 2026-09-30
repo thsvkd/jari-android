@@ -297,7 +297,11 @@ def test_public_pages_are_cacheable_html_for_any_browser(pages, path):
         body = response.get_data(as_text=True)
         assert 'href="mailto:privacy@example.com"' in body
         assert "설정</b>을 누릅니다" in body
-        assert "웹으로 탈퇴 요청" in body
+        assert "앱 없이" in body
+        assert '<span class="app">자리났다</span>' in body
+        assert "개발자 SonPang" in body
+        assert "본인 확인" in body
+        assert "일부만 지우기" in body
     assert client.head(path).status_code == 200
     # The API keeps its own rules.
     api = client.get("/api/mobile/health", headers={"Origin": "https://play.google.com"})
@@ -308,11 +312,21 @@ def test_public_pages_are_cacheable_html_for_any_browser(pages, path):
 def test_privacy_page_names_what_is_kept_and_who_receives_it(pages):
     body = pages("privacy@example.com").get("/privacy").get_data(as_text=True)
     for fact in (
+        # The data types declared on Play's data safety form.
+        "사용자 ID",
+        "전화번호",
+        "기타 개인정보",
+        "구매 내역",
+        "앱 내 검색 기록",
+        "진단",
+        "기기 ID",
+        "공유하지 않습니다",
+        "체험하기",
         "scrypt",
         "코레일 아이디",
         "Firebase Cloud Messaging",
         "Cloudflare",
-        "10MB씩 3개",
+        "10MB 파일 3개",
         "최근 50건",
         "광고",
     ):

@@ -2052,6 +2052,56 @@ it("opens the tabs without a back button and keeps logout last in settings", asy
   expect(buttons[buttons.length - 1]?.getAttribute("data-action")).toBe("app-logout");
 });
 
+describe("체험하기", () => {
+  it("runs on sample data from the gate without the live API, the token or this phone's routes, and exits back to login", async () => {
+    const draft = (await createDemoApi().bootstrap()).draft!;
+    const phoneRoutes = JSON.stringify([{ ...draft, src_station: "부산", dst_station: "서울" }]);
+    window.localStorage.setItem("jari.recentRoutes", phoneRoutes);
+    const liveCalls: string[] = [];
+    const liveApi = new Proxy({} as ReturnType<typeof createDemoApi>, {
+      get: (_target, name) => () => {
+        liveCalls.push(String(name));
+        return Promise.reject(new Error("live API"));
+      },
+    });
+    const onToken = vi.fn(async () => undefined);
+    const root = document.createElement("div");
+    document.body.append(root);
+    const app = new JariApp(root, liveApi, { demoMode: false, onToken });
+    mounted.push(app);
+    await app.start(false);
+
+    const gates = [...root.querySelectorAll<HTMLButtonElement>(".gate-card")];
+    expect(gates.map((gate) => gate.querySelector("b")?.textContent)).toEqual(["관리자", "초대 회원", "체험하기"]);
+    gates[2]!.click();
+    await vi.waitFor(() => expect(root.querySelector(".screen-home")).not.toBeNull());
+    expect(root.querySelector("[data-trial-banner]")?.textContent).toContain("실제 예약되지 않아요");
+    // This phone's own recent route belongs to whoever uses the app for real.
+    expect(root.textContent).not.toContain("부산→서울");
+
+    app.navigate("favourites");
+    root.querySelector<HTMLButtonElement>("[data-use-favourite]")!.click();
+    root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".train-list")).not.toBeNull());
+    expect(root.querySelector("[data-trial-banner]")).not.toBeNull();
+    expect(window.localStorage.getItem("jari.recentRoutes")).toBe(phoneRoutes);
+    // The trial remembers the route for its own shortcuts, in memory only.
+    expect(app).toMatchObject({ trialRoutes: [expect.objectContaining({ src_station: expect.any(String) })] });
+
+    app.navigate("settings");
+    expect(root.querySelector("[data-action='delete-account']")).toBeNull();
+    const buttons = root.querySelectorAll(".screen-settings button");
+    const exit = buttons[buttons.length - 1] as HTMLButtonElement;
+    expect(exit.textContent).toContain("체험 끝내기");
+    exit.click();
+    await vi.waitFor(() => expect(root.querySelector(".auth-shell")).not.toBeNull());
+    expect(root.querySelector("[data-demo-banner]")).toBeNull();
+    expect(app).toMatchObject({ trial: null, state: null });
+    expect(liveCalls).toEqual([]);
+    expect(onToken).not.toHaveBeenCalled();
+  });
+});
+
 describe("회원 탈퇴", () => {
   it("asks for the app password in a danger sheet and returns to login with a notice once the server erased the account", async () => {
     const deleteAccount = vi.fn(async (_password: string) => ({ deleted: true }));

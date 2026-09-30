@@ -1,4 +1,5 @@
 import { ApiError } from "./api";
+import { createDemoApi } from "./demo";
 import { badge, button, chip as chipButton, choice, dialog as overlay, emptyMark, emptyState, linkButton, listRow, notice, stepper, type Tone } from "./ui/components";
 import { esc as escapeHtml } from "./ui/html";
 import { DatePicker, departureRange, localIso } from "./date-picker";
@@ -138,10 +139,13 @@ function recentRoutes(): Conditions[] {
     return [];
   }
 }
-function rememberRoute(conditions: Conditions): void {
+function withRoute(list: Conditions[], conditions: Conditions): Conditions[] {
   const same = (item: Conditions) => item.src_station === conditions.src_station && item.dst_station === conditions.dst_station;
+  return [conditions, ...list.filter((item) => !same(item))].slice(0, RECENT_LIMIT);
+}
+function rememberRoute(conditions: Conditions): void {
   try {
-    window.localStorage.setItem(RECENT_KEY, JSON.stringify([conditions, ...recentRoutes().filter((item) => !same(item))].slice(0, RECENT_LIMIT)));
+    window.localStorage.setItem(RECENT_KEY, JSON.stringify(withRoute(recentRoutes(), conditions)));
   } catch {
     // 저장하지 못해도 바로가기에서만 빠져요.
   }
@@ -211,7 +215,13 @@ function isoDate(date: Date): string {
 export class JariApp {
   private generation = 0;
   private readonly root: HTMLElement;
-  private readonly api: MobileApi;
+  private readonly liveApi: MobileApi;
+  /**
+   * 체험하기(로그인 화면의 세 번째 선택): 이 폰 안에서만 도는 샘플 API. 켜져 있는 동안 모든 요청이 여기로 가고
+   * 서버·Keystore 토큰·기기에 남는 최근 구간은 건드리지 않아요. 세션을 정리하면(로그인 화면으로 돌아가면) 함께 사라져요.
+   */
+  private trial: MobileApi | null = null;
+  private trialRoutes: Conditions[] = [];
   private readonly options: AppOptions;
   private state: BootstrapState | null = null;
   private view: AppView = "auth";
@@ -265,7 +275,7 @@ export class JariApp {
 
   constructor(root: HTMLElement, api: MobileApi, options: AppOptions) {
     this.root = root;
-    this.api = api;
+    this.liveApi = api;
     this.options = options;
     const savedTheme = window.localStorage.getItem("jari.theme");
     this.themeQuery = window.matchMedia?.("(prefers-color-scheme: dark)") ?? null;
@@ -297,8 +307,31 @@ export class JariApp {
     window.addEventListener("online", this.resumeConnection);
   }
 
+  private get api(): MobileApi {
+    return this.trial ?? this.liveApi;
+  }
+
+  /** 샘플 데이터로 보여 주는 중인지(주소의 ?demo=1 데모 빌드이거나 로그인 화면에서 체험하기를 골랐을 때). */
+  private get demo(): boolean {
+    return this.options.demoMode || this.trial !== null;
+  }
+
+  private enterTrial(): void {
+    this.resetSession();
+    this.trial = createDemoApi();
+    this.view = "home";
+    void this.reload();
+  }
+
+  private exitTrial(): void {
+    this.resetSession();
+    this.render();
+  }
+
   private resetSession(): void {
     this.generation += 1;
+    this.trial = null;
+    this.trialRoutes = [];
     if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
     if (this.deadlineTimer !== null) window.clearInterval(this.deadlineTimer);
     if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
@@ -541,7 +574,7 @@ export class JariApp {
     const content = this.state ? this.renderView() : this.renderUnavailable();
     this.root.innerHTML = `
       <div class="app-shell">
-        ${this.options.demoMode ? '<aside class="demo-banner" data-demo-banner aria-label="데모 상태"><b>데모 모드</b><span>샘플 데이터 · 실제 조회·예약 없음</span></aside>' : ""}
+        ${this.trial ? '<aside class="demo-banner" data-demo-banner data-trial-banner aria-label="체험 상태"><b>체험 중</b><span>샘플 데이터 · 실제 예약되지 않아요</span></aside>' : this.options.demoMode ? '<aside class="demo-banner" data-demo-banner aria-label="데모 상태"><b>데모 모드</b><span>샘플 데이터 · 실제 조회·예약 없음</span></aside>' : ""}
         ${this.connection === "offline" ? '<aside class="offline-banner" aria-label="연결 상태">오프라인 · 마지막으로 받은 상태를 보여드려요</aside>' : ""}
         <header class="topbar">
           <button class="brand" data-view="home" aria-label="자리났다 홈"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><rect x="5" y="7" width="9" height="14" rx="3"></rect><rect x="18" y="7" width="9" height="14" rx="3"></rect><path d="M7 25h18"></path></svg></span><span><b>자리났다</b><small>내 여행의 빈자리</small></span></button>
@@ -639,7 +672,7 @@ export class JariApp {
   private homeChips(): RouteChip[] {
     const state = this.state!;
     const sources: Array<[string, Conditions]> = state.draft ? [["recent", state.draft]] : [];
-    recentRoutes().forEach((conditions, index) => sources.push([`recent:${index}`, conditions]));
+    (this.trial ? this.trialRoutes : recentRoutes()).forEach((conditions, index) => sources.push([`recent:${index}`, conditions]));
     const seen = new Set<string>();
     const chips: RouteChip[] = [];
     for (const [key, conditions] of sources) {
@@ -1512,11 +1545,11 @@ export class JariApp {
       <section class="settings-section"><p class="eyebrow">알림</p>${listRow({ title: "찾기 상황 알림", hint: notifyAvailable ? "찾는 중 진행 상황을 알려드리는 간격" : "현재 서버에서는 알림 간격을 바꿀 수 없어요", trailing: stepper({ small: true, label: "찾기 상황 알림 간격", value: notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가", decrease: "notify-minus", increase: "notify-plus", disabled: !notifyAvailable, atMin: state.notifyMinutes <= NOTIFY_STEPS[0]!, atMax: state.notifyMinutes >= NOTIFY_STEPS[NOTIFY_STEPS.length - 1]! }) })}${listRow({ action: "request-push", disabled: !pushAvailable, title: "휴대폰 알림", hint: pushAvailable ? "Android 알림 권한 열기" : "휴대폰 알림 서비스가 아직 준비되지 않았어요", value: pushAvailable ? "설정" : "이용 불가" })}</section>
       ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p>${badge({ className: "admin-only-badge", label: "관리자 전용" })}</div><p class="settings-section-copy">회원 가입 권한은 관리자만 발급할 수 있어요.</p>${listRow({ action: "create-invite", disabled: this.inviteLoading, title: "회원 초대 코드", hint: "관리자만 만들 수 있는 일회용 가입 코드예요", trailing: this.inviteLoading ? '<em><span class="inline-spinner" aria-hidden="true"></span><span class="sr-only">만드는 중</span></em>' : undefined, value: "만들기 →" })}${this.invitePreview ? `<div class="invite-card"><p>코드는 이 화면을 닫으면 다시 볼 수 없어요. 가입할 분에게 바로 전달해 주세요. 띄어쓰기나 대소문자는 상관없어요.</p><code>${escapeHtml(this.invitePreview)}</code><div class="invite-actions">${button({ action: "copy-invite", label: "복사" })}${button({ variant: "ghost", action: "dismiss-invite", label: "닫기" })}</div></div>` : ""}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">앱</p>${listRow({ action: "theme", title: "화면 테마", hint: "시스템과 별도로 바꿀 수 있어요", value: this.theme === "dark" ? "다크" : "라이트" })}${listRow({ title: "앱 버전", hint: `서버 ${state.version}`, value: `v${appPackage.version}` })}</section>
-      <section class="settings-section"><p class="eyebrow">계정</p>${listRow({ action: "delete-account", title: "회원 탈퇴", hint: "앱 계정과 저장된 정보를 모두 지워요", value: "탈퇴 →" })}</section>${button({ variant: "ghost-danger", action: "app-logout", label: "앱에서 로그아웃" })}</div></div>`;
+      ${this.demo ? "" : `<section class="settings-section"><p class="eyebrow">계정</p>${listRow({ action: "delete-account", title: "회원 탈퇴", hint: "앱 계정과 저장된 정보를 모두 지워요", value: "탈퇴 →" })}</section>`}${this.trial ? button({ variant: "ghost-danger", action: "trial-exit", label: "체험 끝내기" }) : button({ variant: "ghost-danger", action: "app-logout", label: "앱에서 로그아웃" })}</div></div>`;
   }
 
   private renderRailAccount(): string {
-    if (this.options.demoMode) {
+    if (this.demo) {
       return `${this.renderSubhead("코레일 계정", "데모용 연결 상태")}${notice({ tone: "calm", title: "샘플 계정으로 화면을 보여드려요.", text: "데모에서는 코레일 아이디와 비밀번호를 받지 않고, 코레일 서버에도 연결하지 않아요." })}${button({ variant: "ghost", action: "back", label: "설정으로 돌아가기" })}`;
     }
     const registered = this.state!.rail.registered;
@@ -1551,7 +1584,7 @@ export class JariApp {
       <div class="auth-art"><span class="orbit one"></span><span class="orbit two"></span><i>자</i></div>
       <section class="auth-card"><p class="eyebrow">내 여행의 빈자리</p><h1>${title}</h1><p>${copy}</p>
         ${this.authNotice ? notice({ tone: "calm", className: "auth-notice", text: this.authNotice }) : ""}
-        ${choosing ? `<div class="gate-list"><button class="gate-card" data-auth-gate="admin" type="button"><b>관리자</b><small>관리자 계정으로 로그인해요</small></button><button class="gate-card" data-auth-gate="guest" type="button"><b>초대 회원</b><small>로그인하거나 초대 코드로 가입해요</small></button></div>` : ""}
+        ${choosing ? `<div class="gate-list"><button class="gate-card" data-auth-gate="admin" type="button"><b>관리자</b><small>관리자 계정으로 로그인해요</small></button><button class="gate-card" data-auth-gate="guest" type="button"><b>초대 회원</b><small>로그인하거나 초대 코드로 가입해요</small></button><button class="gate-card trial" data-action="trial-enter" type="button"><b>체험하기</b><small>샘플 데이터로 모든 화면을 둘러봐요. 실제 예약되지 않아요</small></button></div>` : ""}
         ${admin ? `<form id="auth-form" class="form-stack"><label class="field"><span>관리자 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label><label class="field"><span>관리자 비밀번호</span><input name="password" type="password" minlength="12" maxlength="128" autocomplete="current-password" required></label>${this.renderError()}${button({ type: "submit", label: "관리자 로그인", trailing: "→" })}</form>${button({ variant: "text", label: "로그인 방법 바꾸기", attrs: { "data-auth-gate": "choose" } })}` : ""}
         ${this.authGate === "guest" ? `<div class="segmented"><button data-auth-mode="login" class="${register ? "" : "active"}" type="button">로그인</button><button data-auth-mode="register" class="${register ? "active" : ""}" type="button">처음 가입</button></div>
         <form id="auth-form" class="form-stack">
@@ -1731,7 +1764,7 @@ export class JariApp {
     await this.run(async (isCurrent) => {
       const result = await this.api.trains({ conditions: this.conditions! });
       if (!isCurrent()) return;
-      rememberRoute(this.conditions!);
+      this.rememberRoute(this.conditions!);
       this.trainOptions = result.trains;
       this.trainListTruncated = result.truncated;
       this.selectedTrains = this.selectedTrains.filter((number) =>
@@ -1872,7 +1905,7 @@ export class JariApp {
     await this.run(async (isCurrent) => {
       const result = await this.api.trains({ conditions });
       if (!isCurrent()) return;
-      rememberRoute(conditions);
+      this.rememberRoute(conditions);
       this.trainOptions = result.trains;
       this.trainListTruncated = result.truncated;
       const kept = wanted.filter((number) => result.trains.some((train) => train.no === number));
@@ -1969,6 +2002,11 @@ export class JariApp {
    * 회원 탈퇴. 되돌릴 수 없으니 위험 확인 시트에서 앱 비밀번호를 한 번 더 받아요. 서버가 찾기를 멈추고 이 계정의 기록을
    * 모두 지운 뒤에야 이 폰의 로그인도 지워요. 비밀번호가 틀리거나 결제를 기다리는 예약이 있으면 그 까닭을 알리고 그대로 둬요.
    */
+  private rememberRoute(conditions: Conditions): void {
+    if (this.trial) this.trialRoutes = withRoute(this.trialRoutes, conditions);
+    else rememberRoute(conditions);
+  }
+
   private async deleteAccount(): Promise<void> {
     const password = await this.openSheet({
       title: "회원 탈퇴할까요?",
@@ -2246,6 +2284,12 @@ export class JariApp {
       case "demo-enter":
         this.view = "home";
         void this.reload();
+        break;
+      case "trial-enter":
+        this.enterTrial();
+        break;
+      case "trial-exit":
+        this.exitTrial();
         break;
       case "new-journey":
         this.draft = conditionsToDraft(null);

@@ -45,6 +45,7 @@
 - `src/app.ts` `JariApp`: 뷰 상태기(home/journey/trains/confirm/activity/favourites/notifications/settings/rail-account/auth), 문자열 템플릿 `render()`, 30초 상태 폴링(`pollStatus`), 시트(`openSheet`/`confirmSheet`), 좌석 시트(`seatDialog`).
 - `src/model.ts`: `deriveRadarView`(상태 판정), 조건↔초안 변환, 좌석 필터.
 - `src/demo.ts`: 전 기능 목업 API(열차 3편, 좌석표, 즐겨찾기, 진행 중 검색에 seatPlan 포함).
+- **체험하기**(Play 심사처럼 코레일 계정 없이 모든 화면을 봐야 할 때): 실서버 앱의 로그인 선택 화면에 세 번째 카드. 누르면 `JariApp`이 같은 프로세스 안에서 `createDemoApi()`로 바꿔 쓴다(`this.trial`, `api` 게터가 `trial ?? liveApi`). 주소 쿼리나 재시작이 필요 없고 서버·Keystore 토큰·`onToken`을 건드리지 않는다. 최근 구간은 기기 저장소 대신 메모리(`trialRoutes`)에만 쌓는다. 화면 위에 "체험 중 · 샘플 데이터 · 실제 예약되지 않아요" 띠(`[data-trial-banner]`)가 계속 보이고, 설정의 맨 아래 버튼이 "체험 끝내기"(로그아웃 대신)이며 회원 탈퇴 줄은 숨긴다. 세션 정리(`resetSession`)가 체험을 함께 끝내므로 로그인 화면으로 돌아가는 모든 길에서 샘플 상태가 실사용과 섞이지 않는다. 주소의 `?demo=1` 데모 빌드는 그대로다.
 - 테마: `data-theme` + `jari.theme` localStorage, 토큰은 `:root`/`:root[data-theme="dark"]`. 저장된 테마가 없으면 `matchMedia` change 를 따라간다. 상태바 아이콘은 `@capacitor/status-bar`로 테마 추종. 토스트는 상단 고정.
 
 ## 3. API 계약 (`/api/mobile`)
@@ -150,7 +151,7 @@ seatPlanSummary: "015 일반실 3호차 5A·5B · 019 좌석 무관" | ""
 - 앱은 탈퇴에 성공하면 이 폰의 연결 실패 기록(`jari.connectionMisses`)도 지운다(다음 사람의 이름으로 올라가지 않게).
 - 메일로 온 탈퇴 요청: API 옆에서 `docker compose exec -T api python -m korail_bot.mobile delete-account --username <앱 아이디>`. 같은 `erase_account`를 쓰고, 워커는 배포 확인처럼 프로세스 표로 찾아 멈춘다(워커가 API의 자식이라 멈춘 워커 하나당 약 6초 기다린다). 돌고 있는 API의 메모리에 남은 코레일 세션(최대 30분)과 좌석표 열차 키(30분)는 저절로 사라진다.
 
-**공개 페이지**: `GET /privacy`(개인정보처리방침), `GET /delete-account`(Play의 "계정 삭제 URL"). `/api/mobile` 밖이라 Caddy가 같은 호스트 전체를 넘기는 운영에서 `https://jari.thsvkd.dev/privacy`로 열린다. 세션이 필요 없고, Origin 검사를 건너뛰어 다른 사이트에서 연 링크도 열리며(CORS 헤더는 주지 않는다), `text/html; charset=utf-8`·`Cache-Control: public, max-age=3600`·`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`. 내용은 `mobile/pages.py`에 있고 저장·전송하는 것이 바뀌면 함께 고친다. 연락처는 `MOBILE_PRIVACY_CONTACT`(compose.yaml에 운영 주소), 없으면 앱의 설정 → 회원 탈퇴와 초대한 운영자를 안내한다.
+**공개 페이지**: `GET /privacy`(개인정보처리방침), `GET /delete-account`(Play 데이터 보안 양식의 계정 삭제 URL이자 데이터 삭제 URL). 두 페이지 모두 앱 이름 "자리났다"와 개발자 "SonPang"을 머리에 보이고, 앱 안 탈퇴(비밀번호 재입력)·앱 없이 메일로 요청(앱 아이디, 초대할 때의 연락처로 본인 확인, 30일 안에 처리)·지우는 정보·남는 정보와 기간(끝난 검색 표시 7일, 서버 로그 10MB×3 돌려 쓰기와 업데이트 때 삭제, 프록시·Cloudflare 접속 기록, DB 파일에서 덮어써지기까지의 지연, 사용자 데이터 별도 백업 없음, 코레일의 기록)·일부만 지우기(코레일 연결 해제, 즐겨찾기 삭제, 그만 찾기, 알림 끄기, 로그아웃)를 적는다. 개인정보처리방침의 표는 Play에 신고한 데이터 유형(사용자 ID·전화번호·기타 개인정보·구매 내역·앱 내 검색 기록·진단·기기 ID) 순서를 따른다. `/api/mobile` 밖이라 Caddy가 같은 호스트 전체를 넘기는 운영에서 `https://jari.thsvkd.dev/privacy`로 열린다. 세션이 필요 없고, Origin 검사를 건너뛰어 다른 사이트에서 연 링크도 열리며(CORS 헤더는 주지 않는다), `text/html; charset=utf-8`·`Cache-Control: public, max-age=3600`·`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`. 내용은 `mobile/pages.py`에 있고 저장·전송하는 것이 바뀌면 함께 고친다. 연락처는 `MOBILE_PRIVACY_CONTACT`(compose.yaml에 운영 주소), 없으면 앱의 설정 → 회원 탈퇴와 초대한 운영자를 안내한다.
 
 ## 11. Android 빌드·배포와 휴대폰 알림
 
