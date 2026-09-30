@@ -40,8 +40,19 @@ test.describe("Android 기기", () => {
     expect(foregroundActivity()).not.toBe("");
     expect(new URL(page.url()).host).toBe("localhost");
 
-    execFileSync("adb", ["shell", "am", "start", "-n", "dev.thsvkd.jari/com.jari.app.MainActivity"]);
-    await expect.poll(foregroundActivity, { timeout: 15_000 }).toContain("dev.thsvkd.jari/");
-    await expect(page.locator(".screen-settings")).toBeVisible();
+    // 사용자처럼 뒤로가기로 앱에 돌아와요. 브라우저가 첫 실행 화면 등으로 뒤로가기를 먹으면 앱을 앞으로 불러와요.
+    pressAndroidBack();
+    const back = await expect
+      .poll(foregroundActivity, { timeout: 10_000 })
+      .toContain("dev.thsvkd.jari/")
+      .then(() => true, () => false);
+    if (!back) {
+      execFileSync("adb", ["shell", "am", "start", "-n", "dev.thsvkd.jari/com.jari.app.MainActivity"]);
+      await expect.poll(foregroundActivity, { timeout: 15_000 }).toContain("dev.thsvkd.jari/");
+    }
+    // WebView 가 시작만 하고 넘겨준 이동을 Playwright 는 끝나지 않은 이동으로 봐서 locator 가 기다려요. 문서를 직접 읽어요.
+    await expect
+      .poll(() => page.evaluate(() => Boolean(document.querySelector(".screen-settings .policy-links")) && location.host), { timeout: 10_000 })
+      .toBe("localhost");
   });
 });
