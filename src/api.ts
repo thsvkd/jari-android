@@ -167,10 +167,12 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
   const timeZone = options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
   const misses = options.connectionMisses ?? createConnectionMissLog();
   let uploading = false;
+  // After a 429 the upload waits a minute: every retry would count against the same per-user API limit as real requests.
+  let uploadAfter = 0;
 
   async function uploadMisses(): Promise<void> {
     const pending = misses.read();
-    if (uploading || !pending.length) return;
+    if (uploading || !pending.length || Date.now() < uploadAfter) return;
     uploading = true;
     try {
       await request<{ ok: boolean }>("/diagnostics", { body: { misses: pending } });
@@ -178,6 +180,7 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
     } catch (error) {
       // A 400 will never be accepted; anything else is tried again after the next success.
       if (error instanceof ApiError && error.status === 400) misses.drop(pending);
+      if (error instanceof ApiError && error.status === 429) uploadAfter = Date.now() + 60_000;
     } finally {
       uploading = false;
     }

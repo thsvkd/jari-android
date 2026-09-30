@@ -317,6 +317,30 @@ describe("connection misses", () => {
     await vi.waitFor(() => expect(connectionMisses.read()).toEqual([]));
   });
 
+  it("waits a minute before uploading again after the server says too many requests", async () => {
+    vi.useFakeTimers();
+    try {
+      const connectionMisses = createConnectionMissLog();
+      connectionMisses.add({ at: "x", method: "GET", path: "/status", reason: "network", online: true, visible: true, elapsedMs: 1 });
+      const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url) =>
+        String(url).endsWith("/diagnostics") ? response({}, 429) : response({ ok: true }));
+      const api = createHttpApi({ baseUrl: "https://jari.example", tokenStorage: signedIn(), fetcher, connectionMisses });
+      const uploads = () => fetcher.mock.calls.filter(([url]) => String(url).endsWith("/diagnostics")).length;
+      await api.status();
+      await vi.advanceTimersByTimeAsync(0);
+      await api.status();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(uploads()).toBe(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await api.status();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(uploads()).toBe(2);
+      expect(connectionMisses.read()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the latest 50 misses across restarts in the storage it is given", () => {
     const store = new Map<string, string>();
     const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) };

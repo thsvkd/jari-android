@@ -303,6 +303,8 @@ export class JariApp {
     this.pollTimer = null;
     this.deadlineTimer = null;
     this.toastTimer = null;
+    // A poll still out belongs to the old session; its answer is dropped by generation, and it must not hold back the new one.
+    this.pollOut = false;
     this.state = null;
     this.view = "auth";
     this.history = [];
