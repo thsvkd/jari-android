@@ -2102,6 +2102,33 @@ describe("체험하기", () => {
   });
 });
 
+describe("개인정보 링크", () => {
+  const policy = (root: HTMLElement, scope: string) =>
+    [...root.querySelectorAll<HTMLAnchorElement>(`${scope} a[href^="https://jari.thsvkd.dev/"]`)].map((link) => ({
+      text: link.textContent?.replace("↗", "").trim(),
+      href: link.getAttribute("href"),
+      target: link.getAttribute("target"),
+    }));
+  const expected = [
+    { text: expect.stringContaining("개인정보처리방침"), href: "https://jari.thsvkd.dev/privacy", target: "_blank" },
+    { text: expect.stringContaining("계정·데이터 삭제 안내"), href: "https://jari.thsvkd.dev/delete-account", target: "_blank" },
+  ];
+
+  it("links the privacy policy and the deletion page from settings and the login screen, also while trying the app", async () => {
+    const { app, root } = await mountLive();
+    app.navigate("settings");
+    expect(policy(root, ".screen-settings")).toEqual(expected);
+
+    await app.start(false);
+    expect(policy(root, ".auth-shell")).toEqual(expected);
+
+    root.querySelector<HTMLButtonElement>("[data-action='trial-enter']")!.click();
+    await vi.waitFor(() => expect(root.querySelector("[data-trial-banner]")).not.toBeNull());
+    app.navigate("settings");
+    expect(policy(root, ".screen-settings")).toEqual(expected);
+  });
+});
+
 describe("회원 탈퇴", () => {
   it("asks for the app password in a danger sheet and returns to login with a notice once the server erased the account", async () => {
     const deleteAccount = vi.fn(async (_password: string) => ({ deleted: true }));

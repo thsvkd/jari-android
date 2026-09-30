@@ -66,6 +66,10 @@ test.describe("설정", () => {
     const before = await page.locator("html").getAttribute("data-theme");
     await page.locator("[data-action='theme']").click();
     await expect(page.locator("html")).not.toHaveAttribute("data-theme", before!);
+    const policy = page.locator(".screen-settings .policy-links a");
+    await expect(policy).toHaveCount(2);
+    await expect(policy.first()).toHaveAttribute("href", "https://jari.thsvkd.dev/privacy");
+    await expect(policy.last()).toHaveAttribute("href", "https://jari.thsvkd.dev/delete-account");
     await expectCleanLayout(page, "설정(테마 바꾼 뒤)");
 
     const buttons = page.locator(".screen-settings button");

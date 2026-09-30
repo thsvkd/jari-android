@@ -8,6 +8,11 @@ function pressAndroidBack(): void {
   execFileSync("adb", ["shell", "input", "keyevent", "KEYCODE_BACK"]);
 }
 
+function foregroundActivity(): string {
+  const activities = execFileSync("adb", ["shell", "dumpsys activity activities"], { encoding: "utf8" });
+  return activities.split("\n").find((line) => line.includes("topResumedActivity")) ?? "";
+}
+
 test.describe("Android 기기", () => {
   // targetSdk 36(Android 16)에서는 예측 뒤로가기가 켜져 Activity.onBackPressed 가 불리지 않아요.
   // 앱의 뒤로가기(@capacitor/app 의 backButton)는 OnBackPressedDispatcher 로 받으니 그대로 와야 해요.
@@ -23,6 +28,20 @@ test.describe("Android 기기", () => {
     await expect(page.locator(".screen-rail-account")).toBeVisible();
 
     pressAndroidBack();
+    await expect(page.locator(".screen-settings")).toBeVisible();
+  });
+
+  // Play 는 앱 안에서 개인정보처리방침에 닿아야 해요. 링크는 앱 WebView 가 아니라 시스템 브라우저로 열려야 해요.
+  test("개인정보처리방침 링크는 앱을 떠나 브라우저로 열고, 앱은 설정 화면 그대로예요", async ({ signedIn: page }) => {
+    await page.locator(".bottom-nav [data-view='settings']").click();
+    // 이동은 Capacitor 가 가로채 브라우저로 넘기니 WebView 에는 끝나는 이동이 없어요. 기다리지 않아요.
+    await page.locator(".policy-links a[href='https://jari.thsvkd.dev/privacy']").click({ noWaitAfter: true });
+    await expect.poll(foregroundActivity, { timeout: 15_000 }).not.toContain("dev.thsvkd.jari/");
+    expect(foregroundActivity()).not.toBe("");
+    expect(new URL(page.url()).host).toBe("localhost");
+
+    execFileSync("adb", ["shell", "am", "start", "-n", "dev.thsvkd.jari/com.jari.app.MainActivity"]);
+    await expect.poll(foregroundActivity, { timeout: 15_000 }).toContain("dev.thsvkd.jari/");
     await expect(page.locator(".screen-settings")).toBeVisible();
   });
 });

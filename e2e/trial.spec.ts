@@ -8,7 +8,8 @@ test.describe("체험하기", () => {
     const gates = page.locator(".gate-card");
     await expect(gates).toHaveCount(3);
     await expect(gates.nth(2)).toContainText("체험하기");
-    await expectCleanLayout(page, "로그인 선택(세 가지)");
+    await expect(page.locator(".auth-links a")).toHaveText(["개인정보처리방침", "계정·데이터 삭제 안내"]);
+    await expectCleanLayout(page, "로그인 선택(세 가지, 개인정보 링크)");
     // 이 페이지가 체험 중에 낸 요청만 봐요. 앞 스펙이 남긴 서버 쪽 일(결제 감시 등)이 가짜 코레일을 부르는 것은 이 체험과 상관없어요.
     const appOrigin = new URL(page.url()).origin;
     const apiCalls: string[] = [];
@@ -38,6 +39,9 @@ test.describe("체험하기", () => {
 
     await page.locator(".bottom-nav [data-view='settings']").click();
     await expect(page.locator("[data-action='delete-account']")).toHaveCount(0);
+    // Play 는 앱 안 어디서나(체험 중에도) 개인정보처리방침에 닿을 수 있어야 해요.
+    await expect(page.locator(".policy-links a[href='https://jari.thsvkd.dev/privacy']")).toBeVisible();
+    await expectCleanLayout(page, "설정(체험 중, 개인정보 링크)");
     await page.locator("[data-action='trial-exit']").click();
     await expect(page.locator(".auth-shell .gate-card")).toHaveCount(3);
     await expect(page.locator("[data-demo-banner]")).toHaveCount(0);

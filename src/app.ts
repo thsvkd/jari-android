@@ -130,6 +130,15 @@ const NOTIFY_STEPS = [0, 1, 3, 5, 10, 15, 30, 60, 120, 180];
 
 // 이 폰에서 열차를 조회한 구간, 최근 것부터. 서버는 반쯤 쓴 여정 하나만 돌려줘서 목록은 기기에 둬요.
 const RECENT_KEY = "jari.recentRoutes";
+
+// Play 가 앱 안에 두라는 공개 페이지. 서버 주소와 상관없이 늘 운영 주소예요(e2e·데모 빌드에서도 같은 문서를 가리켜요).
+// Capacitor 는 앱 밖 주소로 가는 이동을 가로채 시스템 브라우저(ACTION_VIEW)로 열어요. 앱 WebView 안에서 열리지 않아요.
+const POLICY_LINKS = [
+  { title: "개인정보처리방침", hint: "무엇을 저장하고 누구에게 보내는지", href: "https://jari.thsvkd.dev/privacy" },
+  { title: "계정·데이터 삭제 안내", hint: "앱 밖에서 탈퇴를 요청하는 방법", href: "https://jari.thsvkd.dev/delete-account" },
+] as const;
+const policyRow = (link: (typeof POLICY_LINKS)[number]) =>
+  `<a class="settings-row" href="${link.href}" target="_blank" rel="noreferrer"><span><b>${link.title}</b><small>${link.hint}</small></span><em aria-hidden="true">↗</em></a>`;
 const RECENT_LIMIT = 5;
 function recentRoutes(): Conditions[] {
   try {
@@ -1545,6 +1554,7 @@ export class JariApp {
       <section class="settings-section"><p class="eyebrow">알림</p>${listRow({ title: "찾기 상황 알림", hint: notifyAvailable ? "찾는 중 진행 상황을 알려드리는 간격" : "현재 서버에서는 알림 간격을 바꿀 수 없어요", trailing: stepper({ small: true, label: "찾기 상황 알림 간격", value: notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가", decrease: "notify-minus", increase: "notify-plus", disabled: !notifyAvailable, atMin: state.notifyMinutes <= NOTIFY_STEPS[0]!, atMax: state.notifyMinutes >= NOTIFY_STEPS[NOTIFY_STEPS.length - 1]! }) })}${listRow({ action: "request-push", disabled: !pushAvailable, title: "휴대폰 알림", hint: pushAvailable ? "Android 알림 권한 열기" : "휴대폰 알림 서비스가 아직 준비되지 않았어요", value: pushAvailable ? "설정" : "이용 불가" })}</section>
       ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p>${badge({ className: "admin-only-badge", label: "관리자 전용" })}</div><p class="settings-section-copy">회원 가입 권한은 관리자만 발급할 수 있어요.</p>${listRow({ action: "create-invite", disabled: this.inviteLoading, title: "회원 초대 코드", hint: "관리자만 만들 수 있는 일회용 가입 코드예요", trailing: this.inviteLoading ? '<em><span class="inline-spinner" aria-hidden="true"></span><span class="sr-only">만드는 중</span></em>' : undefined, value: "만들기 →" })}${this.invitePreview ? `<div class="invite-card"><p>코드는 이 화면을 닫으면 다시 볼 수 없어요. 가입할 분에게 바로 전달해 주세요. 띄어쓰기나 대소문자는 상관없어요.</p><code>${escapeHtml(this.invitePreview)}</code><div class="invite-actions">${button({ action: "copy-invite", label: "복사" })}${button({ variant: "ghost", action: "dismiss-invite", label: "닫기" })}</div></div>` : ""}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">앱</p>${listRow({ action: "theme", title: "화면 테마", hint: "시스템과 별도로 바꿀 수 있어요", value: this.theme === "dark" ? "다크" : "라이트" })}${listRow({ title: "앱 버전", hint: `서버 ${state.version}`, value: `v${appPackage.version}` })}</section>
+      <section class="settings-section policy-links"><p class="eyebrow">개인정보</p>${POLICY_LINKS.map(policyRow).join("")}</section>
       ${this.demo ? "" : `<section class="settings-section"><p class="eyebrow">계정</p>${listRow({ action: "delete-account", title: "회원 탈퇴", hint: "앱 계정과 저장된 정보를 모두 지워요", value: "탈퇴 →" })}</section>`}${this.trial ? button({ variant: "ghost-danger", action: "trial-exit", label: "체험 끝내기" }) : button({ variant: "ghost-danger", action: "app-logout", label: "앱에서 로그아웃" })}</div></div>`;
   }
 
@@ -1597,6 +1607,7 @@ export class JariApp {
         ${button({ variant: "text", label: "로그인 방법 바꾸기", attrs: { "data-auth-gate": "choose" } })}` : ""}
         ${this.options.demoMode ? button({ variant: "text", className: "demo-enter", action: "demo-enter", label: "샘플 화면 바로 보기" }) : ""}
         <p class="auth-note">앱 계정과 코레일 계정은 서로 달라요. 결제는 코레일에서 직접 해 주세요.</p>
+        <p class="auth-links">${POLICY_LINKS.map((link) => `<a href="${link.href}" target="_blank" rel="noreferrer">${link.title}</a>`).join("")}</p>
       </section>
       ${this.busy ? '<div class="blocker" role="status"><span class="spinner"></span><b>확인하고 있어요</b></div>' : ""}
     </div>`;
