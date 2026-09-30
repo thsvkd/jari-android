@@ -1382,6 +1382,9 @@ class BackgroundReservationProcess:
                 self._send_callback(error_msg, status=1)
                 return
 
+            # Korail holds this seat now; see the same mark in run().
+            self._leave_mark(self.storage.mark_search_held_seat)
+
             # Save partial reservation
             reservation_data = {
                 "seat_index": seat_index,

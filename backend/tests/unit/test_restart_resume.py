@@ -637,6 +637,124 @@ def test_a_search_still_being_brought_back_shows_as_registered_not_as_gone(tmp_p
     runtime.storage.close()
 
 
+# ==================== How a search ended, for the deploy check ====================
+
+
+@pytest.mark.parametrize(("status", "reason"), [(0, "booked"), (1, "error")])
+def test_a_search_that_ends_itself_leaves_a_mark_of_how(tmp_path, status, reason):
+    from korail_bot.mobile.worker import apply_result
+
+    storage, service = _service(tmp_path)
+    _left_by_an_earlier_run(storage, pid=os.getpid())
+
+    apply_result(storage, MagicMock(), CHAT, "끝", status=status)
+
+    assert storage.get_running_reservation(CHAT) is None
+    (ended,) = service.describe_ended()
+    assert (ended["id"], ended["why"]) == (CHAT, reason)
+    assert storage.get_search_endings()[CHAT]["pid"] == os.getpid()
+    storage.close()
+
+
+def test_a_cancelled_search_leaves_a_mark_and_no_stopped_search_behind(tmp_path):
+    storage, service = _service(tmp_path)
+    left = _left_by_an_earlier_run(storage)
+    # What a worker recording itself as stopped (Korail unreachable) left,
+    # racing the cancel outside the parent's lock.
+    from korail_bot.models import DeadSearch
+
+    storage.save_dead_search(
+        DeadSearch(
+            chat_id=CHAT,
+            korail_id="0000000000",
+            search_params=left.search_params,
+            cause=DeathCause.KORAIL_UNREACHABLE,
+        )
+    )
+
+    assert service.cancel_reservation(CHAT) is True
+
+    assert storage.get_dead_search(CHAT) is None
+    ended = storage.get_search_endings()[CHAT]
+    assert (ended["reason"], ended["pid"]) == ("cancelled", left.process_id)
+    storage.close()
+
+
+def test_running_records_this_build_cannot_read_are_counted(tmp_path):
+    storage, service = _service(tmp_path)
+    _left_by_an_earlier_run(storage)
+    # A record written by a build whose fields this one does not know.
+    storage.redis.set("running_reservation:-7", json.dumps({"chat_id": -7}))
+
+    searches = service.describe_running()
+
+    assert [row["id"] for row in searches] == [CHAT]
+    assert service.unreadable_running(len(searches)) == 1
+    storage.close()
+
+
+def test_a_stopped_search_of_a_cause_this_build_does_not_know_still_reads(tmp_path):
+    storage, _ = _service(tmp_path)
+    left = _left_by_an_earlier_run(storage)
+    from korail_bot.models import DeadSearch
+
+    storage.save_dead_search(
+        DeadSearch(
+            chat_id=CHAT,
+            korail_id="0000000000",
+            search_params=left.search_params,
+            cause=DeathCause.CRASHED,
+        )
+    )
+    raw = json.loads(storage.redis.get(f"dead_search:{CHAT}"))
+    raw["cause"] = "a_cause_from_a_later_build"
+    storage.redis.set(f"dead_search:{CHAT}", json.dumps(raw))
+
+    assert storage.get_dead_search(CHAT).cause is DeathCause.CRASHED
+    storage.close()
+
+
+def test_a_give_up_whose_notice_failed_is_announced_on_the_next_pass(tmp_path, monkeypatch):
+    storage, service = _service(tmp_path)
+    monkeypatch.setattr(service, "_RESUME_ATTEMPTS", 1)
+    monkeypatch.setattr(service, "_resume", lambda reservation: False)
+    _left_by_an_earlier_run(storage)
+    service.telegram.send_message.side_effect = [OSError("push failed"), True]
+
+    assert service.reconcile_after_restart()["failed"] == 0
+    # Moved, but the user was never told - and the record the retry would
+    # have looked for is gone.
+    assert storage.get_running_reservation(CHAT) is None
+    assert storage.get_dead_search(CHAT).announced is False
+
+    assert service.reconcile_after_restart()["failed"] == 1
+    assert storage.get_dead_search(CHAT).announced is True
+    assert service.telegram.send_message.call_count == 2
+
+    service.reconcile_after_restart()
+    assert service.telegram.send_message.call_count == 2
+    storage.close()
+
+
+def test_a_random_seat_search_marks_its_seat_the_moment_korail_holds_it(tmp_path, monkeypatch):
+    from korail_bot.telegramBot.telebotBackProcess import SearchStopped
+
+    worker, _ = _worker(tmp_path, monkeypatch, _Rail([]))
+    worker.passenger_count = 2
+    monkeypatch.setattr(worker, "_reserve_single_seat_random", lambda index: MagicMock())
+
+    def stopped_right_after(*args):
+        raise SearchStopped(15)
+
+    # The SIGTERM lands on the very next step.
+    monkeypatch.setattr(worker.storage, "save_partial_reservation", stopped_right_after)
+
+    with pytest.raises(SearchStopped):
+        worker._run_random_reservation()
+
+    assert worker.storage.search_mark_pid(CHAT, "held_seat") == os.getpid()
+
+
 # ==================== What the deploy check reads ====================
 
 
@@ -710,7 +828,8 @@ def test_the_running_listing_is_one_line_a_script_can_read_whatever_is_logged(tm
     listing = json.loads(line.removeprefix("RUNNING="))
     (row,) = listing["searches"]
     assert (row["id"], row["resumable"], row["reason"]) == (CHAT, False, "no_credentials")
-    assert listing["now"] > 0 and listing["stopped"] == []
+    assert listing["now"] > 0 and listing["stopped"] == [] and listing["ended"] == []
+    assert listing["unreadable"] == 0
     assert "0000000000" not in done.stdout and "rail password" not in done.stdout
 
 

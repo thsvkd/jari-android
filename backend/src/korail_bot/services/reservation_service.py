@@ -63,6 +63,11 @@ class ReservationService:
         # Keyed by the record itself - chat, run and PID - so that nothing
         # said here about one record can ever be read as being about another.
         self._resume_attempts: dict[tuple[int, str, int], tuple[int, float]] = {}
+        # Give-ups that failed part-way, by the same key: tried again on every
+        # call until the search is moved and its user told. Kept apart from
+        # the attempts because the record may already be gone - moved by the
+        # half that worked - and so no longer among those a call looks at.
+        self._unfinished_give_ups: dict[tuple[int, str, int], RunningReservation] = {}
 
     def start_reservation_process(
         self,
@@ -400,7 +405,10 @@ class ReservationService:
 
         must_store: raise, and say nothing, when storage fails. For a caller
             that will try again: telling the user about a record still in
-            place is telling them something that is not so.
+            place is telling them something that is not so. The stopped
+            search is then saved as not yet announced, and marked announced
+            only once the notice has gone, so that a retry finding it
+            unannounced can finish the job (_announce_pending_death).
         """
         resumable = bool(
             settings.RESUME_ON_RESTART and self.storage.get_resume_credentials(chat_id)
@@ -412,6 +420,7 @@ class ReservationService:
             search_params=search_params,
             cause=cause,
             resumable=resumable,
+            announced=not must_store,
         )
 
         try:
@@ -428,6 +437,33 @@ class ReservationService:
                 raise
 
         self._announce_death(dead)
+        if must_store:
+            dead.announced = True
+            self.storage.save_dead_search(dead)
+
+    def _announce_pending_death(self, chat_id: int, cause: DeathCause) -> bool:
+        """
+        Tell the user about a stopped search saved but never announced.
+
+        What _record_death(must_store=True) leaves when it failed after the
+        record moved - resetting the session, or the notice itself. The
+        running record is gone by then, so only this record says the user
+        is still owed a notice.
+
+        Returns:
+            True when there was one to announce
+        """
+        dead = self.storage.get_dead_search(chat_id)
+        if dead is None or dead.announced or dead.cause is not cause:
+            return False
+        session = self.storage.get_user_session(chat_id)
+        if session:
+            session.reset()
+            self.storage.save_user_session(session)
+        self._announce_death(dead)
+        dead.announced = True
+        self.storage.save_dead_search(dead)
+        return True
 
     def _announce_death(self, dead: DeadSearch) -> None:
         """Tell the user their search stopped, and offer what to do about it."""
@@ -865,6 +901,20 @@ class ReservationService:
         """
         summary = {"resumed": 0, "interrupted": 0, "retrying": 0, "failed": 0}
 
+        for key, reservation in list(self._unfinished_give_ups.items()):
+            if self._shutting_down:
+                break
+            try:
+                if self._give_up_resuming(reservation):
+                    summary["failed"] += 1
+            except Exception as e:
+                logger.error(
+                    f"Still could not give up on chat_id={reservation.chat_id}: {e}",
+                    exc_info=True,
+                )
+                continue
+            del self._unfinished_give_ups[key]
+
         try:
             reservations = self.storage.get_all_running_reservations()
         except Exception as e:
@@ -918,20 +968,19 @@ class ReservationService:
             try:
                 given_up = self._give_up_resuming(reservation)
             except Exception as e:
-                # Nothing was said and the record is still there: giving up is
-                # tried again next time round, rather than leaving a record
-                # whose login keep_resumable renews forever and which the next
-                # restart would quietly resume.
+                # Part of it failed. Either nothing moved and the record is
+                # still there, or the stopped search is saved and the user not
+                # yet told. Both are finished on the next call, rather than a
+                # record left whose login keep_resumable renews forever, or a
+                # user never told their search stopped.
                 logger.error(
                     f"Could not record the search chat_id={reservation.chat_id} gave up on: {e}",
                     exc_info=True,
                 )
-                self._resume_attempts[key] = (
-                    tries,
-                    time.monotonic() + self._RESUME_RETRY_SECONDS,
-                )
+                self._unfinished_give_ups[key] = reservation
+                self._resume_attempts[key] = (tries, float("inf"))
                 continue
-            # Never due again in this run: its record is gone either way.
+            # Never due again as a resume: it is given up on either way.
             self._resume_attempts[key] = (tries, float("inf"))
             if given_up:
                 summary["failed"] += 1
@@ -1058,11 +1107,14 @@ class ReservationService:
         Returns:
             True when the search was given up on; False when its record had
             already gone or been replaced. Raises when it could not be
-            recorded, having said nothing.
+            recorded or announced, for the caller to try again.
         """
         current = self.storage.get_running_reservation(reservation.chat_id)
         if current is None or self._resume_key(current) != self._resume_key(reservation):
-            return False
+            # Gone - possibly moved by an earlier give-up that got no further
+            # than that. Then the user has yet to hear, and does now. A new
+            # search the user started since has cleared that stopped search.
+            return self._announce_pending_death(reservation.chat_id, DeathCause.RESUME_FAILED)
         self._record_death(
             reservation.chat_id,
             reservation.korail_id,

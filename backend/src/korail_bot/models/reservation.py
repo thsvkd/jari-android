@@ -327,6 +327,11 @@ class DeadSearch:
     # told that up front than offered a button that fails.
     resumable: bool = True
     died_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # Whether the user has been told. Written False first, where telling them
+    # is retried if it fails (a restart giving up on a search): the record
+    # can be saved and the running record gone while the notice never left,
+    # and this is what the retry finds to finish the job.
+    announced: bool = True
 
 
 @dataclass

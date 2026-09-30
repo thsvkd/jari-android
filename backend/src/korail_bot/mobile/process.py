@@ -62,6 +62,12 @@ class MobileReservationService(ReservationService):
             if not stopped and self._is_running(record.process_id):
                 return False
             self.storage.delete_running_reservation(chat_id)
+            self.storage.mark_search_ended(chat_id, "cancelled", record.process_id)
+            # The worker may have been recording itself as stopped - Korail
+            # unreachable, _stop_resumable - outside this lock when it was
+            # killed. It is gone now; what it left must not outlive the
+            # user's cancel as a search to resume.
+            self.storage.delete_dead_search(chat_id)
             self.storage.delete_resume_credentials(chat_id)
             self.storage.delete_app_session_start(chat_id)
             session = self.storage.get_user_session(chat_id)
@@ -102,6 +108,24 @@ class MobileReservationService(ReservationService):
                 }
             )
         return sorted(rows, key=lambda row: row["id"])
+
+    def describe_ended(self):
+        """
+        The searches that ended on their own terms (booked, cancelled by the
+        user, or stopped on a reported error), each with when. The deploy
+        check counts a vanished record as finished only when it is here.
+        """
+        return sorted(
+            (
+                {"id": chat_id, "why": note["reason"], "at": note["at"]}
+                for chat_id, note in self.storage.get_search_endings().items()
+            ),
+            key=lambda row: row["id"],
+        )
+
+    def unreadable_running(self, readable):
+        """How many running records exist that this build cannot read."""
+        return max(0, self.storage.count_running_reservation_keys() - readable)
 
     def describe_stopped(self):
         """

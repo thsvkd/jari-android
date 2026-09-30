@@ -280,6 +280,7 @@ class RedisStorage(StorageInterface):
             "korail_id": search.korail_id,
             "cause": search.cause.value,
             "resumable": search.resumable,
+            "announced": search.announced,
             "died_at": as_utc(search.died_at).isoformat(),
             "search_params": self._serialize_search_params(search.search_params),
         }
@@ -288,11 +289,19 @@ class RedisStorage(StorageInterface):
         """Deserialize dict to DeadSearch."""
         from korail_bot.utils.timezone import as_utc
 
+        try:
+            cause = DeathCause(data["cause"])
+        except ValueError:
+            # A cause a later build added, read by this one - after a
+            # rollback. Still a search that stopped without finishing.
+            cause = DeathCause.CRASHED
         return DeadSearch(
             chat_id=data["chat_id"],
             korail_id=data["korail_id"],
-            cause=DeathCause(data["cause"]),
+            cause=cause,
             resumable=data.get("resumable", True),
+            # Records written before this was kept were all announced.
+            announced=data.get("announced", True),
             died_at=as_utc(datetime.fromisoformat(data["died_at"])),
             search_params=self._deserialize_search_params(data["search_params"]),
         )
@@ -910,8 +919,43 @@ class RedisStorage(StorageInterface):
         return int(value) if value and value.isdigit() else None
 
     def clear_search_marks(self, chat_id: int) -> None:
-        """Forget the marks of any earlier worker, before a new one starts."""
-        self.redis.delete(f"search_logged_in:{chat_id}", f"search_held_seat:{chat_id}")
+        """Forget the marks of any earlier search, before a new one starts."""
+        self.redis.delete(
+            f"search_logged_in:{chat_id}",
+            f"search_held_seat:{chat_id}",
+            f"search_ended:{chat_id}",
+        )
+
+    def mark_search_ended(self, chat_id: int, reason: str, pid: int) -> None:
+        """
+        Note how a search ended on its own terms: 'booked', 'cancelled' by its
+        user, or 'error' (the search reported a failure and stopped).
+
+        Written wherever a running record is deleted because the search is
+        over, so that a record which is simply gone - unreadable, or lost with
+        Redis - is never mistaken by the deploy check for one that finished.
+        """
+        data = json.dumps({"reason": reason, "at": int(time.time()), "pid": pid})
+        self.redis.set(f"search_ended:{chat_id}", data, ex=self.SEARCH_MARK_TTL_SECONDS)
+
+    def get_search_endings(self) -> dict[int, dict]:
+        """Every note mark_search_ended left, by chat ID."""
+        notes = {}
+        for key in self._scan_keys("search_ended:*"):
+            data = self.redis.get(key)
+            if data:
+                notes[int(key.rsplit(":", 1)[1])] = json.loads(data)
+        return notes
+
+    def count_running_reservation_keys(self) -> int:
+        """
+        How many running records there are, readable or not.
+
+        get_all_running_reservations skips a record it cannot parse. Every
+        caller that acts on records wants that; the deploy check wants to know
+        a record is there that this build cannot read.
+        """
+        return len(self._scan_keys("running_reservation:*"))
 
     # ==================== Searches a restart did not bring back ====================
 

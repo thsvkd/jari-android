@@ -126,10 +126,20 @@ def print_running(config, *, as_json):
         service = MobileReservationService(storage, None, config)
         searches = service.describe_running()
         stopped = service.describe_stopped()
+        ended = service.describe_ended()
+        unreadable = service.unreadable_running(len(searches))
     finally:
         storage.close()
     if as_json:
-        listing = {"now": int(time.time()), "searches": searches, "stopped": stopped}
+        listing = {
+            "now": int(time.time()),
+            "searches": searches,
+            # Running records there that this build cannot parse: every
+            # reader skips them, so a restart would lose them without a word.
+            "unreadable": unreadable,
+            "stopped": stopped,
+            "ended": ended,
+        }
         print("RUNNING=" + json.dumps(listing))
         return
     for row in searches:
@@ -140,7 +150,7 @@ def print_running(config, *, as_json):
             f"resumable={'yes' if row['resumable'] else 'no (' + row['reason'] + ')'} "
             f"login_ttl={row['credentialTtlSeconds']}s"
         )
-    print(f"{len(searches)} running")
+    print(f"{len(searches)} running" + (f", {unreadable} unreadable" if unreadable else ""))
 
 
 if __name__ == "__main__":
