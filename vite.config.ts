@@ -16,7 +16,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     // e2e/ 는 Playwright 가 실제 브라우저로 돌려요.
-    exclude: ["**/node_modules/**", "**/.git/**", "artifacts/**", "e2e/**"],
+    exclude: ["**/node_modules/**", "**/.git/**", "artifacts/**", "e2e/**", "test-results/**"],
     restoreMocks: true,
     clearMocks: true,
   },

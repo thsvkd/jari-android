@@ -270,7 +270,11 @@ def test_a_seat_the_worker_held_while_being_stopped_keeps_the_account(
     response = http.post("/api/mobile/account/delete", headers=headers, json={"password": PASSWORD})
 
     assert response.status_code == 409
-    assert "결제를 기다리는 예약" in response.json["error"]
+    assert response.json["error"] == (
+        "결제를 기다리는 예약이 있어요. 결제하거나 예약을 취소한 뒤 탈퇴해 주세요."
+        if left_by_worker == "payment"
+        else "코레일에서 잡힌 좌석이 있을 수 있어요. 코레일 앱에서 예약 내역을 확인한 뒤 다시 시도해 주세요."
+    )
     # The user can still log in and see what was held.
     assert http.get("/api/mobile/status", headers=headers).status_code == 200
     assert any("잡았어요" in item["text"] for item in runtime.notifications.items(owner))

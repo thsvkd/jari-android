@@ -623,11 +623,17 @@ class MobileGateway(MiniAppGateway):
         # check above and its kill it may have had Korail hold a seat. Its
         # payment record, or the mark it leaves the moment the hold comes back,
         # says so; erasing now would leave a hold the user never hears about.
-        if self.pending_payments.pending(chat_id) or (
+        if self.pending_payments.pending(chat_id):
+            raise pending
+        if (
             record is not None
             and self.storage.search_mark_pid(chat_id, "held_seat") == record.process_id
         ):
-            raise pending
+            # Held, but stopped before it could record the booking: only Korail knows.
+            raise MiniAppError(
+                "코레일에서 잡힌 좌석이 있을 수 있어요. 코레일 앱에서 예약 내역을 확인한 뒤 다시 시도해 주세요.",
+                409,
+            )
         self._forget_rail(chat_id)
         self.storage.delete_user_data(chat_id)
         return {"deleted": True}
