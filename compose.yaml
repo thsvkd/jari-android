@@ -19,6 +19,16 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    # /health 는 Redis 응답과 런타임 리스 보유를 본다. 실패해도 재시작하지 않고
+    # docker ps·재부팅 확인에 unhealthy 로 드러낼 뿐이다. 시작은 남은 리스를
+    # 기다리느라(최대 135초) 늦을 수 있어 start_period 를 넉넉히 둔다.
+    # Redis ping 의 소켓 타임아웃(5초)보다 timeout 을 길게 둔다.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/api/mobile/health', timeout=8)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
     # 종료는 검색 워커를 멈추고(워커마다 최대 6초) 스레드를 기다린 뒤 Redis 런타임 리스를 놓는다.
     # 그 전에 SIGKILL 되면 리스가 남아, 다음 시작이 리스 TTL(120초)이 끝나기를 기다린다.
     stop_grace_period: 60s

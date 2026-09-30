@@ -41,6 +41,8 @@
 | `reservations/cancel` | POST | 결제 대기 예약 전체 취소 |
 | `favourites` GET/POST, `favourites/<id>` DELETE | | 즐겨찾기 |
 | `notify`, `notifications`, `devices` | | 알림 간격, 알림 목록, 푸시 토큰 |
+| `health` | GET | 인증 없음. Redis 응답·런타임 리스 보유 → 200 `{ok:true,…}`, 아니면 503. 업타임 프로브와 compose healthcheck용 |
+| `diagnostics` | POST | 앱이 응답을 받지 못한 요청 기록(`misses`, 최대 50건, 사용자당 60초 6회)을 올린다. 서버는 한 건에 한 줄 `Client connection miss user=… at= method= path= reason= online= visible= elapsedMs=`로 로그에 남긴다 |
 
 ### 3.1 진행 중 검색(`running`)
 ```
@@ -89,6 +91,11 @@ seatPlanSummary: "015 일반실 3호차 5A·5B · 019 좌석 무관" | ""
 ## 6. 연결 상태
 
 - `pollStatus` 30초 주기. 서버 오류(5xx)는 `unknown`(카드 "현재 상태를 확인할 수 없어요"), 네트워크 실패는 `noteConnectionMiss`: 첫 실패 5초 뒤 재확인, 연속 2회 또는 `navigator.onLine === false`면 `offline` 배너. 성공 즉시 해제.
+- 백그라운드(Capacitor `App` pause, 또는 `visibilityState === "hidden"`)에서는 폴링하지 않는다. Android가 백그라운드 앱의 네트워크를 끊어도 그것을 서버 장애로 판정하지 않기 위해서다. 앱 복귀(`resume`)·`visibilitychange`·`online` 때 바로 다시 묻는다. 이미 나간 폴링이 있으면 겹쳐 묻지 않는다.
+- 기한은 상태 폴링에만 있다(20초, 본문 읽기까지). 넘기면 `timeout`으로, `offline`이 아니라 `unknown`("현재 상태를 확인할 수 없어요")이 된다: `/status`도 사용자별 락을 거쳐, 같은 사용자의 좌석표·예약이 코레일을 기다리는 동안 서버에 닿은 채 기다릴 수 있다. 코레일로 가는 요청에는 기한이 없다(끊으면 성공한 예약을 실패로 보일 수 있다; Cloudflare의 100초가 상한).
+- 복귀·`online`은 나가 있는 폴링을 기다리지 않고 새로 묻고, 앞선 폴링의 답은 버린다(`pollSeq`). 30초 주기는 나가 있는 폴링 위에 겹쳐 묻지 않는다. 페이지가 보이게 되면(`visibilitychange`) 네이티브 resume을 놓쳤더라도 앞에 있는 것으로 본다. pause/resume 리스너는 `watchForeground`로 페이지 수명 동안 한 번만 건다.
+- HTTP 응답을 받지 못한 요청(네트워크 실패·기한 초과. CORS 헤더 없는 Cloudflare 오류 페이지도 여기로 온다)은 `jari.connectionMisses`(localStorage, 최근 50건)에 시각·경로(열차 키·즐겨찾기 id는 `:key`/`:id`)·원인(`network`/`timeout`)·실패 때의 `navigator.onLine`·보낼 때의 화면 표시 여부·걸린 시간을 남긴다. `timeout`은 서버에 닿았을 수 있다(위 락). 다음 인증 요청이 성공하면 `diagnostics`로 올리고 지운다(400이면 버리고, 그 밖의 실패는 다음 성공 때 다시 올린다). 이 기록이 휴대폰에서 Cloudflare 사이 구간의 유일한 증거다: 그 구간의 실패는 Caddy·API 로그에 남지 않는다.
+- 운영 점검: `docker logs jari-api-1 2>&1 | grep "Client connection miss"`로 앱이 본 실패를, `docker ps`의 `(healthy)`로 API 상태를 본다. 외부 업타임 프로브는 `https://jari.thsvkd.dev/api/mobile/health`를 pit5 밖에서 부른다.
 
 ## 7. 확인 시트
 

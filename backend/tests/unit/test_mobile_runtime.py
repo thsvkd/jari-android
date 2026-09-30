@@ -1338,3 +1338,24 @@ def test_worker_writes_the_booked_train_down_before_the_app_is_told(tmp_path, mo
     after = runtime.storage.get_payment_status(-100)
     assert after.train_info == seen[0].train_info and after.reminder_active
     runtime.storage.close()
+
+
+def test_health_reports_redis_and_the_lease(tmp_path, monkeypatch):
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = _runtime(tmp_path, client)
+    # Not yet holding the lease: waiting one out, or never started.
+    assert runtime.health() == {"ok": False, "booking": True, "redis": True, "lease": False}
+    runtime.lease_until = time.monotonic() + 60
+    assert runtime.health() == {"ok": True, "booking": True, "redis": True, "lease": True}
+    assert runtime.app.test_client().get("/api/mobile/health").status_code == 200
+    runtime.lease_lost = True
+    assert runtime.health()["ok"] is False
+    runtime.lease_lost = False
+
+    def unreachable():
+        raise RedisTimeoutError("no answer")
+
+    monkeypatch.setattr(runtime.storage.redis, "ping", unreachable)
+    assert runtime.health() == {"ok": False, "booking": True, "redis": False, "lease": True}
+    assert runtime.app.test_client().get("/api/mobile/health").status_code == 503
+    client.close()

@@ -41,8 +41,9 @@ export default defineConfig({
     { name: "phone-narrow", use: { ...phone, viewport: { width: 344, height: 780 }, deviceScaleFactor: 3 }, grep: /@layout/ },
     // 에뮬레이터: scripts/verify.mjs 가 앱(com.jari.app 디버그 빌드)을 설치하고 WebView 디버깅 포트를 넘긴 뒤에만 켜져요.
     // 스크린샷 기준은 헤드리스에서만 비교해요(기기는 상태 표시줄·글꼴이 달라요).
+    // connection.spec 은 브라우저 네트워크를 끊어요. 기기에서 끊으면 에뮬레이터 전체가 끊겨요.
     // 제한을 늘린 것은 콜드 스타트한 에뮬레이터에서 첫 화면 재시도(fixtures.ts openApp)까지 하면 60초를 넘기기도 해서예요.
-    ...(process.env.JARI_DEVICE_CDP ? [{ name: "device", timeout: 120_000, use: { baseURL: "https://localhost" }, testIgnore: /screens\.spec/ }] : []),
+    ...(process.env.JARI_DEVICE_CDP ? [{ name: "device", timeout: 120_000, use: { baseURL: "https://localhost" }, testIgnore: /screens\.spec|connection\.spec/ }] : []),
   ],
   webServer: [
     {

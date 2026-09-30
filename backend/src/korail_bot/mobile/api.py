@@ -1,5 +1,6 @@
 """Session-authenticated mobile API. No bot token and no callback endpoint."""
 
+import math
 import threading
 from functools import wraps
 
@@ -12,9 +13,24 @@ from korail_bot.services.mini_app_gateway import MiniAppError
 
 PREFIX = "/api/mobile"
 IDENTITY_FIELDS = {"chatId", "chat_id", "userId", "user_id", "storage_id", "identity"}
+# The app keeps at most this many connection misses between uploads.
+MAX_CONNECTION_MISSES = 50
+CONNECTION_MISS_FIELDS = ("at", "method", "path", "reason", "online", "visible", "elapsedMs")
 
 
-def create_app(identity, gateway, notifications=None, *, origins=(), booking_available=True):
+def _log_field(value):
+    # Client-supplied: one short token per field, so a miss stays one log line.
+    if isinstance(value, bool) or value is None:
+        return str(value).lower()
+    if isinstance(value, int | float):
+        # json.loads takes NaN and Infinity; a huge number is still one short token.
+        return str(int(value)) if math.isfinite(value) and abs(value) < 1e12 else "-"
+    return "".join(c for c in str(value)[:80] if c.isprintable() and not c.isspace()) or "-"
+
+
+def create_app(
+    identity, gateway, notifications=None, *, origins=(), booking_available=True, health=None
+):
     app = Flask(__name__)
     # This is what bounds the total size of a seat plan: one seat target is
     # ~180 bytes of JSON, and "every seat in the train" for a few trains has
@@ -134,6 +150,13 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
 
         return wrapped
 
+    @app.get(PREFIX + "/health")
+    def health_check():
+        # Unauthenticated, for uptime probes and the container healthcheck: it
+        # answers through the same Cloudflare tunnel and Caddy as the app does.
+        result = health() if health else {"ok": True}
+        return jsonify(result), 200 if result["ok"] else 503
+
     @app.post(PREFIX + "/auth/register")
     @app.post(PREFIX + "/auth/login")
     def auth():
@@ -238,6 +261,30 @@ def create_app(identity, gateway, notifications=None, *, origins=(), booking_ava
         return jsonify(
             gateway.register(g.user["storage_id"], g.payload["username"], g.payload["password"])
         )
+
+    @app.post(PREFIX + "/diagnostics")
+    @authenticated
+    def diagnostics():
+        # Requests that never reached this server, uploaded by the app on its
+        # next success. They are the only record of failures between the phone
+        # and Cloudflare, which neither Caddy nor this API ever sees.
+        # The app uploads after a success, at most once per request it makes; this keeps a
+        # client from rotating the real log out (50 lines a call against 10 MB x 3 files).
+        limited("diag:" + g.user["id"], 6, 60)
+        misses = g.payload.get("misses")
+        if (
+            not isinstance(misses, list)
+            or len(misses) > MAX_CONNECTION_MISSES
+            or not all(isinstance(miss, dict) for miss in misses)
+        ):
+            raise AuthError("연결 기록 형식을 확인해 주세요.", 400)
+        for miss in misses:
+            app.logger.warning(
+                "Client connection miss user=%s %s",
+                g.user["id"],
+                " ".join(f"{key}={_log_field(miss.get(key))}" for key in CONNECTION_MISS_FIELDS),
+            )
+        return jsonify(ok=True, received=len(misses))
 
     @app.get(PREFIX + "/status")
     @authenticated

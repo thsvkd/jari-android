@@ -337,3 +337,86 @@ def test_seat_routes_use_authenticated_owner_and_gateway(api):
         "/api/mobile/reservations/designated", headers=headers, json=payload
     ).json == {"reserved": True}
     gateway.reserve_designated.assert_called_once_with(owner, payload)
+
+
+def test_health_needs_no_session_and_reports_failure_as_503(tmp_path):
+    identity = IdentityStore(tmp_path / "app.sqlite3")
+    reports = iter([{"ok": True, "redis": True}, {"ok": False, "redis": False}])
+    client = create_app(identity, MagicMock(), health=lambda: next(reports)).test_client()
+    healthy = client.get("/api/mobile/health")
+    assert healthy.status_code == 200 and healthy.json == {"ok": True, "redis": True}
+    failing = client.get("/api/mobile/health")
+    assert failing.status_code == 503 and failing.json == {"ok": False, "redis": False}
+    assert create_app(identity, MagicMock()).test_client().get("/api/mobile/health").json == {
+        "ok": True
+    }
+
+
+def test_connection_misses_are_logged_one_line_each_without_client_newlines(api, caplog):
+    client, _, _ = api
+    alice = signup(api, "alice")
+    headers = {"Authorization": "Bearer " + alice["token"]}
+    miss = {
+        "at": "2026-09-30T03:41:10.000Z",
+        "method": "GET",
+        "path": "/status\nforged line",
+        "reason": "timeout",
+        "online": True,
+        "visible": False,
+        "elapsedMs": 15000.4,
+        "extra": "not logged",
+    }
+    with caplog.at_level("WARNING"):
+        response = client.post("/api/mobile/diagnostics", headers=headers, json={"misses": [miss]})
+    assert response.status_code == 200 and response.json == {"ok": True, "received": 1}
+    [line] = [r.getMessage() for r in caplog.records if "connection miss" in r.getMessage()]
+    assert line == (
+        f"Client connection miss user={alice['user']['id']} at=2026-09-30T03:41:10.000Z "
+        "method=GET path=/statusforgedline reason=timeout online=true visible=false elapsedMs=15000"
+    )
+
+
+@pytest.mark.parametrize("payload", [{}, {"misses": "x"}, {"misses": ["x"]}, {"misses": [{}] * 51}])
+def test_connection_misses_must_be_a_short_list_of_objects(api, payload):
+    client, _, _ = api
+    alice = signup(api, "alice")
+    response = client.post(
+        "/api/mobile/diagnostics",
+        headers={"Authorization": "Bearer " + alice["token"]},
+        json=payload,
+    )
+    assert response.status_code == 400
+
+
+def test_connection_miss_numbers_that_are_not_finite_are_logged_as_dashes(api, caplog):
+    client, _, _ = api
+    alice = signup(api, "alice")
+    body = '{"misses": [{"elapsedMs": NaN}, {"elapsedMs": Infinity}, {"elapsedMs": 1e308}]}'
+    with caplog.at_level("WARNING"):
+        response = client.post(
+            "/api/mobile/diagnostics",
+            headers={
+                "Authorization": "Bearer " + alice["token"],
+                "Content-Type": "application/json",
+            },
+            data=body,
+        )
+    assert response.status_code == 200
+    lines = [r.getMessage() for r in caplog.records if "connection miss" in r.getMessage()]
+    assert [line.rsplit(" ", 1)[-1] for line in lines] == ["elapsedMs=-"] * 3
+
+
+def test_connection_miss_uploads_are_rate_limited(api):
+    client, _, _ = api
+    alice = signup(api, "alice")
+    headers = {"Authorization": "Bearer " + alice["token"]}
+    codes = [
+        client.post("/api/mobile/diagnostics", headers=headers, json={"misses": []}).status_code
+        for _ in range(7)
+    ]
+    assert codes == [200] * 6 + [429]
+
+
+def test_connection_misses_need_a_session(api):
+    client, _, _ = api
+    assert client.post("/api/mobile/diagnostics", json={"misses": []}).status_code == 401

@@ -252,6 +252,12 @@ export class JariApp {
   private deadlineTimer: number | null = null;
   // Consecutive status polls that could not reach the server. One miss is a phone waking up or hopping networks; two is offline.
   private pollMisses = 0;
+  // Each status poll takes the next number; only the latest one's answer counts. A resume asks afresh rather than wait
+  // on a poll sent before the pause, which Android may have cut off and which then hangs until its deadline.
+  private pollSeq = 0;
+  private pollOut = false;
+  // Android pauses the app without always hiding the page, so the native lifecycle is kept separately.
+  private background = false;
   private theme: "light" | "dark";
   private readonly themeQuery: MediaQueryList | null;
 
@@ -274,6 +280,8 @@ export class JariApp {
     this.onSubmit = this.onSubmit.bind(this);
     this.onKeyDown = this.onKeyDown.bind(this);
     this.onToastPointer = this.onToastPointer.bind(this);
+    this.resumeConnection = this.resumeConnection.bind(this);
+    this.onVisibilityChange = this.onVisibilityChange.bind(this);
     this.datePicker = new DatePicker(root);
     this.timePicker = new TimePicker(root);
     this.root.addEventListener("click", this.onClick);
@@ -283,6 +291,8 @@ export class JariApp {
     for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"]) this.root.addEventListener(type, this.onToastPointer as EventListener);
     // On the window: the sheet's Escape must work wherever the focus sits, including before anything inside it is focused.
     window.addEventListener("keydown", this.onKeyDown);
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
+    window.addEventListener("online", this.resumeConnection);
   }
 
   private resetSession(): void {
@@ -350,6 +360,8 @@ export class JariApp {
     this.datePicker.dispose();
     this.timePicker.dispose();
     window.removeEventListener("keydown", this.onKeyDown);
+    document.removeEventListener("visibilitychange", this.onVisibilityChange);
+    window.removeEventListener("online", this.resumeConnection);
     this.themeQuery?.removeEventListener("change", this.onSystemTheme);
     if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
     if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
@@ -424,12 +436,40 @@ export class JariApp {
     this.deadlineTimer ??= window.setInterval(() => this.tickDeadlines(), 1_000);
   }
 
-  private async pollStatus(): Promise<void> {
+  setForeground(foreground: boolean): void {
+    this.background = !foreground;
+    if (foreground) this.resumeConnection();
+  }
+
+  /**
+   * Back in front or back online: check now. Otherwise an "오프라인" decided while in the background stays on screen
+   * until the next scheduled poll, up to half a minute after the network is fine again.
+   */
+  resumeConnection(): void {
+    if (this.background || document.visibilityState === "hidden") return;
+    this.pollMisses = 0;
+    void this.pollStatus(true);
+  }
+
+  private onVisibilityChange(): void {
+    // The page turning visible means the app is in front whatever the native lifecycle said last, so a lost resume
+    // cannot stop polling for good. (Not on "online": that also fires in the background.)
+    if (document.visibilityState === "visible") this.background = false;
+    this.resumeConnection();
+  }
+
+  private async pollStatus(fresh = false): Promise<void> {
     const generation = this.generation;
     if (!this.state || this.view === "auth") return;
+    // A backgrounded app may have no network at all; a poll from there says nothing about the server.
+    if (this.background || document.visibilityState === "hidden") return;
+    // The interval does not pile a second poll onto one still out; a resume does, and the older answer is dropped.
+    if (this.pollOut && !fresh) return;
+    const seq = ++this.pollSeq;
+    this.pollOut = true;
     try {
       const status = await this.api.status();
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || seq !== this.pollSeq) return;
       this.state.running = status.running;
       this.state.scheduled = status.scheduled;
       this.state.pending = status.pending;
@@ -437,17 +477,20 @@ export class JariApp {
       this.pollMisses = 0;
       if (this.view === "home" || this.view === "activity") this.render();
     } catch (error) {
-      if (generation !== this.generation || (error instanceof ApiError && error.kind === "stale")) return;
+      if (generation !== this.generation || seq !== this.pollSeq || (error instanceof ApiError && error.kind === "stale")) return;
       if (error instanceof ApiError && error.kind === "auth") {
         this.handleError(error);
         return;
       }
-      // A server that answered with an error is reachable; only the state is unconfirmed.
-      if (error instanceof ApiError && error.kind === "server") this.connection = "unknown";
+      // A server that answered with an error is reachable; one that did not answer in time may have got the poll
+      // (it waits behind this user's Korail request). Either way only the state is unconfirmed, not the connection.
+      if (error instanceof ApiError && (error.kind === "server" || error.kind === "timeout")) this.connection = "unknown";
       else this.noteConnectionMiss();
       if (this.view === "home" || this.view === "activity") {
         this.render();
       }
+    } finally {
+      if (seq === this.pollSeq) this.pollOut = false;
     }
   }
 

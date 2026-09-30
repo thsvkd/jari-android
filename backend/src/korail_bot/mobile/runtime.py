@@ -169,7 +169,19 @@ class MobileRuntime:
             self.notifications,
             origins=config.origins,
             booking_available=self.storage is not None,
+            health=self.health,
         )
+
+    def health(self):
+        """What /health reports: Redis answers and this runtime still holds its lease."""
+        if self.storage is None:
+            return {"ok": True, "booking": False}
+        try:
+            redis = bool(self.storage.redis.ping())
+        except RedisError:
+            redis = False
+        lease = not self.lease_lost and time.monotonic() < self.lease_until
+        return {"ok": redis and lease, "booking": True, "redis": redis, "lease": lease}
 
     def start(self):
         if self.started:

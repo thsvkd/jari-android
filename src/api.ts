@@ -18,7 +18,8 @@ import type {
   TrainsResult,
 } from "./types";
 
-export type ApiErrorKind = "auth" | "offline" | "server" | "configuration" | "stale";
+// "timeout": no answer in time. The request may well have reached the server, so it is not "offline".
+export type ApiErrorKind = "auth" | "offline" | "timeout" | "server" | "configuration" | "stale";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -69,12 +70,74 @@ export function createSessionStorage(storage: TokenStorage & { write(token: stri
   };
 }
 
+/** A request that got no HTTP answer at all. The server never sees these, so the app keeps them and uploads them later. */
+export interface ConnectionMiss {
+  at: string;
+  method: string;
+  path: string;
+  reason: "network" | "timeout";
+  online: boolean;
+  visible: boolean;
+  elapsedMs: number;
+}
+
+// The server takes at most this many per upload.
+const MAX_CONNECTION_MISSES = 50;
+const CONNECTION_MISSES_KEY = "jari.connectionMisses";
+
+type MissStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+/** Keeps the latest misses; in localStorage when given one, so misses from before the app was killed still get uploaded. */
+export function createConnectionMissLog(storage: MissStorage | null = null) {
+  let memory: ConnectionMiss[] = [];
+  const read = (): ConnectionMiss[] => {
+    if (!storage) return memory;
+    try {
+      const parsed: unknown = JSON.parse(storage.getItem(CONNECTION_MISSES_KEY) ?? "[]");
+      return Array.isArray(parsed) ? (parsed as ConnectionMiss[]) : [];
+    } catch {
+      return memory;
+    }
+  };
+  const write = (misses: ConnectionMiss[]) => {
+    memory = misses;
+    try {
+      if (misses.length) storage?.setItem(CONNECTION_MISSES_KEY, JSON.stringify(misses));
+      else storage?.removeItem(CONNECTION_MISSES_KEY);
+    } catch {
+      // Diagnostics only; storage that throws keeps them in memory.
+    }
+  };
+  return {
+    read,
+    add: (miss: ConnectionMiss) => write([...read(), miss].slice(-MAX_CONNECTION_MISSES)),
+    /** Removes what was uploaded, keeping misses recorded while the upload was out. */
+    drop: (sent: ConnectionMiss[]) => {
+      const uploaded = new Set(sent.map((miss) => JSON.stringify(miss)));
+      write(read().filter((miss) => !uploaded.has(JSON.stringify(miss))));
+    },
+  };
+}
+
+// Only the status poll has a deadline. It reads Redis, but waits behind the user's lock while a seat map or reservation
+// talks to Korail. Requests that go to Korail get none: giving up on one can hide a reservation that went through.
+const POLL_TIMEOUT_MS = 20_000;
+
 interface HttpApiOptions {
   baseUrl: string;
   tokenStorage: ReturnType<typeof createSessionStorage>;
   fetcher?: typeof fetch;
   timeZone?: string;
   onAuthExpired?: () => void;
+  connectionMisses?: ReturnType<typeof createConnectionMissLog>;
+}
+
+// Opaque train keys and favourite ids say nothing about the failure; the route does.
+function routeOf(path: string): string {
+  return path
+    .split("?")[0]!
+    .replace(/^\/trains\/[^/]+/, "/trains/:key")
+    .replace(/^\/favourites\/[^/]+/, "/favourites/:id");
 }
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
@@ -102,10 +165,33 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
   const fetcher = options.fetcher ?? fetch;
   const root = `${options.baseUrl.replace(/\/$/, "")}/api/mobile`;
   const timeZone = options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
+  const misses = options.connectionMisses ?? createConnectionMissLog();
+  let uploading = false;
+
+  async function uploadMisses(): Promise<void> {
+    const pending = misses.read();
+    if (uploading || !pending.length) return;
+    uploading = true;
+    try {
+      await request<{ ok: boolean }>("/diagnostics", { body: { misses: pending } });
+      misses.drop(pending);
+    } catch (error) {
+      // A 400 will never be accepted; anything else is tried again after the next success.
+      if (error instanceof ApiError && error.status === 400) misses.drop(pending);
+    } finally {
+      uploading = false;
+    }
+  }
 
   async function request<T>(
     path: string,
-    init: { method?: "GET" | "POST" | "DELETE"; body?: unknown; authenticated?: boolean; revokedToken?: string } = {},
+    init: {
+      method?: "GET" | "POST" | "DELETE";
+      body?: unknown;
+      authenticated?: boolean;
+      revokedToken?: string;
+      timeoutMs?: number;
+    } = {},
   ): Promise<T> {
     const authenticated = init.authenticated !== false;
     const generation = options.tokenStorage.generation();
@@ -120,18 +206,55 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
     if (token) headers.set("Authorization", `Bearer ${token}`);
     if (init.body !== undefined) headers.set("Content-Type", "application/json");
 
+    // Without a deadline a poll the network swallowed stays pending, and nothing ever reports it.
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = init.timeoutMs === undefined ? undefined : setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, init.timeoutMs);
+    const started = Date.now();
+    // Whether the request left from the foreground; one sent from the background proves little about the server.
+    const visible = document.visibilityState !== "hidden";
     let response: Response;
+    let text: string;
     try {
       response = await fetcher(`${root}${path}`, {
         method: init.method ?? "POST",
         headers,
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
+        signal: controller.signal,
       });
+      // The body is inside the deadline too: headers and body arrive separately, and a body that never comes would
+      // otherwise leave the poll pending.
+      text = await response.text();
     } catch {
+      // A Cloudflare error page has no CORS headers either, so it lands here too, not as an HTTP status.
+      if (path !== "/diagnostics") {
+        misses.add({
+          at: new Date(started).toISOString(),
+          method: init.method ?? "POST",
+          path: routeOf(path),
+          reason: timedOut ? "timeout" : "network",
+          online: navigator.onLine,
+          visible,
+          elapsedMs: Date.now() - started,
+        });
+      }
+      if (timedOut) throw new ApiError("서버가 제때 답하지 않았어요. 잠시 후 다시 확인해요.", 0, "timeout");
       throw new ApiError("서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요.", 0, "offline");
+    } finally {
+      clearTimeout(timer);
     }
+    // Only once the session has proven good: an upload answered 401 would expire it a second time.
+    if (response.ok && authenticated && path !== "/diagnostics") void uploadMisses();
 
-    const payload = (await response.json().catch(() => ({}))) as { error?: unknown };
+    let payload: { error?: unknown } = {};
+    try {
+      payload = (JSON.parse(text) ?? {}) as { error?: unknown };
+    } catch {
+      // Not JSON (an empty body, a proxy page); the status still says what happened.
+    }
     if (!response.ok) {
       const message =
         typeof payload.error === "string" ? payload.error : "요청을 처리하지 못했어요.";
@@ -207,6 +330,6 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
         method: "DELETE",
         body: { token },
       }),
-    status: () => request<StatusResult>("/status", { method: "GET" }),
+    status: () => request<StatusResult>("/status", { method: "GET", timeoutMs: POLL_TIMEOUT_MS }),
   };
 }

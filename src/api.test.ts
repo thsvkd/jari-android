@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createHttpApi, createSessionStorage, resolveApiBase } from "./api";
+import { createConnectionMissLog, createHttpApi, createSessionStorage, resolveApiBase } from "./api";
 
 const response = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -234,4 +234,98 @@ it("logout clears local A before waiting for revocation and never revokes B", as
   expect(new Headers(fetcher.mock.calls[0]![1]?.headers).get("Authorization")).toBe("Bearer A");
   expect(await storage.read()).toBe("B");
   expect(expired).not.toHaveBeenCalled();
+});
+
+describe("connection misses", () => {
+  const signedIn = () => createSessionStorage({ read: async () => "opaque-session", write: async () => {}, clear: async () => {} });
+
+  it("records a request that got no answer by route and uploads it after the next success", async () => {
+    const connectionMisses = createConnectionMissLog();
+    const fetcher = vi.fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockImplementation(async () => response({ ok: true }));
+    const api = createHttpApi({ baseUrl: "https://jari.example", tokenStorage: signedIn(), fetcher, connectionMisses });
+
+    await expect(api.seatCars("m-opaque-key", "general", 2)).rejects.toMatchObject({ kind: "offline" });
+    expect(connectionMisses.read()).toEqual([
+      expect.objectContaining({ method: "GET", path: "/trains/:key/cars", reason: "network", online: true, visible: true }),
+    ]);
+
+    await api.status();
+    await vi.waitFor(() => expect(connectionMisses.read()).toEqual([]));
+    const upload = fetcher.mock.calls.find(([url]) => String(url).endsWith("/diagnostics"))!;
+    expect(JSON.parse(String(upload[1]!.body))).toEqual({
+      misses: [expect.objectContaining({ path: "/trains/:key/cars", reason: "network" })],
+    });
+  });
+
+  it("gives a swallowed status poll up after 20 seconds as a timeout, not as offline", async () => {
+    vi.useFakeTimers();
+    try {
+      const connectionMisses = createConnectionMissLog();
+      const fetcher = vi.fn<typeof fetch>().mockImplementation((_, init) => new Promise((_, reject) => {
+        init!.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }));
+      const api = createHttpApi({ baseUrl: "https://jari.example", tokenStorage: signedIn(), fetcher, connectionMisses });
+      const poll = expect(api.status()).rejects.toMatchObject({ kind: "timeout" });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await poll;
+      expect(connectionMisses.read()).toEqual([expect.objectContaining({ path: "/status", reason: "timeout", elapsedMs: 20_000 })]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the deadline over a body that never arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_, init) => {
+        const body = new ReadableStream({ start(controller) { init!.signal!.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError"))); } });
+        return new Response(body, { status: 200 });
+      });
+      const api = createHttpApi({ baseUrl: "https://jari.example", tokenStorage: signedIn(), fetcher });
+      const poll = expect(api.status()).rejects.toMatchObject({ kind: "timeout" });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await poll;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives no deadline to requests that wait on Korail", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => response({ ok: true }));
+    const api = createHttpApi({ baseUrl: "https://jari.example", tokenStorage: signedIn(), fetcher });
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    await api.seatCars("m-opaque-key", "general", 2);
+    expect(timers).not.toHaveBeenCalled();
+  });
+
+  it("keeps misses the server did not take, except ones it rejected as malformed", async () => {
+    const connectionMisses = createConnectionMissLog();
+    const miss = { at: "2026-09-30T03:41:10.000Z", method: "GET", path: "/status", reason: "network" as const, online: true, visible: true, elapsedMs: 3 };
+    connectionMisses.add(miss);
+    const answers = [response({}, 503), response({}, 400)];
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url) =>
+      String(url).endsWith("/diagnostics") ? answers.shift()! : response({ ok: true }));
+    const api = createHttpApi({ baseUrl: "https://jari.example", tokenStorage: signedIn(), fetcher, connectionMisses });
+
+    await api.status();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(connectionMisses.read()).toEqual([miss]);
+    await api.status();
+    await vi.waitFor(() => expect(connectionMisses.read()).toEqual([]));
+  });
+
+  it("keeps the latest 50 misses across restarts in the storage it is given", () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) };
+    const log = createConnectionMissLog(storage);
+    for (let i = 0; i < 55; i += 1) log.add({ at: String(i), method: "GET", path: "/status", reason: "network", online: true, visible: true, elapsedMs: i });
+    const reopened = createConnectionMissLog(storage);
+    expect(reopened.read()).toHaveLength(50);
+    expect(reopened.read()[0]!.at).toBe("5");
+    reopened.drop(reopened.read());
+    expect(store.size).toBe(0);
+  });
 });

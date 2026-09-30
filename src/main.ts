@@ -2,7 +2,7 @@ import "./styles.css";
 
 import { Capacitor } from "@capacitor/core";
 
-import { ApiError, createHttpApi, createSessionStorage, resolveApiBase } from "./api";
+import { ApiError, createConnectionMissLog, createHttpApi, createSessionStorage, resolveApiBase } from "./api";
 import { JariApp } from "./app";
 import { createDemoApi } from "./demo";
 import {
@@ -11,6 +11,7 @@ import {
   followKeyboard,
   initializePlatform,
   readToken,
+  watchForeground,
   writeToken,
 } from "./platform";
 
@@ -41,6 +42,7 @@ async function launch(): Promise<void> {
           baseUrl: apiBase,
           tokenStorage: session,
           onAuthExpired: () => app?.start(false),
+          connectionMisses: createConnectionMissLog(window.localStorage),
         });
 
     const initialize = async (enablePushRegistration: boolean): Promise<void> => {
@@ -67,6 +69,7 @@ async function launch(): Promise<void> {
       onTheme: applyStatusBarStyle,
     });
 
+    await watchForeground((foreground) => app?.setForeground(foreground));
     const authenticated = demoMode || Boolean(await session.read());
     await app.start(authenticated);
   } catch (error) {

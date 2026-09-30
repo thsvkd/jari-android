@@ -2190,3 +2190,83 @@ it("keeps a plain search notice's title in the text colour (the tone never borro
   expect(item.classList.contains("muted")).toBe(false);
   expect(item.querySelector(".notification-head b")?.textContent).toBe("자리 찾기");
 });
+
+it("rechecks at once on returning to the foreground instead of keeping the offline banner up to the next poll", async () => {
+  const status = vi.fn().mockRejectedValue(new ApiError("서버에 연결하지 못했어요.", 0, "offline"));
+  const { app, root } = await mountLive({ status });
+  vi.useFakeTimers();
+  await app.start(true);
+  await vi.advanceTimersByTimeAsync(35_000);
+  expect(root.querySelector(".offline-banner")).not.toBeNull();
+
+  app.setForeground(false);
+  status.mockClear();
+  // Android may have cut a backgrounded app off the network, so it does not poll there at all.
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(status).not.toHaveBeenCalled();
+
+  status.mockResolvedValue({ running: null, scheduled: null, pending: [] });
+  app.setForeground(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(status).toHaveBeenCalledOnce();
+  expect(root.querySelector(".offline-banner")).toBeNull();
+});
+
+it("rechecks when the phone reports it is back online", async () => {
+  const status = vi.fn().mockRejectedValue(new ApiError("서버에 연결하지 못했어요.", 0, "offline"));
+  const { app, root } = await mountLive({ status });
+  vi.useFakeTimers();
+  await app.start(true);
+  await vi.advanceTimersByTimeAsync(35_000);
+  expect(root.querySelector(".offline-banner")).not.toBeNull();
+
+  status.mockResolvedValue({ running: null, scheduled: null, pending: [] });
+  window.dispatchEvent(new Event("online"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(root.querySelector(".offline-banner")).toBeNull();
+});
+
+it("does not pile interval polls, but a resume asks afresh and drops the answer to the poll sent before it", async () => {
+  const answers: Array<(value: unknown) => void> = [];
+  const status = vi.fn().mockImplementation(() => new Promise((resolve) => { answers.push(resolve); }));
+  const { app, root } = await mountLive({ status });
+  vi.useFakeTimers();
+  await app.start(true);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(status).toHaveBeenCalledOnce();
+
+  app.setForeground(true);
+  expect(status).toHaveBeenCalledTimes(2);
+  answers[1]!({ running: null, scheduled: null, pending: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  // The poll from before the pause answers late with a running search; it no longer counts.
+  answers[0]!({ running: { depDate: "20261009", srcLocate: "서울", dstLocate: "동대구", health: "healthy" }, scheduled: null, pending: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(root.textContent).toContain("대기 중인 항목이 없어요");
+});
+
+it("counts a status poll that timed out as unconfirmed, not offline", async () => {
+  const status = vi.fn().mockRejectedValue(new ApiError("서버가 제때 답하지 않았어요.", 0, "timeout"));
+  const { app, root } = await mountLive({ status });
+  vi.useFakeTimers();
+  await app.start(true);
+  await vi.advanceTimersByTimeAsync(65_000);
+  expect(root.querySelector(".offline-banner")).toBeNull();
+  expect(root.textContent).toContain("현재 상태를 확인할 수 없어요");
+});
+
+it("takes a visible page as being in front even if the native resume was lost", async () => {
+  const status = vi.fn().mockResolvedValue({ running: null, scheduled: null, pending: [] });
+  const { app } = await mountLive({ status });
+  vi.useFakeTimers();
+  await app.start(true);
+  app.setForeground(false);
+  status.mockClear();
+  window.dispatchEvent(new Event("online"));
+  await vi.advanceTimersByTimeAsync(60_000);
+  // "online" fires in the background too, so it does not bring polling back.
+  expect(status).not.toHaveBeenCalled();
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(status).toHaveBeenCalledOnce();
+});

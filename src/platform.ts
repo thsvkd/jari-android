@@ -94,6 +94,18 @@ export async function applyStatusBarStyle(theme: "light" | "dark"): Promise<void
   }
 }
 
+/**
+ * Capacitor leaves the WebView's timers running in the background, where Android may cut the app off the network.
+ * Registered once for the life of the page: initializePlatform re-adds its listeners on every bootstrap, and a resume
+ * landing in that gap would be lost.
+ */
+export async function watchForeground(onForeground: (foreground: boolean) => void): Promise<void> {
+  if (!isNative()) return;
+  const { App } = await import("@capacitor/app");
+  await App.addListener("pause", () => onForeground(false));
+  await App.addListener("resume", () => onForeground(true));
+}
+
 export async function disposePlatform(): Promise<void> {
   await removeBackListener?.();
   removeBackListener = undefined;
