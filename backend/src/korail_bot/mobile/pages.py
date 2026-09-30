@@ -40,11 +40,17 @@ nav { margin: 0 0 16px; font-size: .95rem; }
 """
 
 
+def _mail_link(contact: str) -> str:
+    address = escape(contact, quote=True)
+    # Cloudflare's email obfuscation swaps an address for a decoder script, which
+    # this page's CSP blocks, leaving "[email protected]". These comments opt out.
+    return f'<!--email_off--><a href="mailto:{address}">{address}</a><!--/email_off-->'
+
+
 def _contact(contact: str | None) -> str:
     if contact:
-        address = escape(contact, quote=True)
         return (
-            f'<p>개인정보 문의와 웹 탈퇴 요청: <a href="mailto:{address}">{address}</a></p>'
+            f"<p>개인정보 문의와 웹 탈퇴 요청: {_mail_link(contact)}</p>"
             "<p>보내실 때 앱 아이디를 적어 주세요. 비밀번호나 코레일 계정 정보는 보내지 마세요.</p>"
         )
     return (
@@ -85,9 +91,8 @@ def _in_app_steps() -> str:
 
 def _email_steps(contact: str | None) -> str:
     if contact:
-        address = escape(contact, quote=True)
         how = (
-            f'<a href="mailto:{address}">{address}</a> 로 <b>앱 아이디</b>를 적어 탈퇴를 요청해 주세요. '
+            f"{_mail_link(contact)} 로 <b>앱 아이디</b>를 적어 탈퇴를 요청해 주세요. "
             "제목은 “자리났다 탈퇴 요청”이면 됩니다."
         )
     else:

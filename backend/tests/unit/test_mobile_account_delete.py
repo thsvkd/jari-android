@@ -384,6 +384,8 @@ def test_public_pages_are_cacheable_html_for_any_browser(pages, path):
         assert "Access-Control-Allow-Origin" not in response.headers
         body = response.get_data(as_text=True)
         assert 'href="mailto:privacy@example.com"' in body
+        # Kept out of Cloudflare's email obfuscation, whose decoder the CSP blocks.
+        assert body.count("<!--email_off-->") == body.count("mailto:") == 2
         assert "설정</b>을 누릅니다" in body
         assert "앱 없이" in body
         assert '<span class="app">자리났다</span>' in body
