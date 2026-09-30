@@ -22,6 +22,9 @@
   기존 앱 위에 덮어쓰는 업데이트가 아니라 별도 앱으로 설치되고, 사용자는 다시 로그인해야 합니다.
   즐겨찾기와 코레일 계정 연결은 서버에 있으므로 그대로 유지됩니다.
   Firebase도 새 패키지명으로 Android 앱을 다시 등록해 `google-services.json`을 받아야 합니다.
+- 4.13.0부터 Google Play에 올리면서 `applicationId`가 `dev.thsvkd.jari`로 바뀌었습니다(`namespace`와
+  Java 패키지는 `com.jari.app` 그대로). 역시 별도 앱으로 설치됩니다. Play용 AAB는 `scripts/release-play.sh`,
+  사이드로드 APK는 `scripts/release-android.sh`가 만들며 둘은 서명이 달라 서로 업데이트되지 않습니다(docs/SPEC.md §11).
 
 ## 로컬 시작
 
@@ -122,7 +125,7 @@ cleartext HTTP. A debug-only network policy permits `localhost` and `10.0.2.2`
 for emulator API verification; it is not included in release builds.
 
 There is no separate e2e app. The device stage of `npm run verify` builds the
-normal app (`com.jari.app`, `assembleDebug -PjariNoFirebase`) with
+normal app (`dev.thsvkd.jari`, `assembleDebug -PjariNoFirebase`) with
 `VITE_API_BASE_URL=http://127.0.0.1:18281`, installs it on an Android emulator,
 clears its data and reaches the local e2e server through `adb reverse`. It
 refuses a physical device unless `JARI_ALLOW_PHYSICAL_DEVICE=1` is set, because
@@ -207,15 +210,17 @@ devDependencies: @capacitor/cli
 uses an AES-GCM key generated in Android Keystore and stores only its IV and
 ciphertext in private SharedPreferences.
 
-## Push is intentionally unavailable until configured
+## Push
 
 Do not add a Firebase configuration file or cloud credentials to this
-repository. The client requests Android 13 notification permission and calls
+repository. Release builds take `google-services.json` from Doppler
+(`JARI_ANDROID_GOOGLE_SERVICES_B64`) only for the duration of the build; see
+docs/SPEC.md §11 for the whole push path. The client requests Android 13 notification permission and calls
 FCM registration only when the frontend passes `enablePushRegistration: true`
 and supplies `onPushToken`. Without a valid Firebase Android app configuration,
 the registration error is surfaced to the UI and no delivery is claimed. A
 future operator must provision Firebase outside this repository for the current
-`com.jari.app` package name, place the appropriate non-secret runtime
+`dev.thsvkd.jari` package name, place the appropriate non-secret runtime
 configuration through the approved Android release process, and configure the
 server's authenticated `/api/mobile/devices` endpoint before enabling that
 option. A `google-services.json` issued for the former package name no longer

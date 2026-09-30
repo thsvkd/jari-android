@@ -20,7 +20,9 @@ android {
     namespace "com.jari.app"
     compileSdk rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.jari.app"
+        // The installed package (Play's permanent ID). com.jari.app was taken on Play; the code's
+        // namespace, Java package and MainActivity stay com.jari.app.
+        applicationId "dev.thsvkd.jari"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 41202

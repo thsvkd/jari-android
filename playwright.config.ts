@@ -35,11 +35,12 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   projects: [
-    { name: "phone-light", use: { ...phone, colorScheme: "light" } },
+    // device.spec 은 Android 뒤로가기(adb)를 눌러요. 헤드리스 브라우저에는 그 버튼이 없어요.
+    { name: "phone-light", use: { ...phone, colorScheme: "light" }, testIgnore: /device\.spec/ },
     { name: "phone-dark", use: { ...phone, colorScheme: "dark" }, grep: /@layout/ },
     // 좁은 폰에서도 규칙을 지켜요. 344dp 는 지원하는 가장 좁은 화면(갤럭시 폴드 커버)이에요.
     { name: "phone-narrow", use: { ...phone, viewport: { width: 344, height: 780 }, deviceScaleFactor: 3 }, grep: /@layout/ },
-    // 에뮬레이터: scripts/verify.mjs 가 앱(com.jari.app 디버그 빌드)을 설치하고 WebView 디버깅 포트를 넘긴 뒤에만 켜져요.
+    // 에뮬레이터: scripts/verify.mjs 가 앱(dev.thsvkd.jari 디버그 빌드)을 설치하고 WebView 디버깅 포트를 넘긴 뒤에만 켜져요.
     // 스크린샷 기준은 헤드리스에서만 비교해요(기기는 상태 표시줄·글꼴이 달라요).
     // connection.spec 은 브라우저 네트워크를 끊어요. 기기에서 끊으면 에뮬레이터 전체가 끊겨요.
     // restart.spec 은 서버 재시작을 검증해요. 앱 쪽은 폴링을 다시 읽을 뿐이라 헤드리스로 충분하고, 기기 단계의 제한 시간을 서버 재시작에 쓰지 않아요.

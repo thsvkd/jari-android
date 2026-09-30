@@ -7,7 +7,7 @@
 //   npm run verify -- --ci --device --only=에뮬레이터   GitHub Actions 의 Android 에뮬레이터로 기기 단계만.
 //   npm run verify -- --only=에뮬레이터   이름에 그 말이 든 단계만(고치는 동안). 기록은 남기지 않아요.
 //
-// 실제 코레일에는 닿지 않아요. 기기 단계는 에뮬레이터에 평소 앱(com.jari.app, 디버그 빌드)을 그대로 깔고 앱 데이터를 비운 채 돌려요.
+// 실제 코레일에는 닿지 않아요. 기기 단계는 에뮬레이터에 평소 앱(dev.thsvkd.jari, 디버그 빌드)을 그대로 깔고 앱 데이터를 비운 채 돌려요.
 // 그래서 실폰에서는 거부해요(폰의 실제 앱을 덮어쓰고 지워요). 정말 폰에서 돌릴 때만 JARI_ALLOW_PHYSICAL_DEVICE=1 을 줘요.
 
 import { spawnSync } from "node:child_process";
@@ -22,7 +22,9 @@ const DEVICE = !CI || process.argv.includes("--device");
 const ONLY = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length);
 const E2E_API_PORT = 18281; // playwright.config.ts 의 E2E.api
 const DEVTOOLS_PORT = 9377; // 이 PC 의 9222 는 다른 프로그램이 써요.
-const APP = "com.jari.app";
+// 설치되는 패키지(applicationId)와 액티비티 클래스(코드의 namespace)는 달라요. Play 에서 com.jari.app 을 쓸 수 없어 패키지만 바꿨어요.
+const APP = "dev.thsvkd.jari";
+const ACTIVITY = "com.jari.app.MainActivity";
 
 // macOS(brew)에서는 JDK 21 과 Android SDK 위치를 따로 알려 주지 않아도 기기 단계가 APK 를 빌드할 수 있게 해요.
 if (process.platform === "darwin") {
@@ -79,7 +81,7 @@ function prepareDevice() {
         : `연결된 기기가 ${devices.length}대예요. 에뮬레이터 한 대만 띄우거나, 여러 대면 ANDROID_SERIAL 로 하나를 골라 주세요.`,
     );
   }
-  // 이 단계는 평소 앱(com.jari.app)을 덮어쓰고 데이터를 지워요. 실폰의 실제 앱·로그인을 지키려고 에뮬레이터에서만 돌려요.
+  // 이 단계는 평소 앱(dev.thsvkd.jari)을 덮어쓰고 데이터를 지워요. 실폰의 실제 앱·로그인을 지키려고 에뮬레이터에서만 돌려요.
   const target = serial || devices[0].split("\t")[0];
   if (!target.startsWith("emulator-") && process.env.JARI_ALLOW_PHYSICAL_DEVICE !== "1") {
     throw new Error(
@@ -94,7 +96,7 @@ function prepareDevice() {
       "기기 화면이 꺼져 있거나 잠겨 있어요. 잠금을 풀고 검증이 끝날 때까지 화면을 켜 두세요(개발자 옵션의 '화면 켜진 상태로 유지'가 편해요).",
     );
   }
-  // 로컬 서버 주소로 웹 번들 → Capacitor 동기화 → 디버그 APK(평소 앱과 같은 com.jari.app). 푸시(Firebase)는 빼서 알림 권한·토큰 등록이 끼지 않게 해요.
+  // 로컬 서버 주소로 웹 번들 → Capacitor 동기화 → 디버그 APK(평소 앱과 같은 dev.thsvkd.jari). 푸시(Firebase)는 빼서 알림 권한·토큰 등록이 끼지 않게 해요.
   run("npm run build", { env: { VITE_API_BASE_URL: `http://127.0.0.1:${E2E_API_PORT}` } });
   run("npx cap sync android");
   run(`${process.platform === "win32" ? "gradlew.bat" : "./gradlew"} assembleDebug -PjariNoFirebase`, { cwd: join(ROOT, "android") });
@@ -111,7 +113,7 @@ function prepareDevice() {
   adb(`shell pm clear ${APP}`);
   adb(`reverse tcp:${E2E_API_PORT} tcp:${E2E_API_PORT}`);
   adb(`shell am force-stop ${APP}`);
-  adb(`shell am start -n ${APP}/com.jari.app.MainActivity`);
+  adb(`shell am start -n ${APP}/${ACTIVITY}`);
   let pid = "";
   for (let attempt = 0; attempt < 30 && !pid; attempt++) {
     pid = spawnSync(`adb shell pidof ${APP}`, { shell: true, encoding: "utf8" }).stdout.trim();
@@ -139,7 +141,7 @@ function releaseDevice() {
 
 // 기기 단계를 맨 앞에 둬요. 에뮬레이터를 먼저 띄워 두면 되고, 나머지는 기기 없이 돌아요.
 const deviceStep = [
-  "에뮬레이터 e2e (com.jari.app)",
+  "에뮬레이터 e2e (dev.thsvkd.jari)",
   () => {
     const cdp = prepareDevice();
     try {
