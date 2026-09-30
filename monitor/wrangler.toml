@@ -1,0 +1,17 @@
+# 자리났다 외부 감시 Worker. 배포는 monitor/deploy.sh 가 해요(KV id 를 찾아 넣고, 시크릿을 Doppler 에서 올려요).
+name = "jari-monitor"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+# 1분마다. Workers 무료 플랜의 cron 으로 충분해요.
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+HEALTH_URL = "https://jari.thsvkd.dev/api/mobile/health"
+
+# id 는 deploy.sh 가 계정에서 찾거나 만들어 채워요(__STATE_NAMESPACE_ID__).
+[[kv_namespaces]]
+binding = "STATE"
+id = "__STATE_NAMESPACE_ID__"

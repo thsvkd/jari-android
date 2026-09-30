@@ -7,6 +7,7 @@ set -e
 echo "커밋 전 빠른 검사(타입·vitest·ruff)..." >&2
 npx tsc --noEmit -p .
 npx tsc --noEmit -p e2e/tsconfig.json
+npx tsc --noEmit -p monitor/tsconfig.json
 npx vitest run --reporter=dot
 cd backend
 uv run --frozen ruff check src tests

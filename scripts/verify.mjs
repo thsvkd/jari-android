@@ -153,7 +153,7 @@ const deviceStep = [
 const steps = [
   ...(DEVICE ? [deviceStep] : []),
   ["프론트 유닛·모듈 (vitest)", () => run("npm test")],
-  ["프론트 타입·빌드", () => run("npm run build && npx tsc -p e2e/tsconfig.json --noEmit")],
+  ["프론트 타입·빌드", () => run("npm run build && npx tsc -p e2e/tsconfig.json --noEmit && npx tsc -p monitor/tsconfig.json --noEmit")],
   ["데모 빌드", () => run("npm run build:demo")],
   ...(process.platform === "win32"
     ? [["Android 빌드 스크립트", () => run("powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-build-android.ps1")]]

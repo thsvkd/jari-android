@@ -38,3 +38,7 @@ htmlcov/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# monitor/deploy.sh 가 배포 때만 만드는 설정
+monitor/.wrangler.deploy.toml
+monitor/.wrangler/
