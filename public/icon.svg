@@ -1,14 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#7588f4"/>
-      <stop offset="1" stop-color="#4058c8"/>
-    </linearGradient>
-  </defs>
-  <rect width="512" height="512" rx="128" fill="url(#g)"/>
-  <circle cx="256" cy="256" r="150" fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="4"/>
-  <circle cx="256" cy="256" r="98" fill="none" stroke="#fff" stroke-opacity=".32" stroke-width="4"/>
-  <path d="M256 256 374 176a143 143 0 0 0-118-63Z" fill="#fff" fill-opacity=".18"/>
-  <circle cx="343" cy="182" r="12" fill="#fff"/>
-  <text x="256" y="293" text-anchor="middle" font-family="sans-serif" font-size="116" font-weight="800" fill="#fff">자</text>
-</svg>
+<svg role="img" aria-label="자리났다" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><rect x="0" y="0" width="512" height="512" rx="175.1578947368421" fill="#202631"/><g transform="translate(87.57894736842104 87.57894736842104) scale(10.526315789473685)"><path d="M8,7H11A3,3 0 0 1 14,10V18A3,3 0 0 1 11,21H8A3,3 0 0 1 5,18V10A3,3 0 0 1 8,7Z" fill="#F6F7F9"/><path d="M21,7H24A3,3 0 0 1 27,10V18A3,3 0 0 1 24,21H21A3,3 0 0 1 18,18V10A3,3 0 0 1 21,7Z" fill="#F6F7F9"/><path d="M7,25H25" fill="none" stroke="#F6F7F9" stroke-width="2.5" stroke-linecap="round"/></g></svg>
