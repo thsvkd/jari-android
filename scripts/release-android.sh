@@ -8,6 +8,13 @@
 # 릴리스는 지금까지 디버그 빌드를 디버그 키로 서명해 내왔어요. 인증서가 바뀌면 기존 앱 위에 업데이트되지 않고
 # 지우고 다시 깔아야 하므로, 서명 뒤에 지문을 확인하고 다르면 APK 를 남기지 않아요.
 #
+# 패키지는 dev.thsvkd.jari 예요(4.13.0 부터. Play 에서 com.jari.app 을 쓸 수 없었어요). 예전 com.jari.app 앱 위에 업데이트되지 않고 따로 깔려요.
+# Google Play 용 AAB 는 scripts/release-play.sh 가 만들어요. Play 에서 받은 앱(Play 앱 서명 키)과 이 APK(디버그 키)는
+# 같은 패키지여도 서명이 달라 서로 업데이트되지 않아요. 한 폰에서는 한쪽만 쓰고, 바꿀 때는 지우고 다시 깔아요.
+#
+# Doppler 에 JARI_ANDROID_GOOGLE_SERVICES_B64 가 있으면 빌드하는 동안만 android/app/google-services.json 으로 풀어 넣어
+# 휴대폰 알림(FCM)이 켜진 앱을 만들어요. 없으면 알림이 꺼진 앱이 되고 그렇다고 알려요. 이미 있는 파일은 그대로 써요.
+#
 # 서명키는 Doppler 에 두고 빌드 때만 꺼내요. 저장소에 없고, 디스크에는 서명하는 동안의 임시 파일뿐이에요.
 #   JARI_SIGNING_KEY         debug(기본: 지금까지 낸 릴리스와 같은 키) | release
 #   Doppler 시크릿           JARI_ANDROID_<DEBUG|RELEASE>_ 뒤에 KEYSTORE_B64 / STORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD
@@ -47,7 +54,11 @@ APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V
 # --- 서명키: Doppler 에서 꺼내 임시 파일로 복원해요. 끝나면(실패해도) 지워요.
 KEYSTORE=""
 TEMP_KEYSTORE=""
-cleanup() { if [[ -n "$TEMP_KEYSTORE" ]]; then rm -f "$TEMP_KEYSTORE"; fi; }
+TEMP_SERVICES=""
+cleanup() {
+  if [[ -n "$TEMP_KEYSTORE" ]]; then rm -f "$TEMP_KEYSTORE"; fi
+  if [[ -n "$TEMP_SERVICES" ]]; then rm -f "$TEMP_SERVICES"; fi
+}
 trap cleanup EXIT
 secret() {
   doppler secrets get "JARI_ANDROID_$(echo "$KIND" | tr '[:lower:]' '[:upper:]')_$1" --plain \
@@ -84,6 +95,37 @@ if [[ "$KIND" == "debug" && "$KEYSTORE_SHA" != "$EXPECTED_DEBUG_CERT_SHA256" ]];
 fi
 
 cd "$ROOT"
+APP_ID="$(sed -n 's/^ *applicationId "\([^"]*\)".*/\1/p' android/app/build.gradle | head -1)"
+[[ -n "$APP_ID" ]] || fail "android/app/build.gradle 에서 applicationId 를 읽지 못했어요."
+
+# --- Firebase 설정(휴대폰 알림). 있으면 이 패키지의 클라이언트가 들어 있는지 먼저 봐요: 없으면 Gradle 이 빌드 중간에 멈춰요.
+SERVICES="$ROOT/android/app/google-services.json"
+if [[ ! -e "$SERVICES" ]] && command -v doppler >/dev/null; then
+  SERVICES_B64="$(doppler secrets get JARI_ANDROID_GOOGLE_SERVICES_B64 --plain \
+    --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" 2>/dev/null || true)"
+  if [[ -n "$SERVICES_B64" ]]; then
+    TEMP_SERVICES="$SERVICES"
+    ( umask 077; printf '%s' "$SERVICES_B64" | base64 --decode > "$SERVICES" ) \
+      || fail "JARI_ANDROID_GOOGLE_SERVICES_B64 를 base64 로 풀지 못했어요."
+  fi
+  unset SERVICES_B64
+fi
+if [[ -e "$SERVICES" ]]; then
+  node -e '
+    const [file, appId] = process.argv.slice(1);
+    let config;
+    try { config = JSON.parse(require("fs").readFileSync(file, "utf8")); } catch { console.error("google-services.json 이 JSON 이 아니에요."); process.exit(1); }
+    const packages = (config.client ?? []).map((client) => client?.client_info?.android_client_info?.package_name).filter(Boolean);
+    if (!packages.includes(appId)) {
+      console.error(`google-services.json 에 ${appId} 클라이언트가 없어요(있는 것: ${packages.join(", ") || "없음"}).`);
+      process.exit(1);
+    }
+  ' "$SERVICES" "$APP_ID" || fail "Firebase 콘솔에서 $APP_ID 앱이 든 google-services.json 을 받아 Doppler 의 JARI_ANDROID_GOOGLE_SERVICES_B64 를 바꿔 주세요."
+  echo "== 휴대폰 알림: 켜짐 (google-services.json, $APP_ID)"
+else
+  echo "== 휴대폰 알림: 꺼짐 (Doppler 에 JARI_ANDROID_GOOGLE_SERVICES_B64 가 없어요)"
+fi
+
 VERSION="$(node -p "require('./package.json').version")"
 echo "== 앱 $VERSION 웹 번들 ($API_BASE_URL)"
 VITE_API_BASE_URL="$API_BASE_URL" npm run build
@@ -106,7 +148,7 @@ if [[ "$ACTUAL" != "$KEYSTORE_SHA" ]]; then
   fail "서명 인증서 지문이 키스토어와 달라 APK 를 지웠어요: $ACTUAL"
 fi
 
-echo "APK: $OUT"
+echo "APK: $OUT ($APP_ID)"
 echo "서명 SHA-256: $ACTUAL"
 if command -v shasum >/dev/null; then
   echo "APK SHA-256: $(shasum -a 256 "$OUT" | awk '{print $1}')"
