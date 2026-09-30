@@ -100,23 +100,43 @@ def print_running(config, *, as_json):
 
     Run beside the API (docker compose exec), against the same Redis: it only
     reads. Each record says which run it belongs to - a restart that brought
-    it back gives it the new run's - and whether a worker is performing it.
+    it back gives it the new run's - whether a worker is performing it and
+    whether that worker has logged in.
+
+    With --json the answer is one line, RUNNING=<json>, and everything else
+    this process says - a log warning about a login it cannot decrypt, say -
+    goes to stderr: the script reads that one line, and a warning ahead of the
+    JSON used to make the whole listing unreadable.
     """
+    import logging
+    import time
+
     from korail_bot.mobile.process import MobileReservationService
     from korail_bot.mobile.storage import MobileStorage
+    from korail_bot.utils.logger import LoggerFactory
+
+    # Configured now, so that no later import configures it afresh on stdout.
+    LoggerFactory.configure_root_logger()
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, logging.StreamHandler) and handler.stream is sys.stdout:
+            handler.setStream(sys.stderr)
 
     storage = MobileStorage(secret=config.secret, url=config.redis_url)
     try:
-        searches = MobileReservationService(storage, None, config).describe_running()
+        service = MobileReservationService(storage, None, config)
+        searches = service.describe_running()
+        stopped = service.describe_stopped()
     finally:
         storage.close()
     if as_json:
-        print(json.dumps({"searches": searches}))
+        listing = {"now": int(time.time()), "searches": searches, "stopped": stopped}
+        print("RUNNING=" + json.dumps(listing))
         return
     for row in searches:
         print(
             f"{row['id']} run={row['runId']} pid={row['pid']} "
             f"worker={'alive' if row['workerAlive'] else 'gone'} "
+            f"logged_in={'yes' if row['loggedIn'] else 'no'} "
             f"resumable={'yes' if row['resumable'] else 'no (' + row['reason'] + ')'} "
             f"login_ttl={row['credentialTtlSeconds']}s"
         )

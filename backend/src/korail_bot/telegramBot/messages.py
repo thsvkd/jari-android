@@ -1326,6 +1326,9 @@ Mini App을 열면 기기의 시간대로 자동 갱신됩니다.
 
     SEARCH_DIED_CAUSE_START_FAILED = "검색 프로세스가 시작 직후 종료되었습니다."
     SEARCH_DIED_CAUSE_CRASHED = "검색 프로세스가 예기치 않게 종료되었습니다."
+    SEARCH_DIED_CAUSE_KORAIL_UNREACHABLE = (
+        "코레일 서버가 응답하지 않아 여러 번 다시 시도했지만 로그인하지 못했습니다."
+    )
     SEARCH_DIED_CAUSE_RESUME_FAILED = (
         "서버가 재시작된 뒤 검색을 여러 번 다시 시작하려 했지만 실패했습니다."
     )

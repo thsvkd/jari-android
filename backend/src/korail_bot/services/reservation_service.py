@@ -253,6 +253,11 @@ class ReservationService:
                 search_params=search_params,
                 run_id=settings.RUN_ID,
             )
+            # Before the record: the worker waits for the record before it
+            # logs in, so no mark of its own can be written yet, and any mark
+            # still here is an earlier worker's - one that may have had the
+            # very PID this one was given.
+            self.storage.clear_search_marks(chat_id)
             self.storage.save_running_reservation(reservation)
 
             # A search is running for this chat again, so any earlier one that
@@ -382,6 +387,7 @@ class ReservationService:
         korail_id: str,
         search_params: TrainSearchParams,
         cause: DeathCause,
+        must_store: bool = False,
     ) -> None:
         """
         Put a stopped search where the user can act on it, and say so.
@@ -391,6 +397,10 @@ class ReservationService:
         It is not simply deleted either: the user asked for a search, the
         search did not happen, and the details are what starting it again
         needs.
+
+        must_store: raise, and say nothing, when storage fails. For a caller
+            that will try again: telling the user about a record still in
+            place is telling them something that is not so.
         """
         resumable = bool(
             settings.RESUME_ON_RESTART and self.storage.get_resume_credentials(chat_id)
@@ -414,6 +424,8 @@ class ReservationService:
                 self.storage.save_user_session(session)
         except Exception as e:
             logger.error(f"Could not record the dead search for chat_id={chat_id}: {e}")
+            if must_store:
+                raise
 
         self._announce_death(dead)
 
@@ -426,6 +438,7 @@ class ReservationService:
             DeathCause.START_FAILED: Messages.SEARCH_DIED_CAUSE_START_FAILED,
             DeathCause.CRASHED: Messages.SEARCH_DIED_CAUSE_CRASHED,
             DeathCause.RESUME_FAILED: Messages.SEARCH_DIED_CAUSE_RESUME_FAILED,
+            DeathCause.KORAIL_UNREACHABLE: Messages.SEARCH_DIED_CAUSE_KORAIL_UNREACHABLE,
         }
         params = dead.search_params
         timezone_name = self.storage.get_user_timezone(dead.chat_id)
@@ -901,18 +914,27 @@ class ReservationService:
                 summary["retrying"] += 1
                 continue
 
-            # Never due again in this run, whatever becomes of the record: the
-            # user hears about this search exactly once.
-            self._resume_attempts[key] = (tries, float("inf"))
             logger.error(f"Giving up on resuming chat_id={reservation.chat_id} after {tries} tries")
             try:
-                self._give_up_resuming(reservation)
+                given_up = self._give_up_resuming(reservation)
             except Exception as e:
+                # Nothing was said and the record is still there: giving up is
+                # tried again next time round, rather than leaving a record
+                # whose login keep_resumable renews forever and which the next
+                # restart would quietly resume.
                 logger.error(
                     f"Could not record the search chat_id={reservation.chat_id} gave up on: {e}",
                     exc_info=True,
                 )
-            summary["failed"] += 1
+                self._resume_attempts[key] = (
+                    tries,
+                    time.monotonic() + self._RESUME_RETRY_SECONDS,
+                )
+                continue
+            # Never due again in this run: its record is gone either way.
+            self._resume_attempts[key] = (tries, float("inf"))
+            if given_up:
+                summary["failed"] += 1
 
         logger.info(
             f"Restart recovery: {summary['resumed']} resumed, "
@@ -978,34 +1000,17 @@ class ReservationService:
 
         # A search stopped between Korail holding a seat and the record being
         # cleared already did its job. Starting it again would go looking for
-        # a second seat beside the one waiting to be paid for.
-        if self._holds_seat_since(reservation):
+        # a second seat beside the one waiting to be paid for. Asked of the
+        # worker's own mark rather than of the payment records: a seat the
+        # user booked straight from the seat map while this search ran is
+        # recorded there too, and says nothing about this search.
+        if self.storage.search_mark_pid(chat_id, "held_seat") == reservation.process_id:
             return "seat_held"
 
         if not self.storage.get_resume_credentials(chat_id):
             return "no_credentials"
 
         return None
-
-    def _holds_seat_since(self, reservation: RunningReservation) -> bool:
-        """Whether a seat this chat has yet to pay for was taken after the search began."""
-        from korail_bot.utils.timezone import as_utc
-
-        chat_id = reservation.chat_id
-        started = as_utc(reservation.started_at)
-
-        payment = self.storage.get_payment_status(chat_id)
-        if (
-            payment
-            and not payment.completed
-            and not payment.cancelled
-            and payment.created_at
-            and as_utc(payment.created_at) >= started
-        ):
-            return True
-
-        multi = self.storage.get_multi_reservation_status(chat_id)
-        return bool(multi and multi.get_pending_count() > 0 and as_utc(multi.created_at) >= started)
 
     def _resume(self, reservation: RunningReservation) -> bool:
         """
@@ -1037,20 +1042,35 @@ class ReservationService:
             restoring=True,
         )
 
-    def _give_up_resuming(self, reservation: RunningReservation) -> None:
+    def _give_up_resuming(self, reservation: RunningReservation) -> bool:
         """
         Stop trying to bring a search back, and tell the user once.
 
         Kept as a stopped search rather than dropped, with its login: every
         try failed on this side, not on anything the user did, and the same
         search started again by hand may well work.
+
+        Read again first, as _reconcile_record does, and under the same lock
+        (MobileReservationService): the last failed try let go of it, and the
+        user may have stopped the search since, or started another whose
+        record this would otherwise move away and announce as stopped.
+
+        Returns:
+            True when the search was given up on; False when its record had
+            already gone or been replaced. Raises when it could not be
+            recorded, having said nothing.
         """
+        current = self.storage.get_running_reservation(reservation.chat_id)
+        if current is None or self._resume_key(current) != self._resume_key(reservation):
+            return False
         self._record_death(
             reservation.chat_id,
             reservation.korail_id,
             reservation.search_params,
             DeathCause.RESUME_FAILED,
+            must_store=True,
         )
+        return True
 
     def _abandon(self, reservation: RunningReservation, reason: str | None = None) -> None:
         """Tell the user their search is over and drop every trace of it."""
@@ -1074,6 +1094,7 @@ class ReservationService:
 
         self.telegram.send_message(chat_id, text)
 
+        self.storage.record_resume_abandoned(chat_id, reason or "unknown")
         self.storage.delete_running_reservation(chat_id)
         self.storage.delete_resume_credentials(chat_id)
         self.storage.delete_app_session_start(chat_id)

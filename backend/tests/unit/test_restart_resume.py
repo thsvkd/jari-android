@@ -1,6 +1,7 @@
 """A search running when the API restarts comes back in the new process."""
 
 import json
+import os
 import sys
 import threading
 import time
@@ -16,7 +17,6 @@ from korail_bot.mobile.process import MobileReservationService
 from korail_bot.mobile.storage import MobileStorage
 from korail_bot.models import (
     DeathCause,
-    MultiReservationStatus,
     PaymentStatus,
     RunningReservation,
     TrainSearchParams,
@@ -207,6 +207,8 @@ def test_a_login_korail_did_not_answer_twice_is_tried_again_and_the_search_runs(
     assert waits == [5.0, 15.0]
     assert rail.searched
     worker._send_callback.assert_not_called()
+    # Logged in, and says so for the deploy check.
+    assert worker.storage.search_mark_pid(CHAT, "logged_in") == os.getpid()
 
 
 def test_a_refused_login_ends_the_search_at_once(tmp_path, monkeypatch):
@@ -221,6 +223,7 @@ def test_a_refused_login_ends_the_search_at_once(tmp_path, monkeypatch):
     message = worker._send_callback.call_args.args[0]
     assert worker._send_callback.call_args.kwargs["status"] == 1
     assert "로그인 실패" in message
+    assert worker.storage.search_mark_pid(CHAT, "logged_in") is None
 
 
 def test_korail_unreachable_past_every_retry_says_so_rather_than_blame_the_password(
@@ -239,6 +242,27 @@ def test_korail_unreachable_past_every_retry_says_so_rather_than_blame_the_passw
     assert worker._send_callback.call_args.kwargs["status"] == 1
     assert "연결하지 못해" in message
     assert "비밀번호" not in message
+
+
+def test_a_search_korail_never_let_log_in_is_kept_to_start_again(tmp_path, monkeypatch):
+    from korail_bot.telegramBot.telebotBackProcess import BackgroundReservationProcess
+
+    monkeypatch.setattr(settings, "LOGIN_RETRY_DELAYS_SECONDS", (1.0,))
+    rail = _Rail([(False, True)] * 2)
+    worker, _ = _worker(tmp_path, monkeypatch, rail)
+    # This worker's own record, as the runtime wrote it, and its login.
+    _left_by_an_earlier_run(worker.storage, pid=os.getpid())
+
+    BackgroundReservationProcess.run(worker)
+
+    # Not ended through the callback, which deletes the login: a stopped
+    # search the user is told about, with everything starting it again needs.
+    worker._send_callback.assert_not_called()
+    assert worker.storage.get_running_reservation(CHAT) is None
+    dead = worker.storage.get_dead_search(CHAT)
+    assert (dead.cause, dead.resumable) == (DeathCause.KORAIL_UNREACHABLE, True)
+    assert worker.storage.get_resume_credentials(CHAT) is not None
+    assert "로그인하지 못했습니다" in worker.telegram.send_message.call_args.args[1]
 
 
 # ==================== 3. A failed resume is tried again ====================
@@ -350,37 +374,36 @@ def test_a_search_that_had_just_taken_a_seat_is_not_resumed_beside_it(tmp_path, 
     storage, service = _service(tmp_path)
     start = MagicMock(side_effect=AssertionError("resumed beside a held seat"))
     monkeypatch.setattr(service, "start_reservation_process", start)
-    _left_by_an_earlier_run(storage, started_minutes_ago=30)
-    # Korail held the seat and the worker wrote it down; the SIGTERM came
-    # before the callback cleared the running record.
-    storage.save_payment_status(
-        PaymentStatus(
-            chat_id=CHAT,
-            completed=False,
-            reminder_active=True,
-            reservation_id="PNR1",
-            expires_at=utc_now() + timedelta(minutes=10),
-        )
-    )
+    left = _left_by_an_earlier_run(storage)
+    # Korail held the seat and the worker marked it; the SIGTERM came before
+    # the callback cleared the running record.
+    storage.mark_search_held_seat(CHAT, left.process_id)
 
     assert service.reconcile_after_restart()["interrupted"] == 1
 
     assert storage.get_running_reservation(CHAT) is None
     assert storage.get_resume_credentials(CHAT) is None
     assert "두 번 잡지" in service.telegram.send_message.call_args.args[1]
+    # And the deploy check can tell it was the restart that ended it.
+    (stopped,) = service.describe_stopped()
+    assert (stopped["id"], stopped["why"]) == (CHAT, "not_resumed_seat_held")
     storage.close()
 
 
-def test_a_seat_held_from_before_the_search_began_does_not_stop_it_resuming(tmp_path, monkeypatch):
+def test_a_seat_booked_from_the_seat_map_beside_a_search_does_not_stop_it_resuming(
+    tmp_path, monkeypatch
+):
+    # The seat map books straight away while a search may be running; that
+    # payment record is newer than the search and has nothing to do with it.
     storage, service = _service(tmp_path)
     monkeypatch.setattr(service, "start_reservation_process", MagicMock(return_value=True))
-    _left_by_an_earlier_run(storage, started_minutes_ago=5)
+    _left_by_an_earlier_run(storage)
     storage.save_payment_status(
         PaymentStatus(
             chat_id=CHAT,
             completed=False,
-            reservation_id="PNR0",
-            created_at=utc_now() - timedelta(minutes=8),
+            reservation_id="PNR-SEAT-MAP",
+            expires_at=utc_now() + timedelta(minutes=10),
         )
     )
 
@@ -388,33 +411,38 @@ def test_a_seat_held_from_before_the_search_began_does_not_stop_it_resuming(tmp_
     storage.close()
 
 
-def test_seats_held_one_by_one_since_the_search_began_stop_it_resuming(tmp_path):
-    from korail_bot.models import ReservationPaymentStatus, SingleReservationInfo
-
+def test_a_seat_mark_left_by_another_worker_does_not_stop_a_search_resuming(tmp_path, monkeypatch):
     storage, service = _service(tmp_path)
-    record = _left_by_an_earlier_run(storage)
-    storage.save_multi_reservation_status(
-        MultiReservationStatus(
-            chat_id=CHAT,
-            reservations=[
-                SingleReservationInfo(
-                    reservation_id="PNR1",
-                    reservation_obj=None,
-                    reserved_at=utc_now(),
-                    expires_at=utc_now() + timedelta(minutes=10),
-                    status=ReservationPaymentStatus.PENDING,
-                    seat_number=1,
-                    train_info="KTX 00101",
-                )
-            ],
-            total_seats=2,
-            seat_strategy="random",
-            created_at=utc_now(),
-        )
-    )
+    monkeypatch.setattr(service, "start_reservation_process", MagicMock(return_value=True))
+    left = _left_by_an_earlier_run(storage)
+    storage.mark_search_held_seat(CHAT, left.process_id + 1)
 
-    assert service.resume_blocker(record) == "seat_held"
+    assert service.reconcile_after_restart()["resumed"] == 1
     storage.close()
+
+
+def test_a_new_search_starts_without_the_marks_of_the_one_before(tmp_path, monkeypatch):
+    storage, service = _service(tmp_path)
+    monkeypatch.setattr(settings, "PROCESS_START_GRACE_SECONDS", 0.2)
+    _worker_that(service, "import sys, time; sys.stdin.read(); time.sleep(30)")
+    # Left by an earlier worker - in a container, quite possibly with the PID
+    # the next one is given.
+    storage.redis.set(f"search_logged_in:{CHAT}", "1")
+    storage.redis.set(f"search_held_seat:{CHAT}", "1")
+    try:
+        assert service.start_reservation_process(
+            chat_id=CHAT,
+            username="0000000000",
+            password="rail password",
+            search_params=TrainSearchParams(
+                dep_date="20261003", src_locate="서울", dst_locate="부산", dep_time="070000"
+            ),
+        )
+        assert storage.search_mark_pid(CHAT, "logged_in") is None
+        assert storage.search_mark_pid(CHAT, "held_seat") is None
+    finally:
+        _stop_children(service)
+        storage.close()
 
 
 # ==================== 6. Shutdown is never mistaken for deaths ====================
@@ -501,33 +529,214 @@ def test_a_stale_pid_that_is_now_one_of_our_own_searches_is_left_alone(tmp_path,
         storage.close()
 
 
+# ==================== The give-up belongs to the record it read ====================
+
+
+def test_a_search_its_user_restarted_before_the_give_up_is_left_alone(tmp_path, monkeypatch):
+    storage, service = _service(tmp_path)
+    monkeypatch.setattr(service, "_RESUME_ATTEMPTS", 1)
+    monkeypatch.setattr(service, "_resume", lambda reservation: False)
+    left = _left_by_an_earlier_run(storage)
+    tried = service._reconcile_record
+
+    def then_the_user_starts_again(reservation):
+        outcome = tried(reservation)
+        # The last try has let go of the lock; the user stops the search and
+        # starts it afresh before the give-up gets to it.
+        storage.save_running_reservation(
+            RunningReservation(
+                chat_id=CHAT,
+                process_id=4242,
+                korail_id="0000000000",
+                search_params=left.search_params,
+                run_id=settings.RUN_ID,
+            )
+        )
+        return outcome
+
+    monkeypatch.setattr(service, "_reconcile_record", then_the_user_starts_again)
+
+    assert service.reconcile_after_restart()["failed"] == 0
+
+    assert storage.get_running_reservation(CHAT).process_id == 4242
+    assert storage.get_dead_search(CHAT) is None
+    service.telegram.send_message.assert_not_called()
+    storage.close()
+
+
+def test_a_retry_waits_for_an_operation_already_under_way_on_that_search(tmp_path, monkeypatch):
+    storage, service = _service(tmp_path)
+    tried = threading.Event()
+    monkeypatch.setattr(service, "_resume", lambda reservation: tried.set() or True)
+    _left_by_an_earlier_run(storage)
+
+    # The user's cancel, say, holding the chat's lock.
+    lock = service.operation_lock(CHAT)
+    lock.acquire()
+    try:
+        retry = threading.Thread(target=service.reconcile_after_restart, daemon=True)
+        retry.start()
+        assert not tried.wait(0.3)
+    finally:
+        lock.release()
+    retry.join(5)
+
+    assert tried.is_set()
+    storage.close()
+
+
+def test_a_give_up_that_cannot_be_recorded_says_nothing_and_is_tried_again(tmp_path, monkeypatch):
+    storage, service = _service(tmp_path)
+    monkeypatch.setattr(service, "_RESUME_ATTEMPTS", 1)
+    monkeypatch.setattr(service, "_RESUME_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(service, "_resume", lambda reservation: False)
+    _left_by_an_earlier_run(storage)
+    saves = storage.save_dead_search
+    monkeypatch.setattr(storage, "save_dead_search", MagicMock(side_effect=OSError("Redis gone")))
+
+    assert service.reconcile_after_restart()["failed"] == 0
+
+    # Not told, and not left pinned: the record would otherwise keep its
+    # login renewed and be resumed by the next restart after all.
+    assert storage.get_running_reservation(CHAT) is not None
+    service.telegram.send_message.assert_not_called()
+
+    monkeypatch.setattr(storage, "save_dead_search", saves)
+    assert service.reconcile_after_restart()["failed"] == 1
+    assert storage.get_running_reservation(CHAT) is None
+    assert storage.get_dead_search(CHAT).cause is DeathCause.RESUME_FAILED
+    assert service.telegram.send_message.call_count == 1
+    storage.close()
+
+
+# ==================== The app shows a search that is being brought back ====================
+
+
+def test_a_search_still_being_brought_back_shows_as_registered_not_as_gone(tmp_path):
+    from korail_bot.mobile.runtime import MobileRuntime
+
+    client = fakeredis.FakeRedis(decode_responses=True)
+    runtime = MobileRuntime(
+        MobileConfig(str(tmp_path / "identity.sqlite3"), "a" * 40, "redis://localhost:1/1"),
+        redis_client=client,
+    )
+    _left_by_an_earlier_run(runtime.storage)
+
+    running = runtime.gateway._running(CHAT)
+
+    # The app's running-unverified state: "자리 찾기는 서버에 등록돼 있어요".
+    assert running["health"] == "unknown"
+    assert running["lastCheckedAt"] is None
+    assert running["srcLocate"] == "서울"
+
+    # A search of this run whose worker is gone is still not shown.
+    record = runtime.storage.get_running_reservation(CHAT)
+    record.run_id = settings.RUN_ID
+    runtime.storage.save_running_reservation(record)
+    assert runtime.gateway._running(CHAT) is None
+    runtime.storage.close()
+
+
 # ==================== What the deploy check reads ====================
 
 
-def test_the_running_listing_says_what_a_restart_would_do_without_secrets(tmp_path, monkeypatch):
-    from korail_bot.mobile import __main__ as cli
-
+def test_the_running_listing_says_what_a_restart_would_do_without_secrets(tmp_path):
     storage, service = _service(tmp_path)
-    _left_by_an_earlier_run(storage, chat_id=-1)
+    first = _left_by_an_earlier_run(storage, chat_id=-1)
     _left_by_an_earlier_run(storage, chat_id=-2)
     storage.save_partial_reservation(-2, 0, {"rsv_id": "PNR1"})
-    monkeypatch.setattr("korail_bot.mobile.storage.MobileStorage", lambda **kwargs: storage)
-    printed = []
-    monkeypatch.setattr("builtins.print", lambda text: printed.append(text))
+    storage.mark_search_logged_in(-1, first.process_id)
 
-    cli.print_running(service.config, as_json=True)
+    searches = service.describe_running()
 
-    (listing,) = printed
-    assert "0000000000" not in listing and "rail password" not in listing
-    searches = json.loads(listing)["searches"]
+    assert "0000000000" not in json.dumps(searches)
+    assert "rail password" not in json.dumps(searches)
     assert [row["id"] for row in searches] == [-2, -1]
-    assert searches[0]["resumable"] is False
-    assert searches[0]["reason"] == "seats_reserved"
-    assert searches[1]["resumable"] is True
-    assert searches[1]["reason"] is None
+    assert (searches[0]["resumable"], searches[0]["reason"]) == (False, "seats_reserved")
+    assert (searches[1]["resumable"], searches[1]["reason"]) == (True, None)
     assert searches[1]["runId"] == "an-earlier-run"
     assert searches[1]["workerAlive"] is False
+    assert (searches[0]["loggedIn"], searches[1]["loggedIn"]) == (False, True)
     assert searches[1]["credentialTtlSeconds"] > 0
+    storage.close()
+
+
+def test_the_running_listing_is_one_line_a_script_can_read_whatever_is_logged(tmp_path):
+    import os
+    import socket
+    import subprocess
+
+    from fakeredis import TcpFakeServer
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = TcpFakeServer(("127.0.0.1", port))
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"redis://127.0.0.1:{port}/0"
+    try:
+        storage = MobileStorage(secret="a" * 40, url=url)
+        _left_by_an_earlier_run(storage)
+        # A login stored under another key: reading it logs a warning, which
+        # used to land on stdout ahead of the JSON.
+        other = MobileStorage(secret="b" * 40, url=url)
+        other.save_resume_credentials(CHAT, "0000000000", "rail password")
+        other.close()
+        storage.close()
+        env = {
+            **os.environ,
+            "MOBILE_SECRET": "a" * 40,
+            "MOBILE_REDIS_URL": url,
+            "MOBILE_DATA_DIR": str(tmp_path),
+        }
+        env.pop("MOBILE_SECRET_FILE", None)
+
+        done = subprocess.run(
+            [sys.executable, "-m", "korail_bot.mobile", "running", "--json"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert done.returncode == 0, done.stderr
+    assert "could not be read" in done.stderr
+    (line,) = done.stdout.splitlines()
+    assert line.startswith("RUNNING=")
+    listing = json.loads(line.removeprefix("RUNNING="))
+    (row,) = listing["searches"]
+    assert (row["id"], row["resumable"], row["reason"]) == (CHAT, False, "no_credentials")
+    assert listing["now"] > 0 and listing["stopped"] == []
+    assert "0000000000" not in done.stdout and "rail password" not in done.stdout
+
+
+def test_the_stopped_listing_names_searches_that_ended_without_finishing(tmp_path):
+    from korail_bot.models import DeadSearch
+
+    storage, service = _service(tmp_path)
+    left = _left_by_an_earlier_run(storage, chat_id=-1)
+    storage.save_dead_search(
+        DeadSearch(
+            chat_id=-1,
+            korail_id="0000000000",
+            search_params=left.search_params,
+            cause=DeathCause.KORAIL_UNREACHABLE,
+        )
+    )
+    storage.record_resume_abandoned(-2, "seat_held")
+
+    stopped = service.describe_stopped()
+
+    assert [(row["id"], row["why"]) for row in stopped] == [
+        (-2, "not_resumed_seat_held"),
+        (-1, "korail_unreachable"),
+    ]
+    assert all(abs(row["at"] - time.time()) < 60 for row in stopped)
+    storage.close()
 
 
 @pytest.mark.parametrize("resume", [True, False])

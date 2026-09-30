@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 
+import httpx
 import pytest
 import requests
+from korail_mobile_api import KorailClient, KorailConfig
 from korail_mobile_api.errors import (
     KorailAuthError,
     KorailServiceUnavailableError,
@@ -174,3 +176,57 @@ def test_a_relogin_korail_never_answered_fails_quietly(monkeypatch):
 
     assert service._relogin() is False
     assert service._logged_in is False
+
+
+def _korail_answering_login(login_reply):
+    """
+    The real korail_mobile_api client over a fake transport: the service check
+    and the crypto parameters succeed, and the login POST gets `login_reply`.
+    The whole login path of the library runs, wrapping included.
+    """
+
+    def reply(request):
+        if request.url.path.endswith("MobileService.cache"):
+            return httpx.Response(200, json={"strResult": "SUCC", "h_msg_cd": "", "h_msg_txt": ""})
+        if request.url.path.endswith("common.code.do"):
+            return httpx.Response(
+                200,
+                json={"strResult": "SUCC", "h_msg_cd": "", "h_msg_txt": "", "pwdAESCphd": "N"},
+            )
+        return login_reply
+
+    return KorailClient(KorailConfig(enable_dynapath=True), transport=httpx.MockTransport(reply))
+
+
+@pytest.mark.parametrize(
+    "login_reply",
+    [
+        # Korail down for maintenance at the login POST itself, which the
+        # library re-raises as KorailAuthError.
+        httpx.Response(200, json={"strResult": "FAIL", "h_msg_cd": "SEMGTK", "h_msg_txt": "점검"}),
+        # A maintenance page instead of a Korail answer.
+        httpx.Response(200, text="<html>서비스 점검 중</html>"),
+        httpx.Response(503, text="Service Unavailable"),
+    ],
+)
+def test_korail_down_at_the_login_itself_is_not_a_refusal(monkeypatch, login_reply):
+    service = KorailService()
+    monkeypatch.setattr(
+        service, "_build_modern_client", lambda: _korail_answering_login(login_reply)
+    )
+
+    assert service.login("1234567890", "synthetic-password") is False
+
+    assert service.login_unavailable is True
+
+
+def test_a_login_korail_turns_down_is_a_refusal(monkeypatch):
+    service = KorailService()
+    refused = httpx.Response(
+        200, json={"strResult": "FAIL", "h_msg_cd": "WRC000392", "h_msg_txt": "비밀번호 오류"}
+    )
+    monkeypatch.setattr(service, "_build_modern_client", lambda: _korail_answering_login(refused))
+
+    assert service.login("1234567890", "synthetic-password") is False
+
+    assert service.login_unavailable is False

@@ -39,6 +39,12 @@ class MobileReservationService(ReservationService):
         with self.operation_lock(reservation.chat_id), self.start_lock:
             return super()._reconcile_record(reservation)
 
+    def _give_up_resuming(self, reservation):
+        # Under the same lock, for the same reason: the try that failed last
+        # has let go of it, and what is recorded now may be a new search.
+        with self.operation_lock(reservation.chat_id), self.start_lock:
+            return super()._give_up_resuming(reservation)
+
     def shutdown(self):
         # The flag first, then the lock: a start already under way finishes
         # and its child is among those killed below; one not yet begun sees
@@ -68,8 +74,9 @@ class MobileReservationService(ReservationService):
     def describe_running(self):
         """
         Every running record as the deploy check reads it: which run it
-        belongs to, whether a worker is performing it, and whether a restart
-        would bring it back. Nothing secret - no Korail ID, no login.
+        belongs to, whether a worker is performing it, whether that worker has
+        logged in to Korail, and whether a restart would bring it back.
+        Nothing secret - no Korail ID, no login.
 
         Called from a process of its own (python -m korail_bot.mobile running)
         beside the API, so no record is this process's run: whether a worker
@@ -84,6 +91,10 @@ class MobileReservationService(ReservationService):
                     "runId": record.run_id,
                     "pid": record.process_id,
                     "workerAlive": self._owns_process(record.process_id),
+                    # Spawned is not searching: a resumed worker can spend
+                    # minutes riding out Korail before it logs in, or fail to.
+                    "loggedIn": self.storage.search_mark_pid(record.chat_id, "logged_in")
+                    == record.process_id,
                     "resumable": blocker is None,
                     "reason": blocker,
                     "credentialTtlSeconds": self.storage.resume_credentials_ttl(record.chat_id),
@@ -91,6 +102,23 @@ class MobileReservationService(ReservationService):
                 }
             )
         return sorted(rows, key=lambda row: row["id"])
+
+    def describe_stopped(self):
+        """
+        The searches that ended without finishing, for the deploy check to
+        tell from ones that simply finished while it waited: every stopped
+        search still on file (its cause), and every record a restart cleaned
+        up instead of resuming (its reason). 'at' is epoch seconds.
+        """
+        rows = [
+            {"id": dead.chat_id, "why": dead.cause.value, "at": int(dead.died_at.timestamp())}
+            for dead in self.storage.get_all_dead_searches()
+        ]
+        rows += [
+            {"id": chat_id, "why": f"not_resumed_{note['reason']}", "at": note["at"]}
+            for chat_id, note in self.storage.get_resume_abandonments().items()
+        ]
+        return sorted(rows, key=lambda row: (row["id"], row["at"]))
 
     def _process_command(self, arguments):
         return [sys.executable, "-m", "korail_bot.mobile.worker", *arguments, self.tag]

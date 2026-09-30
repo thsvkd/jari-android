@@ -356,6 +356,47 @@ class BackgroundReservationProcess:
             time.sleep(delays[attempt])
         return False
 
+    def _leave_mark(self, mark) -> None:
+        """
+        Leave one of the marks storage keeps beside the running record.
+
+        Best effort: the search is worth more than the mark. A missing login
+        mark fails the deploy check loudly rather than silently; a missing
+        seat mark leaves the payment records to say a seat is held.
+        """
+        try:
+            mark(self.chat_id, os.getpid())
+        except Exception as e:
+            logger.warning(f"Could not leave a mark for chat_id={self.chat_id}: {e}")
+
+    def _stop_resumable(self) -> bool:
+        """
+        Stop a search Korail never let log in, keeping it to start again.
+
+        Recorded as a stopped search, with its login, rather than ended
+        through the callback, which deletes the login: the credentials were
+        never at fault, and a search a restart brought back should not be lost
+        for good to a Korail outage that happened to begin at the same moment.
+        The user hears the usual notice for a stopped search.
+
+        Returns:
+            False when this process's record is not there to keep - the
+            caller then ends the search as before
+        """
+        from korail_bot.models import DeathCause
+        from korail_bot.services.reservation_service import ReservationService
+
+        record = self.storage.get_running_reservation(self.chat_id)
+        if record is None or record.process_id != os.getpid():
+            return False
+        ReservationService(self.storage, self.telegram)._record_death(
+            self.chat_id,
+            record.korail_id,
+            record.search_params,
+            DeathCause.KORAIL_UNREACHABLE,
+        )
+        return True
+
     def run(self):
         """Run the reservation process."""
         try:
@@ -366,7 +407,11 @@ class BackgroundReservationProcess:
                 logger.error("Login failed")
                 if self.rail.login_unavailable:
                     # Korail never answered. Saying the password is wrong
-                    # would send the user off to fix something that is fine.
+                    # would send the user off to fix something that is fine,
+                    # and deleting the login - which the callback does - would
+                    # leave nothing to start the search again with.
+                    if self._stop_resumable():
+                        return
                     self._send_callback(
                         "🌐 코레일 서버에 연결하지 못해 검색을 멈췄습니다.\n\n"
                         "로그인을 여러 번 다시 시도했지만 코레일이 응답하지 않았습니다. "
@@ -394,6 +439,9 @@ class BackgroundReservationProcess:
                 return
 
             logger.info("Login successful, starting reservation loop...")
+            # What the deploy check waits for: a resumed search is only back
+            # once its worker is logged in, not the moment it was spawned.
+            self._leave_mark(self.storage.mark_search_logged_in)
 
             if self.seat_plan is not None:
                 self._run_cancellation_wait()
@@ -476,6 +524,9 @@ class BackgroundReservationProcess:
                 return
 
             if reservation:
+                # First, before anything that can be interrupted: a restart
+                # from here on must not search for this seat a second time.
+                self._leave_mark(self.storage.mark_search_held_seat)
                 logger.info(f"Reservation successful: {reservation}")
 
                 # Check if this is a random allocation with multiple reservations
@@ -691,6 +742,8 @@ class BackgroundReservationProcess:
                 logger.error("지정 좌석 예약에 예약번호가 없어 즉시 반환합니다.")
                 self.rail.release_unpaid_hold(capture.hold)
                 continue
+            # Korail holds a seat for this search now; see the same mark in run().
+            self._leave_mark(self.storage.mark_search_held_seat)
 
             deadline = self._payment_deadline(capture.hold)
             hints = self._train_hints(capture.hold)

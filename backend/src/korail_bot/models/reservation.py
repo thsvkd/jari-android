@@ -300,6 +300,8 @@ class DeathCause(StrEnum):
     CRASHED = "crashed"
     # Left behind by a restart, and every attempt to bring it back failed.
     RESUME_FAILED = "resume_failed"
+    # Korail could not be reached to log in, however long the search waited.
+    KORAIL_UNREACHABLE = "korail_unreachable"
 
 
 @dataclass

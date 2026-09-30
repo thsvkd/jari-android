@@ -38,8 +38,10 @@ from korail_mobile_api import payloads as _read_payloads
 from korail_mobile_api.constants import KORAIL_STANDBY_WAIT_FLAG
 from korail_mobile_api.errors import (
     KorailAppError,
+    KorailAuthError,
     KorailNetFunnelError,
     KorailNoResultsError,
+    KorailProtocolError,
     KorailServiceUnavailableError,
     KorailTransportError,
 )
@@ -65,16 +67,40 @@ _FORMATION_LOOKUP_OFFSETS = (7, 14)
 
 # A login that failed on these never reached a verdict on the credentials:
 # the round trip failed (a timeout, a refused connection, an HTTP 5xx - all
-# KorailTransportError), Korail said it is down (SEMGTK), or its queue turned
-# the request away. Everything else - a KorailAuthError above all - is Korail
-# answering, and asking again gets the same answer. OSError covers a socket
-# failure that escaped the client's own wrapping, requests' included.
+# KorailTransportError), Korail said it is down (SEMGTK), its queue turned the
+# request away, or what came back was not a Korail answer at all (an HTML
+# maintenance page is KorailProtocolError). Everything else - a KorailAuthError
+# above all - is Korail answering, and asking again gets the same answer.
+# OSError covers a socket failure that escaped the client's own wrapping,
+# requests' included.
 _LOGIN_UNAVAILABLE = (
     KorailTransportError,
     KorailServiceUnavailableError,
     KorailNetFunnelError,
+    KorailProtocolError,
     OSError,
 )
+
+
+class _KorailUnreachable(Exception):
+    """A login that never got an answer about the credentials; see _LOGIN_UNAVAILABLE."""
+
+
+def _korail_unreachable(exc: BaseException) -> bool:
+    """
+    Whether a failed login is one of _LOGIN_UNAVAILABLE, however it arrived.
+
+    The login POST itself turns every KorailAppError into a KorailAuthError
+    (korail_mobile_api session._login), SEMGTK included, so Korail being down
+    for maintenance at that moment reads as a wrong password unless the cause
+    underneath is looked at.
+    """
+    if isinstance(exc, _KorailUnreachable):
+        return True
+    if isinstance(exc, KorailAuthError) and isinstance(exc.__cause__, _LOGIN_UNAVAILABLE):
+        return True
+    return isinstance(exc, _LOGIN_UNAVAILABLE)
+
 
 # PNR-keyed unpaid seat detail. korail2 never calls this; ReservationView
 # (which it does call) lists bookings without the seats. letskorail and srtgo
@@ -364,9 +390,9 @@ class KorailService(RailService):
                 mask_phone(username),
                 type(exc).__name__,
             )
-            if isinstance(exc, _LOGIN_UNAVAILABLE):
+            if _korail_unreachable(exc):
                 # Not an answer about the credentials; login() says so.
-                raise
+                raise _KorailUnreachable(type(exc).__name__) from exc
             return False
 
         previous = self._modern_client
@@ -392,7 +418,9 @@ class KorailService(RailService):
         try:
             self._logged_in = self._login_with_current_api(username, password)
             self.login_unavailable = False
-        except _LOGIN_UNAVAILABLE:
+        except Exception as exc:
+            if not _korail_unreachable(exc):
+                raise
             self._logged_in = False
             self.login_unavailable = True
         if self._logged_in:
@@ -417,14 +445,15 @@ class KorailService(RailService):
             else:
                 logger.error("❌ Re-login failed")
             return self._logged_in
-        except _LOGIN_UNAVAILABLE as e:
-            # By type alone, as _login_with_current_api logs it: the text may
-            # quote the request, and the request carries the password.
-            logger.error(f"❌ Re-login failed: Korail unreachable ({type(e).__name__})")
-            self._logged_in = False
-            return False
         except Exception as e:
-            logger.error(f"❌ Re-login error: {e}")
+            if _korail_unreachable(e):
+                # By type alone, as _login_with_current_api logs it: the text
+                # may quote the request, and the request carries the password.
+                logger.error(
+                    f"❌ Re-login failed: Korail unreachable ({type(e.__cause__ or e).__name__})"
+                )
+            else:
+                logger.error(f"❌ Re-login error: {e}")
             self._logged_in = False
             return False
         finally:

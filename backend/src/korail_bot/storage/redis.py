@@ -883,6 +883,67 @@ class RedisStorage(StorageInterface):
         """Seconds left on a search's stored login; negative when there is none."""
         return int(self.redis.ttl(f"resume_credentials:{chat_id}"))
 
+    # ==================== What a search's worker has done ====================
+    #
+    # Two marks a worker leaves beside its running record, each holding the
+    # worker's PID so it speaks only for the record with that PID. Kept apart
+    # from the record because the record is the parent's to write: a worker
+    # writing it back could bring a search the user just stopped back to life.
+    # Both are cleared before a new record is written for the chat, so a mark
+    # left by an earlier search can never be read as one from a new worker
+    # that happens to get the same PID - which in a container is routine.
+
+    #: How long a mark outlives a worker that never cleaned up after itself.
+    SEARCH_MARK_TTL_SECONDS = 7 * 24 * 3600
+
+    def mark_search_logged_in(self, chat_id: int, pid: int) -> None:
+        """Note that the worker with this PID logged in to Korail and is searching."""
+        self.redis.set(f"search_logged_in:{chat_id}", str(pid), ex=self.SEARCH_MARK_TTL_SECONDS)
+
+    def mark_search_held_seat(self, chat_id: int, pid: int) -> None:
+        """Note that the worker with this PID has had Korail hold a seat."""
+        self.redis.set(f"search_held_seat:{chat_id}", str(pid), ex=self.SEARCH_MARK_TTL_SECONDS)
+
+    def search_mark_pid(self, chat_id: int, mark: str) -> int | None:
+        """The PID that left a mark ('logged_in' or 'held_seat'), if any did."""
+        value = self._text(self.redis.get(f"search_{mark}:{chat_id}"))
+        return int(value) if value and value.isdigit() else None
+
+    def clear_search_marks(self, chat_id: int) -> None:
+        """Forget the marks of any earlier worker, before a new one starts."""
+        self.redis.delete(f"search_logged_in:{chat_id}", f"search_held_seat:{chat_id}")
+
+    # ==================== Searches a restart did not bring back ====================
+
+    def record_resume_abandoned(self, chat_id: int, reason: str) -> None:
+        """
+        Note that a restart cleaned a search up instead of resuming it, and why.
+
+        The deploy check reads this to tell a search the restart gave up on
+        from one that simply finished while it waited. A day is ample: the
+        check runs minutes after the restart.
+        """
+        data = json.dumps({"reason": reason, "at": int(time.time())})
+        self.redis.set(f"resume_abandoned:{chat_id}", data, ex=86400)
+
+    def get_resume_abandonments(self) -> dict[int, dict]:
+        """Every note record_resume_abandoned left, by chat ID."""
+        notes = {}
+        for key in self._scan_keys("resume_abandoned:*"):
+            data = self.redis.get(key)
+            if data:
+                notes[int(key.rsplit(":", 1)[1])] = json.loads(data)
+        return notes
+
+    def get_all_dead_searches(self) -> list[DeadSearch]:
+        """Every stopped search still waiting on its user."""
+        searches = []
+        for key in self._scan_keys("dead_search:*"):
+            data = self.redis.get(key)
+            if data:
+                searches.append(self._deserialize_dead_search(json.loads(data)))
+        return searches
+
     # ==================== Korail Client Identity ====================
 
     def get_or_create_app_session_start(self, chat_id: int) -> str:

@@ -525,6 +525,20 @@ class MobileGateway(MiniAppGateway):
     def _running(self, chat_id):
         self.reservation.detect_dead_searches()
         record = self.storage.get_running_reservation(chat_id)
+        if record and record.is_stale(settings.RUN_ID):
+            # Left by the run before a restart, and still recorded: the
+            # runtime is bringing it back, retrying for up to about five
+            # minutes before it gives up and says so. Hiding it meanwhile
+            # showed no search at all, while starting one was refused as
+            # already running. "unknown" is the app's own word for a search
+            # that is registered but whose state it cannot vouch for.
+            running = super()._running(chat_id)
+            return running and {
+                **running,
+                "health": "unknown",
+                "lastCheckedAt": None,
+                "attemptCount": None,
+            }
         if record and not self.reservation._is_running(record.process_id):
             return None
         return super()._running(chat_id)
