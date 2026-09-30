@@ -1,6 +1,6 @@
 # 자리났다 — 기술 명세 (SPEC)
 
-문서 기준일: 2026-09-23, main `880cf0a`. 제품 의도는 [PRD.md](PRD.md). 2026-09-14의 [좌석 선택·취소표 대기 설계](superpowers/specs/2026-09-14-seat-waitlist-flow-design.md)는 이 문서가 대체하되, 좌석 계획 도메인(연속 좌석·떨어져 앉기·결제 기한)은 그 문서의 "취소표 대기 동작" 절이 여전히 유효하다.
+문서 기준일: 2026-10-01, 4.13.0(`feat/play-release`). 제품 의도는 [PRD.md](PRD.md). 2026-09-14의 [좌석 선택·취소표 대기 설계](superpowers/specs/2026-09-14-seat-waitlist-flow-design.md)는 이 문서가 대체하되, 좌석 계획 도메인(연속 좌석·떨어져 앉기·결제 기한)은 그 문서의 "취소표 대기 동작" 절이 여전히 유효하다.
 
 ## 1. 구성
 
@@ -63,6 +63,7 @@
 | `favourites` GET/POST, `favourites/<id>` DELETE | | 즐겨찾기 |
 | `notify`, `notifications`, `devices` | | 알림 간격, 알림 목록, 푸시 토큰 |
 | `health` | GET | 인증 없음. Redis 응답·런타임 리스 보유 → 200 `{ok:true,…}`, 아니면 503. 업타임 프로브와 compose healthcheck용 |
+| `account/delete` | POST | 회원 탈퇴(§10). 본문 `{password}`(앱 비밀번호를 다시 받는다). 틀리면 403(401은 앱이 세션 만료로 읽는다), 사용자당 5분 5회. 결제 대기 예약이 있거나 마지막 관리자면 409 |
 | `diagnostics` | POST | 앱이 응답을 받지 못한 요청 기록(`misses`, 최대 50건, 사용자당 60초 6회)을 올린다. 서버는 한 건에 한 줄 `Client connection miss user=… at= method= path= reason= online= visible= elapsedMs=`로 로그에 남긴다 |
 
 ### 3.1 진행 중 검색(`running`)
@@ -120,19 +121,39 @@ seatPlanSummary: "015 일반실 3호차 5A·5B · 019 좌석 무관" | ""
 
 ## 7. 확인 시트
 
-`confirmSheet({ title, body, confirmLabel, danger })` → `openSheet` 기반, 상태는 `this.sheet`(재렌더에 견딤), Escape·배경 탭·취소 = false. 위험 동작은 `.button.danger`(빨강 채움). `window.confirm`은 쓰지 않는다. 사용처: 그만 찾기, 예약 전체 취소, 코레일 계정 해제, 즐겨찾기 삭제, 바로 예약, 코레일 예약 대기 신청.
+`confirmSheet({ title, body, confirmLabel, danger })` → `openSheet` 기반, 상태는 `this.sheet`(재렌더에 견딤), Escape·배경 탭·취소 = false. 위험 동작은 `.button.danger`(빨강 채움). `window.confirm`은 쓰지 않는다. 사용처: 그만 찾기, 예약 전체 취소, 코레일 계정 해제, 즐겨찾기 삭제, 바로 예약, 코레일 예약 대기 신청, 회원 탈퇴. 입력이 필요한 시트는 `openSheet({content})`에 입력 칸을 넣고 확인 값으로 그 값을 받는다(`#sheet-date` 날짜, `#sheet-password` 탈퇴 비밀번호).
 
 ## 8. 검증
 
 - 앱: `npm test`(vitest/jsdom), `npm run build`, `npx tsc --noEmit`. `npm run build:demo`는 `dist/`를 덮어쓰므로 APK 빌드 전엔 `npm run build`를 다시 돌린다.
 - 서버: `backend/`에서 `uv run --frozen pytest tests/unit -q`, `ruff check/format`. 재시작 보존은 `tests/unit/test_restart_resume.py`와 `e2e/restart.spec.ts`(e2e 스택의 `POST /restart`가 서버를 SIGTERM으로 내렸다 같은 설정으로 띄운다), 배포 스크립트는 `bash scripts/test-deploy-backend.sh`(macOS bash 3.2에서도 돈다).
-- Android: `scripts/build-android.ps1`(PowerShell에서 실행), `adb install -r`. 기기 e2e는 `npm run verify`가 에뮬레이터에 평소 앱(`com.jari.app` 디버그 빌드, 로컬 e2e 서버 주소로 빌드)을 깔아 돌린다(별도 e2e 앱 없음). 디버그 APK는 WebView CDP(`adb forward tcp:9377 localabstract:webview_devtools_remote_<pid>`)로 DOM 계측이 가능하다.
+- Android: `scripts/build-android.ps1`(PowerShell에서 실행), `adb install -r`. 기기 e2e는 `npm run verify`가 에뮬레이터에 평소 앱(`dev.thsvkd.jari` 디버그 빌드, 로컬 e2e 서버 주소로 빌드)을 깔아 돌린다(별도 e2e 앱 없음). `e2e/device.spec.ts`는 기기에서만 돌며 `adb shell input keyevent KEYCODE_BACK`으로 Android 뒤로가기가 시트를 먼저 닫고 앞 화면으로 돌아가는지 본다(targetSdk 36의 예측 뒤로가기). 디버그 APK는 WebView CDP(`adb forward tcp:9377 localabstract:webview_devtools_remote_<pid>`)로 DOM 계측이 가능하다.
 - 실기기 감사 절차: 데모가 아니라 실서버로 전 경로(조회·좌석표·대기 시작/중지·시트·테마)를 돌리며 화면마다 버튼 높이·형제 간격·토큰 밖 색·터치 영역·넘침을 수집한다. 결제만 하지 않는다.
 
 ## 9. 알려진 제약·미결
 
-- 릴리스 서명키 없음 → 디버그 APK 배포.
+- 사이드로드 APK(`release-android.sh`)는 여전히 디버그 키로 서명한다. Play 앱과는 서로 업데이트되지 않는다(§11).
 - 조건 바꾸기(멈추고 재시작) 미구현. 결제 대기 열차는 잠금으로 합의.
 - 알림 항목은 서버 원문 문자열(제목·본문·기한 분리 미구현). 좌석 셀 라벨은 상태·위치 축이 섞여 있다.
 - 즐겨찾기에 좌석표 자리(seat_plan) 저장 안 함.
 - `korail_mobile_api` 상류 미수정(영숫자 종별 코드).
+
+## 10. 회원 탈퇴와 공개 페이지
+
+**탈퇴**(`POST /api/mobile/account/delete`, 앱: 설정 → 계정 → 회원 탈퇴 → 위험 확인 시트에서 앱 비밀번호): 순서는 다시 시도할 수 있게 철도 쪽 → 알림 → 아이디 순이다(`api.erase_account`). 아이디를 지우기 전까지는 다시 로그인해 재시도할 수 있다.
+1. 마지막 관리자면 409(`identity.delete_user`가 트랜잭션 안에서 다시 확인). 초대 코드는 관리자만 만들므로 관리자가 없어지면 아무도 들일 수 없다. 운영자가 `python -m korail_bot.mobile admin`으로 다른 관리자를 만든 뒤 탈퇴한다.
+2. `MobileGateway.delete_account`(사용자별 락 안): 결제 대기 예약이 있으면 409(돌려주는 것은 사용자가 보아야 할 코레일 요청이고, 결제 감시가 지울 로그인으로 계속 코레일에 묻게 된다). 그만 찾기와 같은 `cancel_search`로 워커를 PID로 멈추고 예약해 둔 찾기를 지운다. 멈추지 못하면 409. 그 뒤 메모리의 코레일 세션을 버리고 `MobileStorage.delete_user_data`가 `*:{id}`·`*:{id}:*` 키를 모두 지운다(세션·조건·코레일 로그인·재개용 로그인·실행/멈춘/예약한 기록·즐겨찾기·알림 간격·시간대·결제 기록·하트비트·표시). 남기는 것은 `search_ended:{id}` 하나: 개인정보가 없고 7일 뒤 만료되며, 배포 확인이 사라진 검색을 "잃음"이 아니라 "사용자가 멈춤"으로 읽는 근거다.
+3. `Notifications.forget`: 알림함·기기 토큰·보내지 못한 알림.
+4. `identity.delete_user`: 세션·아이디, 그 계정의 레이트리밋 버킷(`api`·`rail`·`diag`·`account-delete`·`auth-user`).
+- 앱은 성공하면 토큰과 최근 구간을 지우고 로그인 화면에 "탈퇴했어요" 알림을 한 번 보여 준다. 실패(비밀번호·결제 대기·관리자)는 토스트로 알리고 그대로 둔다.
+- 메일로 온 탈퇴 요청: API 옆에서 `docker compose exec -T api python -m korail_bot.mobile delete-account --username <앱 아이디>`. 같은 `erase_account`를 쓰고, 워커는 배포 확인처럼 프로세스 표로 찾아 멈춘다. 돌고 있는 API의 메모리에 남은 코레일 세션(최대 30분)과 좌석표 열차 키(30분)는 저절로 사라진다.
+
+**공개 페이지**: `GET /privacy`(개인정보처리방침), `GET /delete-account`(Play의 "계정 삭제 URL"). `/api/mobile` 밖이라 Caddy가 같은 호스트 전체를 넘기는 운영에서 `https://jari.thsvkd.dev/privacy`로 열린다. 세션이 필요 없고, Origin 검사를 건너뛰어 다른 사이트에서 연 링크도 열리며(CORS 헤더는 주지 않는다), `text/html; charset=utf-8`·`Cache-Control: public, max-age=3600`·`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`. 내용은 `mobile/pages.py`에 있고 저장·전송하는 것이 바뀌면 함께 고친다. 연락처는 `MOBILE_PRIVACY_CONTACT`(compose.yaml에 운영 주소), 없으면 앱의 설정 → 회원 탈퇴와 초대한 운영자를 안내한다.
+
+## 11. Android 빌드·배포와 휴대폰 알림
+
+- `applicationId`는 `dev.thsvkd.jari`(Play에서 `com.jari.app`을 쓸 수 없었다), 코드의 `namespace`·Java 패키지·액티비티는 그대로 `com.jari.app`(`com.jari.app.MainActivity`). `capacitor.config.ts`의 `appId`도 `dev.thsvkd.jari`. 4.12.x 이하의 `com.jari.app` 앱 위에는 업데이트되지 않고 따로 깔린다.
+- `compileSdk`·`targetSdk` 36(Play는 2026-08-31부터 새 앱·업데이트에 API 36을 요구), AGP 8.9.3(API 36을 지원하는 첫 줄), Gradle 8.11.1, JDK 21. Android 16에서 바뀐 것: 가장자리까지 그리기를 끌 수 없다 — 앱은 이미 `env(safe-area-inset-*)`로 그리고 끄는 설정(`windowOptOutEdgeToEdgeEnforcement`)을 쓰지 않는다. 예측 뒤로가기가 기본으로 켜져 `onBackPressed`가 불리지 않는다 — `@capacitor/app`은 `OnBackPressedDispatcher` 콜백으로 받으므로 `backButton` 리스너(`platform.ts`)가 그대로 온다(`e2e/device.spec.ts`). 600dp 이상 화면에서는 `screenOrientation="sensorPortrait"`가 무시된다(태블릿·폴드 펼침은 가로로도 돈다).
+- **Play(내부 테스트)**: `scripts/release-play.sh` → `dist-release/jari-<버전>-play.aab`. `bundleRelease`(디버그 불가 → Capacitor가 WebView 디버깅을 켜지 않는다), 운영 API 주소, 업로드 키(Doppler `JARI_ANDROID_RELEASE_*`)로 서명. Doppler `JARI_ANDROID_GOOGLE_SERVICES_B64`를 빌드 동안만 `android/app/google-services.json`으로 풀고 끝나면 지운다. 없거나 `applicationId`의 클라이언트가 없으면 멈춘다. 끝에 서명 인증서(업로드 키) SHA-256·SHA-1, versionCode/Name, 매니페스트(debuggable 아님·targetSdk 36, `JARI_BUNDLETOOL`이 있으면 bundletool로), `google_app_id` 포함, 웹 번들의 API 주소를 확인하고 어긋나면 AAB를 지운다. 올리는 것은 사람이 Play Console에서 한다.
+- **사이드로드**: `scripts/release-android.sh`(디버그 키, `assembleDebug`). 같은 Doppler 시크릿이 있으면 넣어 알림이 켜진 APK를 만든다(없으면 꺼진 채로 알린다). Play에서 받은 앱(Play 앱 서명 키)과 이 APK는 같은 패키지라도 서명이 달라 서로 업데이트되지 않는다: 한 폰에서는 한쪽만 쓰고, 바꿀 때는 지우고 다시 깐다.
+- **휴대폰 알림 경로**: 설정 → 휴대폰 알림(서버 `capabilities.push`가 참일 때만 누를 수 있다) → `initializePlatform({enablePushRegistration: true})` → `SecureSession.pushConfigured()`(google-services 플러그인이 넣은 `google_app_id` 리소스가 있는지) → `PushNotifications.requestPermissions()`(Android 13+ `POST_NOTIFICATIONS` 런타임 권한, 매니페스트에 선언됨. 사용자가 누를 때만 묻는다) → `register()` → FCM 토큰 → `POST /api/mobile/devices`(`{token, platform: "android"}`, 서버는 `MOBILE_SECRET`으로 암호화해 계정당 10대) → 알림이 생기면 outbox → 런타임의 10초 루프 `Notifications.deliver` → firebase-admin(`MOBILE_FCM_CREDENTIALS`, compose의 `firebase_admin` 시크릿, 앱과 같은 Firebase 프로젝트). 푸시에는 "새 알림이 왔어요"와 알림 번호만 싣고 내용은 앱 알림함에서 본다. 기기 e2e는 `-PjariNoFirebase`로 빌드해 권한·토큰이 끼지 않는다.
