@@ -606,8 +606,12 @@ class MobileGateway(MiniAppGateway):
             raise MiniAppError(
                 "결제를 기다리는 예약이 있어요. 결제하거나 예약을 취소한 뒤 탈퇴해 주세요.", 409
             )
-        result = self.cancel_search(chat_id)
-        if not result["stopped"] and self.storage.get_running_reservation(chat_id):
+        self.cancel_search(chat_id)
+        # The raw key, not get_running_reservation: a record this build cannot
+        # read comes back as None, the cancel leaves it and its worker alone,
+        # and erasing it would leave that worker searching - and booking - for
+        # an account that no longer exists.
+        if self.storage.redis.exists(f"running_reservation:{chat_id}"):
             raise MiniAppError("자리 찾기를 멈추지 못했어요. 잠시 후 다시 시도해 주세요.", 409)
         self._forget_rail(chat_id)
         self.storage.delete_user_data(chat_id)

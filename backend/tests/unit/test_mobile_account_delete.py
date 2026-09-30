@@ -214,6 +214,21 @@ def test_a_seat_waiting_for_payment_is_refused_before_anything_changes(runtime):
     assert http.get("/api/mobile/status", headers=headers).status_code == 200
 
 
+def test_a_search_record_this_build_cannot_read_stops_the_deletion(runtime, monkeypatch):
+    http, headers, owner, _ = member(runtime, "alice")
+    # Its worker is out of reach: the cancel cannot read the PID to stop it.
+    runtime.storage.redis.set(f"running_reservation:{owner}", '{"from": "a later build"}')
+    terminate = MagicMock(return_value=True)
+    monkeypatch.setattr(runtime.reservation, "_terminate_search_process", terminate)
+    before = owner_keys(runtime, owner)
+    response = http.post("/api/mobile/account/delete", headers=headers, json={"password": PASSWORD})
+    assert response.status_code == 409
+    assert "멈추지 못했어요" in response.json["error"]
+    terminate.assert_not_called()
+    assert owner_keys(runtime, owner) == before
+    assert http.get("/api/mobile/favourites", headers=headers).json["favourites"]
+
+
 def test_the_last_admin_cannot_leave_but_one_of_two_can(runtime):
     runtime.identity.ensure_admin("root", PASSWORD)
     http = runtime.app.test_client()

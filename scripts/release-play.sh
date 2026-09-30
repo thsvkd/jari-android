@@ -43,7 +43,9 @@ GRADLE_FILE="$ROOT/android/app/build.gradle"
 APP_ID="$(sed -n 's/^ *applicationId "\([^"]*\)".*/\1/p' "$GRADLE_FILE" | head -1)"
 VERSION_CODE="$(sed -n 's/^ *versionCode \([0-9]*\).*/\1/p' "$GRADLE_FILE" | head -1)"
 VERSION_NAME="$(sed -n 's/^ *versionName "\([^"]*\)".*/\1/p' "$GRADLE_FILE" | head -1)"
+TARGET_SDK="$(sed -n 's/^ *targetSdkVersion = \([0-9]*\).*/\1/p' "$ROOT/android/variables.gradle" | head -1)"
 VERSION="$(node -p "require('./package.json').version")"
+[[ -n "$TARGET_SDK" ]] || fail "android/variables.gradle 에서 targetSdkVersion 을 읽지 못했어요."
 [[ -n "$APP_ID" && -n "$VERSION_CODE" && -n "$VERSION_NAME" ]] || fail "android/app/build.gradle 에서 applicationId·versionCode·versionName 을 읽지 못했어요."
 [[ "$VERSION_NAME" == "$VERSION" ]] || fail "versionName($VERSION_NAME)이 package.json($VERSION)과 달라요."
 
@@ -52,8 +54,11 @@ SERVICES="$ROOT/android/app/google-services.json"
 [[ ! -e "$SERVICES" ]] || fail "android/app/google-services.json 이 이미 있어요. 이 스크립트는 Doppler 의 것만 써요. 옮겨 두고 다시 실행해 주세요."
 
 TEMP_KEYSTORE=""
+OUT=""
 cleanup() {
   rm -f "$SERVICES"
+  # 확인을 다 거치지 않은 AAB 는 남기지 않아요(중간에 끊겨도).
+  if [[ -n "$OUT" ]]; then rm -f "$OUT"; fi
   if [[ -n "$TEMP_KEYSTORE" ]]; then rm -f "$TEMP_KEYSTORE"; fi
 }
 trap cleanup EXIT
@@ -105,38 +110,53 @@ echo "== 앱 $VERSION ($APP_ID, versionCode $VERSION_CODE) 웹 번들 ($API_BASE
 VITE_API_BASE_URL="$API_BASE_URL" npm run build
 npx cap sync android
 echo "== Gradle bundleRelease"
-(cd android && ./gradlew clean bundleRelease)
+# 데몬 없이: 업로드 키 비밀번호가 든 환경을 빌드가 끝난 뒤까지 들고 있는 프로세스를 남기지 않아요.
+(cd android && ./gradlew --no-daemon clean bundleRelease)
+# 광고·분석 없음(Play 에 그렇게 신고했어요): 분석·광고 SDK 가 의존성으로 끌려 들어오면 멈춰요.
+ANALYTICS="$(cd android && ./gradlew --no-daemon -q :app:dependencies --configuration releaseRuntimeClasspath \
+  | grep -oE 'com\.google\.(firebase:firebase-analytics|android\.gms:play-services-(measurement|ads))[a-z-]*' | sort -u || true)"
+[[ -z "$ANALYTICS" ]] || fail "광고·분석 라이브러리가 들어왔어요: $ANALYTICS"
 
 BUILT="$ROOT/android/app/build/outputs/bundle/release/app-release.aab"
 [[ -s "$BUILT" ]] || fail "AAB 가 만들어지지 않았어요: $BUILT"
 OUT_DIR="$ROOT/dist-release"
 mkdir -p "$OUT_DIR"
-OUT="$OUT_DIR/jari-$VERSION-play.aab"
+FINAL="$OUT_DIR/jari-$VERSION-play.aab"
+rm -f "$FINAL"
+# 확인하는 동안은 다른 이름으로 두고, 모두 통과해야 최종 이름으로 옮겨요.
+OUT="$FINAL.unchecked"
 cp "$BUILT" "$OUT"
 
 # --- 확인: 하나라도 어긋나면 AAB 를 남기지 않아요.
 reject() { rm -f "$OUT"; fail "$* (AAB 를 지웠어요)"; }
 
-jarsigner -verify "$OUT" >/dev/null 2>&1 || reject "AAB 서명이 올바르지 않아요."
-CERT="$(keytool -printcert -jarfile "$OUT")"
+# -strict 는 쓰지 않아요: AAB 는 META-INF 가 앞에 오지 않는 구조라 서명이 맞아도 경고로 실패해요.
+# 대신 서명되지 않은 파일(jarsigner 가 0 으로 끝내요)을 "jar verified." 로 가려요.
+SIGNATURE="$(jarsigner -verify "$OUT" 2>&1)" || reject "AAB 서명이 올바르지 않아요."
+grep -q '^jar verified\.' <<<"$SIGNATURE" || reject "AAB 가 서명되지 않았어요."
+CERT="$(keytool -printcert -jarfile "$OUT")" || reject "AAB 서명 인증서를 읽지 못했어요."
 SIGNED_SHA256="$(awk -F'SHA256: ' '/SHA256:/ {print $2; exit}' <<<"$CERT")"
 SIGNED_SHA1="$(awk -F'SHA1: ' '/SHA1:/ {print $2; exit}' <<<"$CERT")"
 [[ "$SIGNED_SHA256" == "$KEYSTORE_SHA256" ]] || reject "AAB 의 서명 인증서가 업로드 키와 달라요: $SIGNED_SHA256"
 
-MANIFEST_PROTO="$(unzip -p "$OUT" base/manifest/AndroidManifest.xml | LC_ALL=C tr -c '[:print:]' '\n')"
+MANIFEST_PROTO="$(unzip -p "$OUT" base/manifest/AndroidManifest.xml | LC_ALL=C tr -c '[:print:]' '\n')" \
+  || reject "AAB 매니페스트를 읽지 못했어요."
+# 광고 ID 권한(com.google.android.gms.permission.AD_ID)은 매니페스트에서 tools:node="remove" 로 빼 두었어요. 들어오면 멈춰요.
+if grep -q 'permission.AD_ID' <<<"$MANIFEST_PROTO"; then reject "AAB 매니페스트에 광고 ID 권한(AD_ID)이 있어요."; fi
 if [[ -n "${JARI_BUNDLETOOL:-}" ]] || command -v bundletool >/dev/null; then
   if [[ "${JARI_BUNDLETOOL:-}" == *.jar ]]; then BUNDLETOOL=(java -jar "$JARI_BUNDLETOOL"); else BUNDLETOOL=("${JARI_BUNDLETOOL:-bundletool}"); fi
   MANIFEST="$("${BUNDLETOOL[@]}" dump manifest --bundle "$OUT")" || reject "bundletool 이 AAB 매니페스트를 읽지 못했어요."
   grep -q "package=\"$APP_ID\"" <<<"$MANIFEST" || reject "AAB 의 패키지가 $APP_ID 가 아니에요."
   grep -q "android:versionCode=\"$VERSION_CODE\"" <<<"$MANIFEST" || reject "AAB 의 versionCode 가 $VERSION_CODE 가 아니에요."
-  grep -q 'android:targetSdkVersion="36"' <<<"$MANIFEST" || reject "AAB 의 targetSdkVersion 이 36 이 아니에요."
+  grep -q "android:targetSdkVersion=\"$TARGET_SDK\"" <<<"$MANIFEST" || reject "AAB 의 targetSdkVersion 이 $TARGET_SDK 가 아니에요."
   if grep -q 'android:debuggable="true"' <<<"$MANIFEST"; then reject "디버그 가능한 AAB 예요."; fi
-  echo "매니페스트(bundletool): package=$APP_ID versionCode=$VERSION_CODE targetSdk=36, debuggable 아님"
+  if grep -q 'AD_ID' <<<"$MANIFEST"; then reject "AAB 에 광고 ID 권한(AD_ID)이 있어요."; fi
+  echo "매니페스트(bundletool): package=$APP_ID versionCode=$VERSION_CODE targetSdk=$TARGET_SDK, debuggable 아님, AD_ID 없음"
 else
   # AAB 의 매니페스트는 protobuf 예요. 디버그 빌드는 debuggable 속성을 넣고, 릴리스 빌드는 그 속성이 아예 없어요.
   grep -qF "$APP_ID" <<<"$MANIFEST_PROTO" || reject "AAB 매니페스트에 패키지 $APP_ID 가 없어요."
   if grep -q 'debuggable' <<<"$MANIFEST_PROTO"; then reject "AAB 매니페스트에 debuggable 속성이 있어요."; fi
-  echo "매니페스트: package=$APP_ID, debuggable 속성 없음 (bundletool 이 있으면 JARI_BUNDLETOOL 로 더 자세히 봐요)"
+  echo "매니페스트: package=$APP_ID, debuggable 속성 없음, AD_ID 없음 (bundletool 이 있으면 JARI_BUNDLETOOL 로 versionCode·targetSdk 까지 봐요)"
 fi
 # unzip 뒤의 grep 은 -q 대신 -c 로 끝까지 읽어요. -q 가 먼저 끝나면 unzip 이 SIGPIPE 로 실패해 pipefail 이 결과를 뒤집어요.
 # WebView 디버깅은 Capacitor 가 앱이 debuggable 일 때만 켜요. 설정으로 켠 것도 없어야 해요.
@@ -150,10 +170,12 @@ fi
 # google-services 플러그인이 넣은 google_app_id 가 있어야 앱이 푸시를 켤 수 있어요(SecureSessionPlugin.pushConfigured).
 unzip -p "$OUT" base/resources.pb | LC_ALL=C grep -ac google_app_id >/dev/null || reject "AAB 에 Firebase 설정(google_app_id)이 없어요."
 
+mv "$OUT" "$FINAL"
+OUT=""
 echo
-echo "AAB: $OUT"
+echo "AAB: $FINAL"
 echo "패키지: $APP_ID  versionCode: $VERSION_CODE  versionName: $VERSION_NAME"
 echo "업로드 인증서 SHA-256: $SIGNED_SHA256"
 echo "업로드 인증서 SHA-1:   $SIGNED_SHA1"
-echo "AAB SHA-256: $(shasum -a 256 "$OUT" | awk '{print $1}')"
+echo "AAB SHA-256: $(shasum -a 256 "$FINAL" | awk '{print $1}')"
 echo "Play Console → 테스트 → 내부 테스트 에서 이 AAB 를 올려 주세요. 이 스크립트는 어디에도 올리지 않아요."

@@ -1989,8 +1989,11 @@ export class JariApp {
       deleted = isCurrent();
     });
     if (deleted) {
-      // 다음에 이 폰으로 로그인하는 사람에게 지운 계정의 구간을 보여 주지 않아요.
-      try { window.localStorage.removeItem(RECENT_KEY); } catch { /* 없으면 그만 */ }
+      // 다음에 이 폰으로 로그인하는 사람에게 지운 계정의 구간을 보여 주지 않고, 그 사람의 이름으로 지운 계정의 연결 기록을 올리지 않아요.
+      try {
+        window.localStorage.removeItem(RECENT_KEY);
+        window.localStorage.removeItem("jari.connectionMisses");
+      } catch { /* 없으면 그만 */ }
       this.resetSession();
       this.authNotice = "탈퇴했어요. 그동안 자리났다를 써 주셔서 고마워요.";
       this.render();

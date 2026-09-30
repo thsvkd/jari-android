@@ -2057,6 +2057,7 @@ describe("회원 탈퇴", () => {
     const deleteAccount = vi.fn(async (_password: string) => ({ deleted: true }));
     const { app, root } = await mountLive({ deleteAccount });
     window.localStorage.setItem("jari.recentRoutes", "[]");
+    window.localStorage.setItem("jari.connectionMisses", "[]");
     app.navigate("settings");
     root.querySelector<HTMLButtonElement>("[data-action='delete-account']")!.click();
     const sheet = root.querySelector<HTMLElement>(".action-sheet")!;
@@ -2079,6 +2080,7 @@ describe("회원 탈퇴", () => {
     expect(root.querySelector(".auth-notice")?.textContent).toContain("탈퇴했어요");
     expect(app).toMatchObject({ state: null, busy: false });
     expect(window.localStorage.getItem("jari.recentRoutes")).toBeNull();
+    expect(window.localStorage.getItem("jari.connectionMisses")).toBeNull();
   });
 
   it("keeps the account and says why when the server refuses", async () => {
