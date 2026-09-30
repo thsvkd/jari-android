@@ -640,6 +640,30 @@ def test_a_search_still_being_brought_back_shows_as_registered_not_as_gone(tmp_p
 # ==================== How a search ended, for the deploy check ====================
 
 
+def test_a_search_is_marked_as_ended_before_its_record_goes(tmp_path, monkeypatch):
+    # Redis failing between the two must leave a record with a mark, never a
+    # record gone without one - the deploy check would take that as lost.
+    from korail_bot.mobile.worker import apply_result
+
+    storage, service = _service(tmp_path)
+    left = _left_by_an_earlier_run(storage, pid=os.getpid())
+    monkeypatch.setattr(
+        storage, "delete_running_reservation", MagicMock(side_effect=OSError("Redis gone"))
+    )
+
+    with pytest.raises(OSError):
+        apply_result(storage, MagicMock(), CHAT, "끝", status=0)
+    assert storage.get_search_endings()[CHAT]["reason"] == "booked"
+
+    storage.clear_search_marks(CHAT)
+    monkeypatch.setattr(service, "_terminate_search_process", lambda pid: True)
+    with pytest.raises(OSError):
+        service.cancel_reservation(CHAT)
+    ended = storage.get_search_endings()[CHAT]
+    assert (ended["reason"], ended["pid"]) == ("cancelled", left.process_id)
+    storage.close()
+
+
 @pytest.mark.parametrize(("status", "reason"), [(0, "booked"), (1, "error")])
 def test_a_search_that_ends_itself_leaves_a_mark_of_how(tmp_path, status, reason):
     from korail_bot.mobile.worker import apply_result
@@ -680,16 +704,25 @@ def test_a_cancelled_search_leaves_a_mark_and_no_stopped_search_behind(tmp_path)
     storage.close()
 
 
-def test_running_records_this_build_cannot_read_are_counted(tmp_path):
+def test_running_records_this_build_cannot_read_are_counted(tmp_path, monkeypatch):
     storage, service = _service(tmp_path)
     _left_by_an_earlier_run(storage)
     # A record written by a build whose fields this one does not know.
     storage.redis.set("running_reservation:-7", json.dumps({"chat_id": -7}))
 
-    searches = service.describe_running()
+    # And one whose key is gone by the time it is read: neither kind.
+    real_get = storage.redis.get
+    monkeypatch.setattr(
+        storage.redis,
+        "get",
+        lambda key: None if key == "running_reservation:-8" else real_get(key),
+    )
+    storage.redis.set("running_reservation:-8", "{}")
+
+    searches, unreadable = service.describe_running()
 
     assert [row["id"] for row in searches] == [CHAT]
-    assert service.unreadable_running(len(searches)) == 1
+    assert unreadable == 1
     storage.close()
 
 
@@ -765,7 +798,8 @@ def test_the_running_listing_says_what_a_restart_would_do_without_secrets(tmp_pa
     storage.save_partial_reservation(-2, 0, {"rsv_id": "PNR1"})
     storage.mark_search_logged_in(-1, first.process_id)
 
-    searches = service.describe_running()
+    searches, unreadable = service.describe_running()
+    assert unreadable == 0
 
     assert "0000000000" not in json.dumps(searches)
     assert "rail password" not in json.dumps(searches)
@@ -864,7 +898,7 @@ def test_the_running_listing_follows_the_resume_setting(tmp_path, monkeypatch, r
     monkeypatch.setattr(settings, "RESUME_ON_RESTART", resume)
     _left_by_an_earlier_run(storage)
 
-    (row,) = service.describe_running()
+    (row,), _ = service.describe_running()
 
     assert row["resumable"] is resume
     assert row["reason"] == (None if resume else "resume_disabled")

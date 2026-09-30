@@ -61,8 +61,10 @@ class MobileReservationService(ReservationService):
             stopped = self._terminate_search_process(record.process_id)
             if not stopped and self._is_running(record.process_id):
                 return False
-            self.storage.delete_running_reservation(chat_id)
+            # The mark first: a failure between the two must not leave a
+            # record gone with nothing to say how.
             self.storage.mark_search_ended(chat_id, "cancelled", record.process_id)
+            self.storage.delete_running_reservation(chat_id)
             # The worker may have been recording itself as stopped - Korail
             # unreachable, _stop_resumable - outside this lock when it was
             # killed. It is gone now; what it left must not outlive the
@@ -87,9 +89,14 @@ class MobileReservationService(ReservationService):
         Called from a process of its own (python -m korail_bot.mobile running)
         beside the API, so no record is this process's run: whether a worker
         is alive is asked of the process table, as _owns_process does.
+
+        Returns:
+            (rows, unreadable): unreadable counts the records this build could
+            not parse, in the same read as the rows
         """
+        records, unreadable = self.storage.read_running_reservations()
         rows = []
-        for record in self.storage.get_all_running_reservations():
+        for record in records:
             blocker = self.resume_blocker(record)
             rows.append(
                 {
@@ -107,7 +114,7 @@ class MobileReservationService(ReservationService):
                     "startedAt": as_utc(record.started_at).isoformat(),
                 }
             )
-        return sorted(rows, key=lambda row: row["id"])
+        return sorted(rows, key=lambda row: row["id"]), unreadable
 
     def describe_ended(self):
         """
@@ -122,10 +129,6 @@ class MobileReservationService(ReservationService):
             ),
             key=lambda row: row["id"],
         )
-
-    def unreadable_running(self, readable):
-        """How many running records exist that this build cannot read."""
-        return max(0, self.storage.count_running_reservation_keys() - readable)
 
     def describe_stopped(self):
         """

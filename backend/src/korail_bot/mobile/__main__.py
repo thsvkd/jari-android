@@ -124,10 +124,9 @@ def print_running(config, *, as_json):
     storage = MobileStorage(secret=config.secret, url=config.redis_url)
     try:
         service = MobileReservationService(storage, None, config)
-        searches = service.describe_running()
+        searches, unreadable = service.describe_running()
         stopped = service.describe_stopped()
         ended = service.describe_ended()
-        unreadable = service.unreadable_running(len(searches))
     finally:
         storage.close()
     if as_json:

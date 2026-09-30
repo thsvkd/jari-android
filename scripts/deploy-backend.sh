@@ -40,6 +40,10 @@ RESUME_POLL="${DEPLOY_RESUME_POLL:-5}"
 # that moment was stopped by this deploy.
 EXPECTED_RESUMES=""
 SNAPSHOT_AT=0
+# Unreadable running records already there at the snapshot, accepted with
+# --allow-unresumable: only more than these after the restart are the new
+# build's doing.
+SNAPSHOT_UNREADABLE=0
 declare -a COMPOSE_FILES=()
 if [[ -n "${DEPLOY_COMPOSE_FILES:-}" ]]; then
   IFS=',' read -r -a COMPOSE_FILES <<<"$DEPLOY_COMPOSE_FILES"
@@ -237,6 +241,7 @@ snapshot_running() {
   fi
   SNAPSHOT_AT="$(printf '%s\n' "$rows" | awk '$1 == "now" { print $2 }')"
   unreadable="$(printf '%s\n' "$rows" | awk '$1 == "unreadable" { print $2 }')"
+  SNAPSHOT_UNREADABLE="${unreadable:-0}"
   if [[ "${unreadable:-0}" -gt 0 ]]; then
     if [[ "$ALLOW_UNRESUMABLE" -ne 1 ]]; then
       echo "[deploy] REFUSING: $unreadable running record(s) cannot be read by the running build; nothing would resume them" >&2
@@ -271,13 +276,14 @@ snapshot_running() {
 #   ok <id> <note>    searching again, or booked or cancelled while this waited
 #   wait <id> <why>   not back yet; may still come back
 #   lost <id> <why>   stopped, not resumed, or ended on an error after the
-#                     snapshot; or records the new build cannot read
+#                     snapshot; or more records the new build cannot read
+#                     than there were at the snapshot
 # A record that is simply gone counts as finished only with the mark the end
 # of a search leaves (search_ended): without one it may as well have been
 # lost - unreadable to the new build, or gone with Redis - and it is waited
 # for, then reported, rather than taken on trust.
 judge_resumes() {
-  awk -v since="$SNAPSHOT_AT" '
+  awk -v since="$SNAPSHOT_AT" -v before="$SNAPSHOT_UNREADABLE" '
     NR == FNR {
       if ($1 == "unreadable") unreadable = $2 + 0
       if ($1 == "search") { run[$2] = $3; alive[$2] = $4; login[$2] = $5 }
@@ -300,7 +306,8 @@ judge_resumes() {
       else                               print "lost", id, "ended on an error (" ended[id] ")"
     }
     END {
-      if (unreadable > 0) print "lost", "-", unreadable " running record(s) the new build cannot read"
+      if (unreadable > before + 0)
+        print "lost", "-", unreadable " running record(s) the new build cannot read (" before + 0 " before the restart)"
     }
   ' <(printf '%s\n' "$1") <(printf '%s\n' "$EXPECTED_RESUMES")
 }

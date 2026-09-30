@@ -342,6 +342,7 @@ verify_resumed_against() { # the listing the new container reports; timeout
   local AFTER="$1"
   run_remote() { cat >/dev/null; echo "$AFTER"; }
   DRY_RUN=0; RESUME_TIMEOUT="${2:-0}"; RESUME_POLL=0; EXPECTED_RESUMES="-1 old"; SNAPSHOT_AT=1000
+  SNAPSHOT_UNREADABLE="${3:-0}"
   { verify_resumed || echo "VERIFY_RESUMED_RC=$?"; } 2>&1
 }
 set +e
@@ -357,6 +358,10 @@ RESUMED_ERROR="$(verify_resumed_against "$(ENDED="$(ended -1 error 1200)" runnin
 # A record the new build cannot read: failed at once, even with the search
 # itself listed as fine.
 RESUMED_UNREADABLE="$(verify_resumed_against "$(UNREADABLE=1 running 1300 - "$(search -1 new true true true -)")" 600)"
+# One was already unreadable at the snapshot and accepted (--allow-unresumable):
+# the same one after the restart is not the new build's doing; a second is.
+RESUMED_SAME_UNREADABLE="$(verify_resumed_against "$(UNREADABLE=1 running 1300 - "$(search -1 new true true true -)")" 600 1)"
+RESUMED_MORE_UNREADABLE="$(verify_resumed_against "$(UNREADABLE=2 running 1300 - "$(search -1 new true true true -)")" 600 1)"
 RESUMED_OLD="$(verify_resumed_against "$(running 1300 - "$(search -1 old true true true -)")")"
 RESUMED_DEAD="$(verify_resumed_against "$(running 1300 - "$(search -1 new false true true -)")")"
 RESUMED_LOGGING_IN="$(verify_resumed_against "$(running 1300 - "$(search -1 new true false true -)")")"
@@ -411,6 +416,39 @@ if echo "$RESUMED_UNREADABLE" | grep -q "VERIFY_RESUMED_RC=1" \
 else
   echo "FAIL: verify_resumed() passed with running records the new build cannot read"
   echo "$RESUMED_UNREADABLE"
+  FAIL=1
+fi
+
+if ! echo "$RESUMED_SAME_UNREADABLE" | grep -q "VERIFY_RESUMED_RC" \
+  && echo "$RESUMED_SAME_UNREADABLE" | grep -qF -- "-1 resumed and searching"; then
+  echo "ok: an unreadable record already there at the snapshot does not fail every poll"
+else
+  echo "FAIL: verify_resumed() failed on an unreadable record accepted before the restart"
+  echo "$RESUMED_SAME_UNREADABLE"
+  FAIL=1
+fi
+if echo "$RESUMED_MORE_UNREADABLE" | grep -q "VERIFY_RESUMED_RC=1" \
+  && echo "$RESUMED_MORE_UNREADABLE" | grep -q "2 running record(s) the new build cannot read (1 before the restart)"; then
+  echo "ok: more unreadable records after the restart than at the snapshot fail at once"
+else
+  echo "FAIL: verify_resumed() missed records that became unreadable after the restart"
+  echo "$RESUMED_MORE_UNREADABLE"
+  FAIL=1
+fi
+
+set +e
+SNAP_UNREADABLE_ALLOWED="$(
+  run_remote() { cat >/dev/null; UNREADABLE=2 running 1000 - "$(search -1 old true true true -)"; }
+  DRY_RUN=0; ALLOW_UNRESUMABLE=1; SKIP_RESUME_CHECK=0; EXPECTED_RESUMES=""; SNAPSHOT_UNREADABLE=0
+  { snapshot_running || echo "SNAPSHOT_RC=$?"; } 2>&1
+  echo "BEFORE_UNREADABLE=[$SNAPSHOT_UNREADABLE]"
+)"
+set -e
+if ! echo "$SNAP_UNREADABLE_ALLOWED" | grep -q "SNAPSHOT_RC" && echo "$SNAP_UNREADABLE_ALLOWED" | grep -qF "BEFORE_UNREADABLE=[2]"; then
+  echo "ok: --allow-unresumable accepts unreadable records and remembers how many there were"
+else
+  echo "FAIL: snapshot_running() did not remember the unreadable records it accepted"
+  echo "$SNAP_UNREADABLE_ALLOWED"
   FAIL=1
 fi
 

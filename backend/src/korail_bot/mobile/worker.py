@@ -32,9 +32,11 @@ def apply_result(storage, notifications, owner, message, status=0, seat_strategy
         if session:
             session.reset()
             storage.save_user_session(session)
-        storage.delete_running_reservation(owner)
-        # The deploy check counts a vanished record as finished only on this.
+        # The deploy check counts a vanished record as finished only on this,
+        # so it goes first: a failure before the delete leaves a record with
+        # a mark, never a record gone without one.
         storage.mark_search_ended(owner, "booked" if status == 0 else "error", os.getpid())
+        storage.delete_running_reservation(owner)
         storage.delete_resume_credentials(owner)
         storage.delete_app_session_start(owner)
 

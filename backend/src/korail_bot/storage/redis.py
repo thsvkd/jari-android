@@ -313,17 +313,29 @@ class RedisStorage(StorageInterface):
 
     def get_all_running_reservations(self) -> list[RunningReservation]:
         """Get all running reservations."""
-        keys = self._scan_keys("running_reservation:*")
+        return self.read_running_reservations()[0]
+
+    def read_running_reservations(self) -> tuple[list[RunningReservation], int]:
+        """
+        Every running reservation this build can read, and how many it cannot.
+
+        Skipping a record it cannot parse is what every caller acting on the
+        records wants. The deploy check wants the count as well, taken in the
+        same pass: counted from a second scan it would take a search started
+        or finished in between for an unreadable one, or miss one. A key
+        gone between the scan and the read is neither.
+        """
         reservations = []
-        for key in keys:
+        unreadable = 0
+        for key in self._scan_keys("running_reservation:*"):
             data = self.redis.get(key)
             if data:
                 try:
                     res_dict = json.loads(data)
                     reservations.append(self._deserialize_running_reservation(res_dict))
                 except (json.JSONDecodeError, KeyError):
-                    continue
-        return reservations
+                    unreadable += 1
+        return reservations, unreadable
 
     # ==================== Onboarded accounts ====================
 
@@ -946,16 +958,6 @@ class RedisStorage(StorageInterface):
             if data:
                 notes[int(key.rsplit(":", 1)[1])] = json.loads(data)
         return notes
-
-    def count_running_reservation_keys(self) -> int:
-        """
-        How many running records there are, readable or not.
-
-        get_all_running_reservations skips a record it cannot parse. Every
-        caller that acts on records wants that; the deploy check wants to know
-        a record is there that this build cannot read.
-        """
-        return len(self._scan_keys("running_reservation:*"))
 
     # ==================== Searches a restart did not bring back ====================
 
