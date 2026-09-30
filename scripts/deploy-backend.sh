@@ -14,6 +14,15 @@ AFTER_HOOK=""
 HEALTH_URL=""
 DRY_RUN=0
 FORCE=0
+ALLOW_UNRESUMABLE=0
+# How long to wait, after the restart, for every search that was running to
+# be running again in the new container, and how often to look. The default
+# covers the old container's 60 s stop grace, a lease it failed to release
+# (LEASE_WAIT, 135 s) and the restarts themselves.
+RESUME_TIMEOUT="${DEPLOY_RESUME_TIMEOUT:-240}"
+RESUME_POLL="${DEPLOY_RESUME_POLL:-5}"
+# "<id> <runId>" per search the new container must bring back, one per line.
+EXPECTED_RESUMES=""
 declare -a COMPOSE_FILES=()
 if [[ -n "${DEPLOY_COMPOSE_FILES:-}" ]]; then
   IFS=',' read -r -a COMPOSE_FILES <<<"$DEPLOY_COMPOSE_FILES"
@@ -38,7 +47,11 @@ Usage: deploy-backend.sh --host user@host --root /remote/dir [options]
   --health-url <url>         Local curl check after restart, expects HTTP < 500
   --after "<cmd>"            Remote shell command run in --root after a healthy deploy
   --dry-run                  Print every remote command, run nothing
-  --force                    Ignore the worker-pattern abort
+  --force                    Ignore the worker-pattern abort. The restart kills the
+                             running searches; the new container resumes them, and
+                             the deploy waits until each one is running again
+  --allow-unresumable        Deploy even if some running search would not come back
+                             (listed first), or the running searches cannot be read
 USAGE
 }
 
@@ -71,6 +84,7 @@ parse_args() {
       --after) AFTER_HOOK="$2"; shift 2 ;;
       --dry-run) DRY_RUN=1; shift ;;
       --force) FORCE=1; shift ;;
+      --allow-unresumable) ALLOW_UNRESUMABLE=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) echo "unknown arg: $1" >&2; usage; exit 1 ;;
     esac
@@ -129,6 +143,116 @@ if [[ -n "$cid" ]]; then
 fi
 echo "preflight ok"
 EOF
+}
+
+# The running searches, as the API container itself reports them
+# (python -m korail_bot.mobile running --json: read-only, no secrets). Prints
+# RUNNING=<json on one line>, an empty list when the service is not running.
+read_running() {
+  run_remote "read running searches in $SERVICE" "$ROOT" "$SERVICE" "${COMPOSE_ARGS[@]}" <<'EOF'
+set -euo pipefail
+root="$1"; service="$2"; shift 2
+cd "$root"
+cid="$(docker compose "$@" ps -q "$service" 2>/dev/null || true)"
+if [[ -z "$cid" ]]; then
+  echo 'RUNNING={"searches":[]}'
+  exit 0
+fi
+# Captured first: a failing command inside echo's arguments would not stop
+# the script, and an empty list would then read as "nothing running".
+out="$(docker compose "$@" exec -T "$service" python -m korail_bot.mobile running --json)"
+echo "RUNNING=$out"
+EOF
+}
+
+# running_rows < read_running output: one line per search,
+#   <id> <runId> <alive|gone> <yes|no> <reason|->
+# Fails on output without a RUNNING= line or with JSON it cannot read.
+running_rows() {
+  python3 -c '
+import json, sys
+lines = [line[len("RUNNING="):] for line in sys.stdin if line.startswith("RUNNING=")]
+for row in json.loads(lines[-1])["searches"]:
+    print(row["id"], row["runId"], "alive" if row["workerAlive"] else "gone",
+          "yes" if row["resumable"] else "no", row["reason"] or "-")
+'
+}
+
+# Before anything changes: which searches are running, and would the restart
+# bring each back? One that would not (seats already held, no stored login,
+# resume turned off) is lost by this deploy, so it is refused unless
+# --allow-unresumable says that is accepted. The rest are what verify_resumed
+# waits for afterwards.
+#
+# Called as a plain step of main(), and every failure returns explicitly all
+# the same, as transfer() does: the test calls it as `fn || ...`.
+snapshot_running() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    read_running >&2
+    log "DRY-RUN refuse if a running search is not resumable; afterwards wait up to ${RESUME_TIMEOUT}s for each to run again"
+    return 0
+  fi
+  local out rows unresumable
+  if ! out="$(read_running)" || ! rows="$(printf '%s\n' "$out" | running_rows)"; then
+    if [[ "$ALLOW_UNRESUMABLE" -eq 1 ]]; then
+      log "WARNING: could not read the running searches; deploying anyway (--allow-unresumable), nothing is checked afterwards"
+      return 0
+    fi
+    echo "[deploy] REFUSING: could not read the running searches from $SERVICE (an image without 'python -m korail_bot.mobile running'?); pass --allow-unresumable to deploy without the resume check" >&2
+    return 1
+  fi
+  if [[ -z "$rows" ]]; then
+    log "no running searches"
+    return 0
+  fi
+  log "running searches (id run worker resumable reason):"
+  printf '%s\n' "$rows" | sed 's/^/[deploy]   /' >&2
+  unresumable="$(printf '%s\n' "$rows" | awk '$4 == "no"')"
+  if [[ -n "$unresumable" ]]; then
+    if [[ "$ALLOW_UNRESUMABLE" -ne 1 ]]; then
+      echo "[deploy] REFUSING: the restart would end these searches for good:" >&2
+      printf '%s\n' "$unresumable" | sed 's/^/[deploy]   /' >&2
+      echo "[deploy] wait for them to finish, or pass --allow-unresumable to accept losing them" >&2
+      return 1
+    fi
+    log "WARNING: these will not come back (--allow-unresumable):"
+    printf '%s\n' "$unresumable" | sed 's/^/[deploy]   /' >&2
+  fi
+  EXPECTED_RESUMES="$(printf '%s\n' "$rows" | awk '$4 == "yes" { print $1, $2 }')"
+}
+
+# After the restart: every search snapshot_running saw as resumable must be
+# running again - recorded under the new container's run, with a live worker.
+# Anything else by the deadline is a search this deploy lost, and is named.
+verify_resumed() {
+  if [[ -z "$EXPECTED_RESUMES" ]]; then
+    [[ "$DRY_RUN" -eq 1 ]] && log "DRY-RUN wait for the resumable searches read above to run again (every ${RESUME_POLL}s, up to ${RESUME_TIMEOUT}s)"
+    return 0
+  fi
+  local deadline=$((SECONDS + RESUME_TIMEOUT)) out rows missing
+  while :; do
+    if out="$(read_running 2>/dev/null)" && rows="$(printf '%s\n' "$out" | running_rows)"; then
+      # First file: what runs now. Second: what must be running again.
+      missing="$(awk '
+        NR == FNR { run[$1] = $2; alive[$1] = $3; next }
+        !($1 in run)         { print $1, "not running (record gone)"; next }
+        run[$1] == $2        { print $1, "not resumed yet (still the old run)"; next }
+        alive[$1] != "alive" { print $1, "resumed, but its worker is gone" }
+      ' <(printf '%s\n' "$rows") <(printf '%s\n' "$EXPECTED_RESUMES"))"
+    else
+      missing="$(printf '%s\n' "$EXPECTED_RESUMES" | awk '{ print $1, "unknown (running searches unreadable)" }')"
+    fi
+    if [[ -z "$missing" ]]; then
+      log "every running search resumed ($(printf '%s\n' "$EXPECTED_RESUMES" | wc -l | tr -d ' '))"
+      return 0
+    fi
+    if (( SECONDS >= deadline )); then
+      echo "[deploy] FAILED: ${RESUME_TIMEOUT}s after the restart these searches are not running again:" >&2
+      printf '%s\n' "$missing" | sed 's/^/[deploy]   /' >&2
+      return 1
+    fi
+    sleep "$RESUME_POLL"
+  done
 }
 
 # One canonical place computes the repo (image_repo(), above); backup() just
@@ -321,13 +445,29 @@ MSG
   exit 1
 }
 
+resume_failed_and_exit() {
+  cat >&2 <<MSG
+[deploy] The new $SERVICE is up and healthy, but the searches listed above are
+not running again. Rolling back would not bring them back: the old container
+and its workers are gone. Find out why on $HOST:
+
+  ssh $HOST 'cd $ROOT && docker compose $(printf -- '-f %q ' "${COMPOSE_FILES[@]}")logs --since 10m $SERVICE'
+
+A search the app is still retrying may yet come back by itself; one it gave
+up on has been announced to its user as stopped.
+MSG
+  exit 1
+}
+
 main() {
   preflight
+  snapshot_running
   backup
   transfer || rollback_and_exit
   deploy || rollback_and_exit
   verify || rollback_and_exit
   after_hook || rollback_and_exit
+  verify_resumed || resume_failed_and_exit
   log "deploy finished: $SERVICE @ $REF ($SHORT_REF) on $HOST"
 }
 

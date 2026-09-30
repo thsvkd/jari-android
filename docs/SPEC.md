@@ -15,8 +15,24 @@
 ```
 
 - 진입점은 둘: `korail_bot.mobile`(API, Dockerfile CMD)과 `korail_bot.mobile.worker`(`mobile/process.py`가 spawn). 워커는 `telegramBot/telebotBackProcess.py`의 검색 루프를 그대로 쓴다.
-- 워커는 **API 컨테이너 안의 자식 프로세스**다. API를 재시작하면 워커도 죽는다. 배포 스크립트는 워커가 있으면 거부한다(`--force` 시 재시작 후 `reconcile_after_restart`가 기록을 보고 다시 띄우려 하지만 보장하지 않는다).
+- 워커는 **API 컨테이너 안의 자식 프로세스**다. API를 재시작하면 워커도 죽고, 새 프로세스가 Redis의 실행 기록으로 다시 띄운다(§1.1). 배포 스크립트는 워커가 있으면 거부하고, `--force`면 재시작 뒤 재개 가능했던 검색이 모두 다시 도는지 확인해 아니면 실패한다.
 - 실서버: pit5, `scripts/deploy-backend.sh --host pit5 --root /home/pi/services/jari-android --compose-file compose.yaml --compose-file pit5-edge.yaml --ref <sha>`. 배포 전 이미지는 `jari-api:pre-<sha>`로 태그된다.
+
+### 1.1 재시작 중 검색 보존
+
+**보장**: API가 SIGTERM으로 멈추고(compose `stop_grace_period` 60초 안) 새 프로세스가 같은 Redis·`MOBILE_SECRET`으로 뜨면, 재개 가능한 실행 기록(`running_reservation:*`)은 모두 새 프로세스에서 다시 돈다. `docker compose up -d --no-deps api`(`deploy-backend.sh --force`)가 이 경우다.
+
+- 멈출 때: `MobileRuntime.stop()`은 무엇보다 먼저(리스 락을 기다리기 전) `_shutting_down`을 세운다. 그 뒤로는 죽은 검색 감시가 사라진 워커를 죽음으로 기록하지 않고(기록 직전에 한 번 더 확인), 새 검색도 시작하지 않는다(`start_reservation_process`가 거부, 모바일은 `shutdown()`이 `start_lock`을 잡은 뒤 워커를 죽여 이미 시작 중인 것도 놓치지 않는다). 워커는 SIGTERM으로 콜백 없이 끝나고 기록·로그인은 남는다.
+- 뜰 때: 리스를 잡은 뒤 `reconcile_after_restart`가 옛 run의 기록마다 옛 PID를 정리하고(이번 run의 자식 PID는 건드리지 않는다 — 새 컨테이너에서는 옛 PID가 방금 재개한 워커의 PID와 겹칠 수 있다) 같은 조건으로 워커를 띄운다. 사용자에게는 "검색을 다시 시작했습니다" 알림 하나만 간다.
+- 재개 실패(시작 유예 안에 워커가 죽음, 예외): 기록·로그인을 그대로 두고 죽음으로 기록하지 않는다. 백그라운드 루프(10초)가 10·20·40·80·160초 간격으로 다시 시도하고, 6번째도 실패하면 `RESUME_FAILED`로 멈춘 검색에 옮기며 알림을 한 번 보낸다(로그인은 남겨 손으로 다시 시작할 수 있다). 재시도 사이에 사용자가 멈추거나 새로 시작한 기록은 건드리지 않는다(사용자별 락 안에서 다시 읽는다).
+- 워커의 첫 로그인: 코레일이 답하지 못한 실패(`KorailTransportError`=전송 실패·HTTP 오류, `KorailServiceUnavailableError`, `KorailNetFunnelError`, `OSError`)는 `LOGIN_RETRY_DELAYS_SECONDS`(기본 5·15·30·60·120초, 최대 6회) 동안 다시 시도한다. 계정 거절은 바로 끝난다. 끝내 닿지 못하면 "코레일 서버에 연결하지 못해 검색을 멈췄습니다"(status 1)로 끝난다.
+- 로그인 보관: `resume_credentials`·`app_session_start`의 TTL(`RESUME_TTL_SECONDS`, 72시간)은 백그라운드 루프가 기록이 있는 동안 매번 다시 늘린다. 72시간보다 오래 기다린 검색도 재개된다. 런타임이 72시간 넘게 내려가 있으면 만료된다.
+
+**의도한 예외**(재개하지 않고 기록·로그인을 지우고 알림 한 번): `RESUME_ON_RESTART=0`(`resume_disabled`), 떨어져 앉기로 이미 일부 좌석을 잡음(`seats_reserved`), 검색 시작 뒤 생긴 미결제 좌석이 있음(`seat_held`: `payment_status`나 `multi_reservation_status`의 `created_at` ≥ 기록의 `started_at` — 좌석을 잡고 기록을 지우기 전에 멈춘 경우로, 이어서 찾으면 좌석을 두 번 잡는다), 로그인이 없거나 풀리지 않음(`no_credentials`, `MOBILE_SECRET` 변경 포함).
+
+**보장 밖**: 코레일이 좌석을 잡은 뒤 워커가 그것을 적기 전(수 ms)에 멈추면 알 길이 없어 재개하고, 좌석을 두 번 잡을 수 있다(코레일 예약 목록은 보지 않는다). 풀리지 않은 예전 결제 기록 위에 새 좌석을 적으면 `created_at`이 예전 것이라 `seat_held`로 보이지 않는다. SIGKILL·OOM·전원 차단처럼 정상 종료가 없어도 기록은 남아 다음 시작이 재개한다. 다만 놓아주지 못한 리스가 풀릴 때까지(최대 `LEASE_WAIT` 135초) 기다린다.
+
+**배포 확인**: `deploy-backend.sh`는 교체 전에 `docker compose exec -T api python -m korail_bot.mobile running --json`(읽기 전용, 비밀 없음: `id, runId, pid, workerAlive, resumable, reason, credentialTtlSeconds, startedAt`)으로 실행 목록을 적는다. 재개하지 못할 검색이 있거나 목록을 읽지 못하면 거부한다(`--allow-unresumable`로 감수). 재시작 뒤에는 5초마다 최대 240초(`DEPLOY_RESUME_POLL`·`DEPLOY_RESUME_TIMEOUT`; 옛 컨테이너 정리 60초 + 풀리지 않은 리스 대기 135초 + 시작) 동안 재개 가능했던 검색마다 새 `runId`와 살아 있는 워커를 기다리고, 못 채우면 id와 상태(기록 없음·아직 옛 run·워커 없음)를 적고 실패한다. 롤백 안내는 내지 않는다(옛 워커는 이미 없다).
 
 ## 2. 앱 구조
 
@@ -104,7 +120,7 @@ seatPlanSummary: "015 일반실 3호차 5A·5B · 019 좌석 무관" | ""
 ## 8. 검증
 
 - 앱: `npm test`(vitest/jsdom), `npm run build`, `npx tsc --noEmit`. `npm run build:demo`는 `dist/`를 덮어쓰므로 APK 빌드 전엔 `npm run build`를 다시 돌린다.
-- 서버: `backend/`에서 `uv run --frozen pytest tests/unit -q`, `ruff check/format`.
+- 서버: `backend/`에서 `uv run --frozen pytest tests/unit -q`, `ruff check/format`. 재시작 보존은 `tests/unit/test_restart_resume.py`와 `e2e/restart.spec.ts`(e2e 스택의 `POST /restart`가 서버를 SIGTERM으로 내렸다 같은 설정으로 띄운다), 배포 스크립트는 `bash scripts/test-deploy-backend.sh`(macOS bash 3.2에서도 돈다).
 - Android: `scripts/build-android.ps1`(PowerShell에서 실행), `adb install -r`. 기기 e2e는 `npm run verify`가 에뮬레이터에 평소 앱(`com.jari.app` 디버그 빌드, 로컬 e2e 서버 주소로 빌드)을 깔아 돌린다(별도 e2e 앱 없음). 디버그 APK는 WebView CDP(`adb forward tcp:9377 localabstract:webview_devtools_remote_<pid>`)로 DOM 계측이 가능하다.
 - 실기기 감사 절차: 데모가 아니라 실서버로 전 경로(조회·좌석표·대기 시작/중지·시트·테마)를 돌리며 화면마다 버튼 높이·형제 간격·토큰 밖 색·터치 영역·넘침을 수집한다. 결제만 하지 않는다.
 
