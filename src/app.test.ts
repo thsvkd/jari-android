@@ -2147,6 +2147,18 @@ describe("회원 탈퇴", () => {
     expect(app).toMatchObject({ busy: false, error: "" });
   });
 
+  it("says so instead of doing nothing when another request is still out", async () => {
+    const deleteAccount = vi.fn(async () => ({ deleted: true }));
+    const { app, root } = await mountLive({ deleteAccount });
+    app.navigate("settings");
+    root.querySelector<HTMLButtonElement>("[data-action='delete-account']")!.click();
+    root.querySelector<HTMLInputElement>("#sheet-password")!.value = "a long secure passphrase";
+    (app as unknown as { busy: boolean }).busy = true;
+    root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".toast")?.textContent).toBe("잠시 후 다시 시도해 주세요."));
+    expect(deleteAccount).not.toHaveBeenCalled();
+  });
+
   it("cancelling the sheet sends nothing", async () => {
     const deleteAccount = vi.fn(async () => ({ deleted: true }));
     const { app, root } = await mountLive({ deleteAccount });

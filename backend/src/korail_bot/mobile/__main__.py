@@ -107,6 +107,12 @@ def delete_account(config, username):
     What the app's own 회원 탈퇴 does, for a request that came by email: run
     beside the API (docker compose exec) against the same Redis and database.
     The search is stopped by its PID, as the deploy check finds workers.
+
+    This process shares no lock with the running API, so the account's
+    sessions end first - nothing new can start for it from here on - and
+    once the account is gone a last pass stops and erases whatever a request
+    already in flight left behind (a search it started, a timezone a poll
+    wrote back). A refusal (409) leaves the account, logged out.
     """
     from korail_bot.mobile.api import erase_account
     from korail_bot.mobile.runtime import MobileRuntime
@@ -118,10 +124,14 @@ def delete_account(config, username):
         user = runtime.identity.find_user(username)
         if user is None:
             raise ValueError(f"No app account named {username!r}")
+        runtime.identity.revoke_sessions(user["id"])
         try:
             erase_account(runtime.identity, runtime.gateway, runtime.notifications, user)
         except MiniAppError as exc:
             raise ValueError(str(exc)) from exc
+        runtime.gateway.cancel_search(user["storage_id"])
+        runtime.storage.delete_user_data(user["storage_id"])
+        runtime.notifications.forget(user["storage_id"])
     finally:
         if runtime.storage:
             runtime.storage.close()

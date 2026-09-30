@@ -52,6 +52,10 @@ def erase_account(identity, gateway, notifications, user):
             f"{kind}:{user['id']}" for kind in ("api", "rail", "diag", "account-delete")
         ],
     )
+    if notifications:
+        # A payment watch or a worker on its way out publishes without the
+        # user's lock; an event it wrote after the first pass has no expiry.
+        notifications.forget(user["storage_id"])
 
 
 def create_app(

@@ -602,17 +602,32 @@ class MobileGateway(MiniAppGateway):
         back is a Korail request the user should see answered, and the payment
         watch would otherwise go on polling with a login this erases.
         """
+        pending = MiniAppError(
+            "결제를 기다리는 예약이 있어요. 결제하거나 예약을 취소한 뒤 탈퇴해 주세요.", 409
+        )
+        not_stopped = MiniAppError("자리 찾기를 멈추지 못했어요. 잠시 후 다시 시도해 주세요.", 409)
         if self.pending_payments.pending(chat_id):
-            raise MiniAppError(
-                "결제를 기다리는 예약이 있어요. 결제하거나 예약을 취소한 뒤 탈퇴해 주세요.", 409
-            )
+            raise pending
+        # The raw key, not get_running_reservation alone: a record this build
+        # cannot read comes back as None, the cancel would leave it and its
+        # worker alone, and erasing it would leave that worker searching - and
+        # booking - for an account that no longer exists. Refused before the
+        # cancel, which would otherwise drop a search booked for later.
+        record = self.storage.get_running_reservation(chat_id)
+        if record is None and self.storage.redis.exists(f"running_reservation:{chat_id}"):
+            raise not_stopped
         self.cancel_search(chat_id)
-        # The raw key, not get_running_reservation: a record this build cannot
-        # read comes back as None, the cancel leaves it and its worker alone,
-        # and erasing it would leave that worker searching - and booking - for
-        # an account that no longer exists.
         if self.storage.redis.exists(f"running_reservation:{chat_id}"):
-            raise MiniAppError("자리 찾기를 멈추지 못했어요. 잠시 후 다시 시도해 주세요.", 409)
+            raise not_stopped
+        # The worker is a process of its own and takes no lock: between the
+        # check above and its kill it may have had Korail hold a seat. Its
+        # payment record, or the mark it leaves the moment the hold comes back,
+        # says so; erasing now would leave a hold the user never hears about.
+        if self.pending_payments.pending(chat_id) or (
+            record is not None
+            and self.storage.search_mark_pid(chat_id, "held_seat") == record.process_id
+        ):
+            raise pending
         self._forget_rail(chat_id)
         self.storage.delete_user_data(chat_id)
         return {"deleted": True}

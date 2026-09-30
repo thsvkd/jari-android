@@ -9,7 +9,7 @@ import pytest
 from korail_bot.mobile.__main__ import delete_account as delete_account_cli
 from korail_bot.mobile.api import create_app
 from korail_bot.mobile.config import MobileConfig
-from korail_bot.mobile.identity import IdentityStore
+from korail_bot.mobile.identity import AuthError, IdentityStore
 from korail_bot.mobile.runtime import MobileRuntime
 from korail_bot.models import (
     DeadSearch,
@@ -216,6 +216,15 @@ def test_a_seat_waiting_for_payment_is_refused_before_anything_changes(runtime):
 
 def test_a_search_record_this_build_cannot_read_stops_the_deletion(runtime, monkeypatch):
     http, headers, owner, _ = member(runtime, "alice")
+    scheduled = http.post(
+        "/api/mobile/schedule",
+        headers=headers,
+        json={
+            "conditions": conditions(),
+            "start_at": (utc_now() + timedelta(minutes=10)).isoformat(),
+        },
+    )
+    assert scheduled.status_code == 200, scheduled.json
     # Its worker is out of reach: the cancel cannot read the PID to stop it.
     runtime.storage.redis.set(f"running_reservation:{owner}", '{"from": "a later build"}')
     terminate = MagicMock(return_value=True)
@@ -226,7 +235,66 @@ def test_a_search_record_this_build_cannot_read_stops_the_deletion(runtime, monk
     assert "멈추지 못했어요" in response.json["error"]
     terminate.assert_not_called()
     assert owner_keys(runtime, owner) == before
+    # Refused before the cancel: the search booked for later is still there.
+    assert runtime.storage.get_scheduled_search(owner) is not None
     assert http.get("/api/mobile/favourites", headers=headers).json["favourites"]
+
+
+@pytest.mark.parametrize("left_by_worker", ["payment", "held_seat"])
+def test_a_seat_the_worker_held_while_being_stopped_keeps_the_account(
+    runtime, monkeypatch, left_by_worker
+):
+    http, headers, owner, _ = member(runtime, "alice")
+    runtime.storage.save_running_reservation(running(owner))
+
+    def worker_holds_a_seat_then_dies(pid):
+        # The worker takes no lock: Korail held a seat between the first check and the kill.
+        if left_by_worker == "payment":
+            runtime.storage.save_payment_status(
+                PaymentStatus(
+                    chat_id=owner,
+                    completed=False,
+                    reminder_active=True,
+                    reservation_id="R-RACE",
+                    expires_at=utc_now() + timedelta(minutes=10),
+                )
+            )
+        else:
+            runtime.storage.mark_search_held_seat(owner, pid)
+        runtime.notifications.publish(owner, "자리를 잡았어요.", kind="reservation")
+        return True
+
+    monkeypatch.setattr(
+        runtime.reservation, "_terminate_search_process", worker_holds_a_seat_then_dies
+    )
+    response = http.post("/api/mobile/account/delete", headers=headers, json={"password": PASSWORD})
+
+    assert response.status_code == 409
+    assert "결제를 기다리는 예약" in response.json["error"]
+    # The user can still log in and see what was held.
+    assert http.get("/api/mobile/status", headers=headers).status_code == 200
+    assert any("잡았어요" in item["text"] for item in runtime.notifications.items(owner))
+    assert http.get("/api/mobile/favourites", headers=headers).json["favourites"]
+    if left_by_worker == "payment":
+        assert runtime.storage.get_payment_status(owner) is not None
+
+
+def test_an_event_published_while_the_account_goes_is_erased_too(runtime, monkeypatch):
+    http, headers, owner, alice = member(runtime, "alice")
+    delete_user = runtime.identity.delete_user
+
+    def a_payment_watch_speaks_meanwhile(*args, **kwargs):
+        runtime.notifications.publish(owner, "결제 시간이 약 1분 남았어요.", kind="payment")
+        return delete_user(*args, **kwargs)
+
+    monkeypatch.setattr(runtime.identity, "delete_user", a_payment_watch_speaks_meanwhile)
+    assert (
+        http.post(
+            "/api/mobile/account/delete", headers=headers, json={"password": PASSWORD}
+        ).status_code
+        == 200
+    )
+    assert runtime.notifications.items(owner) == []
 
 
 def test_the_last_admin_cannot_leave_but_one_of_two_can(runtime):
@@ -257,10 +325,26 @@ def test_the_operator_deletes_an_account_for_an_emailed_request(runtime, monkeyp
     monkeypatch.setattr("korail_bot.mobile.runtime.MobileRuntime", lambda config, push: runtime)
     # The CLI closes the storage it opened; this one is still the test's.
     monkeypatch.setattr(runtime.storage, "close", lambda: None)
+    token = headers["Authorization"].split()[1]
+    delete_account = runtime.gateway.delete_account
+
+    def while_the_running_api_serves_a_request_already_in_flight(chat_id):
+        # No lock is shared with the API process: the sessions must already be over.
+        with pytest.raises(AuthError):
+            runtime.identity.authenticate(token)
+        result = delete_account(chat_id)
+        # ...and what that request did after this pass: a poll's timezone, a search it started.
+        runtime.storage.set_user_timezone(owner, "Asia/Seoul")
+        runtime.storage.save_running_reservation(running(owner, pid=777))
+        return result
+
+    monkeypatch.setattr(
+        runtime.gateway, "delete_account", while_the_running_api_serves_a_request_already_in_flight
+    )
 
     assert delete_account_cli(runtime.config, "ALICE").startswith("Deleted alice")
 
-    assert killed == [4242]
+    assert killed == [4242, 777]
     assert owner_keys(runtime, owner) == [f"search_ended:{owner}"]
     assert runtime.identity.find_user("alice") is None
     with pytest.raises(ValueError, match="No app account"):

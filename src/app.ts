@@ -2021,6 +2021,12 @@ export class JariApp {
       this.render();
       return;
     }
+    // run() drops work while another request is out. Here that would read as a deletion that silently did nothing.
+    if (this.busy) {
+      this.showToast("잠시 후 다시 시도해 주세요.");
+      this.render();
+      return;
+    }
     let deleted = false;
     await this.run(async (isCurrent) => {
       await this.api.deleteAccount(password);

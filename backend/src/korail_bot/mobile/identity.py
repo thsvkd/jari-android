@@ -277,6 +277,11 @@ class IdentityStore:
             db.executemany("DELETE FROM rate_limits WHERE key=?", [(digest(k),) for k in keys])
             return True
 
+    def revoke_sessions(self, user_id):
+        """End every session of one account: its next request, anywhere, is a 401."""
+        with self.connect() as db:
+            db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+
     def revoke(self, token):
         with self.connect() as db:
             db.execute("DELETE FROM sessions WHERE hash=?", (digest(token),))
