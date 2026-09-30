@@ -7,6 +7,13 @@
 from __future__ import annotations
 
 import datetime
+import json
+import time
+import urllib.error
+
+import psutil
+import redis
+from stack import request
 
 # 텔레그램 봇 시절 문구. 앱 알림에 남으면 안 되는 것들이에요.
 CHAT_VOCABULARY = ["/notify_off", "/tickets", "/cancel", "/start", "봇", "===", "━━", "답장"]
@@ -183,3 +190,45 @@ def test_the_fake_refuses_to_start_anywhere_but_a_local_redis(stack):
     assert result.returncode == 97
     assert "STARTED" not in result.stdout
     assert "가짜 코레일을 끼우지 못해 멈춰요" in result.stderr
+
+
+def test_deleting_the_account_stops_its_worker_and_erases_its_records(stack, client, conditions):
+    client.scenario(search="sold_out")
+    start_search(client, conditions)
+    client.wait_for(
+        lambda status: status["running"] and (status["running"].get("attemptCount") or 0) >= 1
+    )
+    store = redis.Redis.from_url(stack["redis"], decode_responses=True)
+    records = list(store.scan_iter("jari:mobile:v1:running_reservation:*"))
+    assert len(records) == 1
+    record = json.loads(store.get(records[0]))
+    worker, owner = record["process_id"], record["chat_id"]
+    assert psutil.pid_exists(worker)
+
+    assert client.call("POST", "/account/delete", {"password": client.user["password"]}) == {
+        "deleted": True
+    }
+
+    # The user's own stop path killed the worker; it is not left for the watchdog to find.
+    assert not psutil.pid_exists(worker) or psutil.Process(worker).status() == "zombie"
+    searches = len([call for call in client.korail_log() if call["event"] == "search"])
+    time.sleep(1)
+    assert len([call for call in client.korail_log() if call["event"] == "search"]) == searches
+    left = sorted(
+        key
+        for pattern in (f"jari:mobile:v1:*:{owner}", f"jari:mobile:v1:*:{owner}:*")
+        for key in store.scan_iter(pattern)
+    )
+    assert left == [f"jari:mobile:v1:search_ended:{owner}"]
+    assert client.error("GET", "/status")[0] == 401
+    try:
+        request(
+            "POST",
+            f"{client.api}/api/mobile/auth/login",
+            {"username": client.user["username"], "password": client.user["password"]},
+        )
+        raise AssertionError("지운 계정으로 로그인됐어요.")
+    except urllib.error.HTTPError as refused:
+        with refused:
+            assert refused.code == 401
+    store.close()

@@ -26,6 +26,11 @@ def main():
         help="List the running searches and whether a restart would resume each (read-only)",
     )
     running.add_argument("--json", action="store_true", help="One JSON object, for scripts")
+    delete = commands.add_parser(
+        "delete-account",
+        help="Delete an app account and everything kept for it (a deletion request made by email)",
+    )
+    delete.add_argument("--username", required=True)
     serve = commands.add_parser("serve", help="Run one API and booking worker owner")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8081)
@@ -51,6 +56,9 @@ def main():
             return
         if args.command == "running":
             print_running(config, as_json=args.json)
+            return
+        if args.command == "delete-account":
+            print(delete_account(config, args.username))
             return
         from waitress import serve as serve_wsgi
 
@@ -92,6 +100,32 @@ def main():
         parser.error(str(exc))
     except KeyboardInterrupt:
         pass
+
+
+def delete_account(config, username):
+    """
+    What the app's own 회원 탈퇴 does, for a request that came by email: run
+    beside the API (docker compose exec) against the same Redis and database.
+    The search is stopped by its PID, as the deploy check finds workers.
+    """
+    from korail_bot.mobile.api import erase_account
+    from korail_bot.mobile.runtime import MobileRuntime
+    from korail_bot.services.mini_app_gateway import MiniAppError
+
+    # A no-op push: nothing is delivered from here, and Firebase stays unloaded.
+    runtime = MobileRuntime(config, push=lambda token, event_id: None)
+    try:
+        user = runtime.identity.find_user(username)
+        if user is None:
+            raise ValueError(f"No app account named {username!r}")
+        try:
+            erase_account(runtime.identity, runtime.gateway, runtime.notifications, user)
+        except MiniAppError as exc:
+            raise ValueError(str(exc)) from exc
+    finally:
+        if runtime.storage:
+            runtime.storage.close()
+    return f"Deleted {user['username']} ({user['id']})"
 
 
 def print_running(config, *, as_json):

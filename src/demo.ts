@@ -191,6 +191,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
       expiresAt: new Date(clock().getTime() + 86_400_000).toISOString(),
     }),
     logoutApp: async () => ({ ok: true }),
+    deleteAccount: async () => ({ deleted: true }),
     bootstrap: async () => bootstrap(),
     railwayRegister: async () => {
       registered = true;

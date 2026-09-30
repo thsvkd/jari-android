@@ -138,6 +138,18 @@ class Notifications:
         with self.identity.connect() as db:
             db.execute("DELETE FROM devices WHERE hash=? AND owner=?", (digest(token), owner))
 
+    def forget(self, owner):
+        """Everything kept for one account: its inbox, its devices and whatever is queued to them."""
+        with self.identity.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "DELETE FROM outbox WHERE event_id IN (SELECT id FROM events WHERE owner=?)"
+                " OR device_hash IN (SELECT hash FROM devices WHERE owner=?)",
+                (owner, owner),
+            )
+            db.execute("DELETE FROM devices WHERE owner=?", (owner,))
+            db.execute("DELETE FROM events WHERE owner=?", (owner,))
+
     def deliver(self):
         if self.push is None:
             return 0

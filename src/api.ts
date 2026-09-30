@@ -285,6 +285,12 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
         body: {}, authenticated: false, revokedToken: token,
       });
     },
+    deleteAccount: async (password) => {
+      const result = await request<{ deleted: boolean }>("/account/delete", { body: { password } });
+      // The account is gone on the server, so is its session: drop the token that now names nothing.
+      await options.tokenStorage.clear();
+      return result;
+    },
     bootstrap: () => request<BootstrapState>("/bootstrap"),
     railwayRegister: (input) => request<{ registered: boolean }>("/register", { body: input }),
     railwayLogout: () => request<{ registered: boolean }>("/logout", { body: {} }),

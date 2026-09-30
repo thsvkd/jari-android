@@ -8,6 +8,8 @@ services:
       MOBILE_DATA_DIR: /data
       MOBILE_REDIS_URL: redis://redis:6379/0
       MOBILE_ORIGINS: https://localhost,capacitor://localhost
+      # /privacy·/delete-account 에 개인정보 문의·웹 탈퇴 요청 주소로 보여요.
+      MOBILE_PRIVACY_CONTACT: thsxogud1123@gmail.com
     secrets:
       - mobile_secret
       - firebase_admin

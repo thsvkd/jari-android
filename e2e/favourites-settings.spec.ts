@@ -76,3 +76,37 @@ test.describe("설정", () => {
     await expect(page.locator(".auth-shell")).toBeVisible();
   });
 });
+
+test.describe("회원 탈퇴", () => {
+  test("틀린 비밀번호는 알리고 그대로 두며, 맞으면 계정을 지우고 로그인 화면에 알려요 @layout", async ({ signedIn: page, user }) => {
+    await page.locator(".bottom-nav [data-view='settings']").click();
+    const row = page.locator("[data-action='delete-account']");
+    await expect(row).toContainText("회원 탈퇴");
+    await expectCleanLayout(page, "설정(회원 탈퇴 줄)");
+
+    await row.click();
+    const sheet = page.locator(".action-sheet");
+    await expect(sheet).toContainText("회원 탈퇴할까요?");
+    await expect(sheet.locator("[data-action='sheet-confirm']")).toHaveClass(/danger/);
+    await expectCleanLayout(page, "회원 탈퇴 시트");
+
+    await sheet.locator("#sheet-password").fill("wrong long passphrase");
+    await sheet.locator("[data-action='sheet-confirm']").click();
+    await expect(page.locator(".toast")).toHaveText("앱 비밀번호가 맞지 않아요.");
+    await expect(page.locator(".screen-settings")).toBeVisible();
+    await expectCleanLayout(page, "설정(탈퇴 거절 토스트)");
+
+    await row.click();
+    await page.locator(".action-sheet #sheet-password").fill(user.password);
+    await page.locator(".action-sheet [data-action='sheet-confirm']").click();
+    await expect(page.locator(".auth-shell .auth-notice")).toContainText("탈퇴했어요");
+    await expectCleanLayout(page, "로그인(탈퇴 뒤)");
+
+    // 지운 계정으로는 다시 들어올 수 없어요.
+    await page.locator("[data-auth-gate='guest']").click();
+    await page.locator("#auth-form [name='username']").fill(user.username);
+    await page.locator("#auth-form [name='password']").fill(user.password);
+    await page.locator("#auth-form [name='password']").press("Enter");
+    await expect(page.locator(".form-error")).toHaveText("아이디나 비밀번호를 확인해 주세요.");
+  });
+});

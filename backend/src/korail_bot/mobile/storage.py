@@ -164,6 +164,26 @@ class MobileStorage(RedisStorage):
     def _secret_box(self):
         return self.box
 
+    # Kept when an account is deleted: no personal data (why and when a search
+    # ended, and the worker's PID), it expires within a week, and a deploy
+    # check under way reads it to tell a search that ended from one it lost.
+    KEPT_ON_DELETE = ("search_ended",)
+
+    def delete_user_data(self, chat_id):
+        """
+        Every record this storage keeps for one owner. Each key names its owner
+        as a whole segment (`name:<id>` or `name:<id>:<more>`), so a scan for
+        that segment finds them all, including kinds added after this was written.
+        """
+        keys = {
+            key
+            for pattern in (f"*:{chat_id}", f"*:{chat_id}:*")
+            for key in self.redis.scan_iter(match=pattern, count=100)
+        }
+        keys -= {f"{kind}:{chat_id}" for kind in self.KEPT_ON_DELETE}
+        self.redis.delete(*keys)
+        return len(keys)
+
     def is_developer(self, chat_id):
         return False
 

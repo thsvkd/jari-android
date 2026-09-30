@@ -18,6 +18,11 @@ PASSWORD_METHOD = "scrypt:32768:8:3"
 _DUMMY_HASH = generate_password_hash("no such account", method=PASSWORD_METHOD)
 
 
+LAST_ADMIN_MESSAGE = (
+    "마지막 관리자 계정은 탈퇴할 수 없어요. 서버에서 다른 관리자 계정을 만든 뒤 탈퇴해 주세요."
+)
+
+
 class AuthError(ValueError):
     def __init__(self, message="아이디나 비밀번호를 확인해 주세요.", status=401):
         super().__init__(message)
@@ -224,6 +229,53 @@ class IdentityStore:
             "role": public["role"],
             "storage_id": user["storage_id"],
         }
+
+    def check_password(self, user_id, password):
+        """True if `password` is this account's password (re-entered before a destructive action)."""
+        if not isinstance(password, str) or not 1 <= len(password) <= 128:
+            return False
+        with self.connect() as db:
+            user = db.execute("SELECT password_hash FROM users WHERE id=?", (user_id,)).fetchone()
+        valid = check_password_hash(user["password_hash"] if user else _DUMMY_HASH, password)
+        return user is not None and valid
+
+    def find_user(self, username):
+        """The account as authenticate() returns it, by app ID; None if there is none."""
+        if not isinstance(username, str):
+            return None
+        with self.connect() as db:
+            user = db.execute(
+                "SELECT * FROM users WHERE username=?", (username.lower(),)
+            ).fetchone()
+        return user and {**self._public_user(user), "storage_id": user["storage_id"]}
+
+    def admin_count(self):
+        with self.connect() as db:
+            return db.execute("SELECT count(*) FROM users WHERE role='admin'").fetchone()[0]
+
+    def delete_user(self, user_id, username, *, rate_limit_keys=()):
+        """
+        Remove the account, every session it holds and its own rate-limit buckets.
+
+        The last admin is refused: invites come only from an admin, and the app
+        would be left with nobody able to let a friend in. The operator can
+        still create another with `python -m korail_bot.mobile admin` first.
+        """
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            user = db.execute("SELECT role FROM users WHERE id=?", (user_id,)).fetchone()
+            if user is None:
+                return False
+            if (
+                user["role"] == "admin"
+                and db.execute("SELECT count(*) FROM users WHERE role='admin'").fetchone()[0] <= 1
+            ):
+                raise AuthError(LAST_ADMIN_MESSAGE, 409)
+            db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+            db.execute("DELETE FROM users WHERE id=?", (user_id,))
+            keys = [*rate_limit_keys, "auth-user:" + username.lower()]
+            db.executemany("DELETE FROM rate_limits WHERE key=?", [(digest(k),) for k in keys])
+            return True
 
     def revoke(self, token):
         with self.connect() as db:

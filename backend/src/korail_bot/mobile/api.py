@@ -4,11 +4,12 @@ import math
 import threading
 from functools import wraps
 
-from flask import Flask, g, jsonify, request
+from flask import Flask, Response, g, jsonify, request
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 
 from korail_bot.mobile.config import MAX_REQUEST_BYTES
-from korail_bot.mobile.identity import AuthError, timestamp
+from korail_bot.mobile.identity import LAST_ADMIN_MESSAGE, AuthError, timestamp
+from korail_bot.mobile.pages import delete_account_page, privacy_page
 from korail_bot.services.mini_app_gateway import MiniAppError
 
 PREFIX = "/api/mobile"
@@ -28,8 +29,40 @@ def _log_field(value):
     return "".join(c for c in str(value)[:80] if c.isprintable() and not c.isspace()) or "-"
 
 
+# Public pages for Google Play: any browser, no session, cacheable.
+PUBLIC_PAGES = {"/privacy": privacy_page, "/delete-account": delete_account_page}
+
+
+def erase_account(identity, gateway, notifications, user):
+    """
+    Delete one app account and everything kept for it, in the order that lets
+    a failure be retried: the railway side first (the search stopped and its
+    records gone), then the inbox and devices, the identity last. Until that
+    last step the user can still log in and try again.
+    """
+    if user["role"] == "admin" and identity.admin_count() <= 1:
+        raise AuthError(LAST_ADMIN_MESSAGE, 409)
+    gateway.delete_account(user["storage_id"])
+    if notifications:
+        notifications.forget(user["storage_id"])
+    identity.delete_user(
+        user["id"],
+        user["username"],
+        rate_limit_keys=[
+            f"{kind}:{user['id']}" for kind in ("api", "rail", "diag", "account-delete")
+        ],
+    )
+
+
 def create_app(
-    identity, gateway, notifications=None, *, origins=(), booking_available=True, health=None
+    identity,
+    gateway,
+    notifications=None,
+    *,
+    origins=(),
+    booking_available=True,
+    health=None,
+    privacy_contact=None,
 ):
     app = Flask(__name__)
     # This is what bounds the total size of a seat plan: one seat target is
@@ -70,14 +103,22 @@ def create_app(
 
     @app.before_request
     def validate_request():
+        if request.path in PUBLIC_PAGES:
+            return
         origin = request.headers.get("Origin")
         if origin and origin not in origins:
             raise AuthError("이 주소에서는 앱에 접속할 수 없어요.", 403)
 
     @app.after_request
     def response_headers(response):
-        response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
+        if request.path in PUBLIC_PAGES and response.status_code == 200:
+            response.headers["Cache-Control"] = "public, max-age=3600"
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+            )
+            return response
+        response.headers["Cache-Control"] = "no-store"
         origin = request.headers.get("Origin")
         if origin and origin in origins:
             response.headers["Access-Control-Allow-Origin"] = origin
@@ -150,6 +191,13 @@ def create_app(
 
         return wrapped
 
+    for path, page in PUBLIC_PAGES.items():
+
+        def public_page(page=page):
+            return Response(page(privacy_contact), mimetype="text/html")
+
+        app.add_url_rule(path, path.strip("/"), public_page, methods=["GET"])
+
     @app.get(PREFIX + "/health")
     def health_check():
         # Unauthenticated, for uptime probes and the container healthcheck: it
@@ -188,6 +236,18 @@ def create_app(
     def logout_auth():
         identity.revoke(g.token)
         return jsonify(ok=True)
+
+    @app.post(PREFIX + "/account/delete")
+    @authenticated
+    def delete_account():
+        # The password again: a phone left unlocked must not be enough to
+        # erase someone's account. Its own small bucket bounds the guessing.
+        limited("account-delete:" + g.user["id"], 5, 300)
+        # 403, not 401: the app reads 401 as an expired session and logs out.
+        if not identity.check_password(g.user["id"], g.payload.get("password")):
+            raise AuthError("앱 비밀번호가 맞지 않아요.", 403)
+        erase_account(identity, gateway, notifications, g.user)
+        return jsonify(deleted=True)
 
     @app.post(PREFIX + "/invites")
     @authenticated

@@ -591,6 +591,29 @@ class MobileGateway(MiniAppGateway):
         return {"registered": False}
 
     @serialized_operation
+    def delete_account(self, chat_id):
+        """
+        Stop and erase everything this owner has on the railway side: the search
+        (its worker killed, as the user's own cancel does), a search booked for
+        later, the linked Korail login, favourites, stopped-search records and
+        every other record under this owner's id.
+
+        A seat held for payment is refused rather than cancelled here: giving it
+        back is a Korail request the user should see answered, and the payment
+        watch would otherwise go on polling with a login this erases.
+        """
+        if self.pending_payments.pending(chat_id):
+            raise MiniAppError(
+                "결제를 기다리는 예약이 있어요. 결제하거나 예약을 취소한 뒤 탈퇴해 주세요.", 409
+            )
+        result = self.cancel_search(chat_id)
+        if not result["stopped"] and self.storage.get_running_reservation(chat_id):
+            raise MiniAppError("자리 찾기를 멈추지 못했어요. 잠시 후 다시 시도해 주세요.", 409)
+        self._forget_rail(chat_id)
+        self.storage.delete_user_data(chat_id)
+        return {"deleted": True}
+
+    @serialized_operation
     def cancel_search(self, chat_id):
         result = super().cancel_search(chat_id)
         if result["unscheduled"]:
@@ -627,6 +650,10 @@ class UnavailableGateway:
 
     def sync_timezone(self, chat_id, zone):
         pass
+
+    def delete_account(self, chat_id):
+        # Nothing railway-side was ever stored without a booking server.
+        return {"deleted": True}
 
     def __getattr__(self, name):
         def unavailable(*args, **kwargs):

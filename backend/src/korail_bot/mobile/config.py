@@ -17,6 +17,9 @@ class MobileConfig:
     redis_url: str | None = field(default=None, repr=False)
     fcm_credentials: str | None = None
     origins: tuple[str, ...] = ("https://localhost", "capacitor://localhost")
+    # Shown on the public privacy and account-deletion pages. Unset, they point
+    # to the in-app deletion and the person who sent the invitation instead.
+    privacy_contact: str | None = None
 
     @classmethod
     def from_env(cls, *, auth_only=False):
@@ -61,4 +64,5 @@ class MobileConfig:
             None if auth_only else url,
             fcm,
             origins,
+            os.environ.get("MOBILE_PRIVACY_CONTACT", "").strip() or None,
         )

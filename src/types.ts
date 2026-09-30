@@ -267,6 +267,8 @@ export interface MobileApi {
   login(input: { username: string; password: string; role?: AppRole }): Promise<AuthResult>;
   createInvite(input?: { ttlHours?: number }): Promise<InviteResult>;
   logoutApp(): Promise<{ ok: boolean }>;
+  /** 회원 탈퇴. 성공하면 이 폰의 로그인도 지워요. */
+  deleteAccount(password: string): Promise<{ deleted: boolean }>;
   bootstrap(): Promise<BootstrapState>;
   railwayRegister(input: { username: string; password: string }): Promise<{ registered: boolean }>;
   railwayLogout(): Promise<{ registered: boolean }>;

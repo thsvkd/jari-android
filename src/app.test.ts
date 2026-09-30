@@ -2052,6 +2052,62 @@ it("opens the tabs without a back button and keeps logout last in settings", asy
   expect(buttons[buttons.length - 1]?.getAttribute("data-action")).toBe("app-logout");
 });
 
+describe("회원 탈퇴", () => {
+  it("asks for the app password in a danger sheet and returns to login with a notice once the server erased the account", async () => {
+    const deleteAccount = vi.fn(async (_password: string) => ({ deleted: true }));
+    const { app, root } = await mountLive({ deleteAccount });
+    window.localStorage.setItem("jari.recentRoutes", "[]");
+    app.navigate("settings");
+    root.querySelector<HTMLButtonElement>("[data-action='delete-account']")!.click();
+    const sheet = root.querySelector<HTMLElement>(".action-sheet")!;
+    expect(sheet.textContent).toContain("회원 탈퇴할까요?");
+    expect(sheet.textContent).toContain("되돌릴 수 없어요");
+    expect(sheet.querySelector("[data-action='sheet-confirm']")!.classList.contains("danger")).toBe(true);
+    const password = sheet.querySelector<HTMLInputElement>("#sheet-password")!;
+    expect(password.type).toBe("password");
+
+    // Nothing typed: nothing sent.
+    sheet.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".toast")?.textContent).toBe("앱 비밀번호를 입력해 주세요."));
+    expect(deleteAccount).not.toHaveBeenCalled();
+
+    root.querySelector<HTMLButtonElement>("[data-action='delete-account']")!.click();
+    root.querySelector<HTMLInputElement>("#sheet-password")!.value = "a long secure passphrase";
+    root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".auth-shell")).not.toBeNull());
+    expect(deleteAccount).toHaveBeenCalledExactlyOnceWith("a long secure passphrase");
+    expect(root.querySelector(".auth-notice")?.textContent).toContain("탈퇴했어요");
+    expect(app).toMatchObject({ state: null, busy: false });
+    expect(window.localStorage.getItem("jari.recentRoutes")).toBeNull();
+  });
+
+  it("keeps the account and says why when the server refuses", async () => {
+    const { ApiError } = await import("./api");
+    const deleteAccount = vi.fn(async () => { throw new ApiError("앱 비밀번호가 맞지 않아요.", 403); });
+    const { app, root } = await mountLive({ deleteAccount });
+    app.navigate("settings");
+    root.querySelector<HTMLButtonElement>("[data-action='delete-account']")!.click();
+    root.querySelector<HTMLInputElement>("#sheet-password")!.value = "wrong long passphrase";
+    root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".toast")?.textContent).toBe("앱 비밀번호가 맞지 않아요."));
+    expect(root.querySelector(".screen-settings")).not.toBeNull();
+    expect(root.querySelector(".action-sheet")).toBeNull();
+    expect(app).toMatchObject({ busy: false, error: "" });
+  });
+
+  it("cancelling the sheet sends nothing", async () => {
+    const deleteAccount = vi.fn(async () => ({ deleted: true }));
+    const { app, root } = await mountLive({ deleteAccount });
+    app.navigate("settings");
+    root.querySelector<HTMLButtonElement>("[data-action='delete-account']")!.click();
+    root.querySelector<HTMLInputElement>("#sheet-password")!.value = "a long secure passphrase";
+    root.querySelector<HTMLButtonElement>("[data-action='sheet-cancel']")!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deleteAccount).not.toHaveBeenCalled();
+    expect(root.querySelector(".screen-settings")).not.toBeNull();
+  });
+});
+
 describe("테마 날짜 선택기와 토스트", () => {
   it("replaces the native date input in the journey form and keeps the picked day through rerenders", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

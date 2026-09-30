@@ -170,6 +170,7 @@ class MobileRuntime:
             origins=config.origins,
             booking_available=self.storage is not None,
             health=self.health,
+            privacy_contact=config.privacy_contact,
         )
 
     def health(self):

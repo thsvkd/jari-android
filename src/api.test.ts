@@ -236,6 +236,31 @@ it("logout clears local A before waiting for revocation and never revokes B", as
   expect(expired).not.toHaveBeenCalled();
 });
 
+it("account deletion re-sends the password and drops the token only once the server erased the account", async () => {
+  let token: string | null = "opaque-session";
+  const tokenStorage = createSessionStorage({
+    write: async (next) => { token = next; },
+    read: async () => token,
+    clear: async () => { token = null; },
+  });
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(response({ error: "앱 비밀번호가 맞지 않아요." }, 403))
+    .mockResolvedValueOnce(response({ deleted: true }));
+  const api = createHttpApi({ baseUrl: "https://jari.example", tokenStorage, fetcher });
+
+  // 403, not 401: a wrong password keeps the session.
+  await expect(api.deleteAccount("wrong long passphrase")).rejects.toMatchObject({ status: 403, kind: "server" });
+  expect(token).toBe("opaque-session");
+
+  await expect(api.deleteAccount("a long secure passphrase")).resolves.toEqual({ deleted: true });
+  const [url, init] = fetcher.mock.calls[1]!;
+  expect(url).toBe("https://jari.example/api/mobile/account/delete");
+  expect(init?.method).toBe("POST");
+  expect(JSON.parse(String(init?.body))).toEqual({ password: "a long secure passphrase" });
+  expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer opaque-session");
+  expect(token).toBeNull();
+});
+
 describe("connection misses", () => {
   const signedIn = () => createSessionStorage({ read: async () => "opaque-session", write: async () => {}, clear: async () => {} });
 
