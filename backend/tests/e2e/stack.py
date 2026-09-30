@@ -15,6 +15,9 @@ GET /health 가 200 을 돌려주고, 표준 출력에 E2E_READY {...} 한 줄�
     POST /reset              시나리오를 기본값으로, 코레일 호출 기록과 요청 한도를 비움
     GET  /log                가짜 코레일이 받은 호출 목록
     POST /user               초대 코드로 새 사용자를 만들고 {username, password, token} 을 돌려줌
+    POST /restart            서버를 SIGTERM 으로 내리고(워커는 서버가 스스로 멈춰요) 같은 환경·비밀·Redis·
+                             데이터 폴더로 다시 띄움. 운영 배포(docker compose up)와 같은 재시작이에요.
+                             새 서버가 답하면(재시작 복구가 끝난 뒤예요) {pid} 를 돌려줌
 """
 
 from __future__ import annotations
@@ -44,6 +47,8 @@ HERE = Path(__file__).resolve().parent
 BACKEND = HERE.parent.parent
 FAKE_KORAIL = HERE / "fake_korail"
 SCENARIO_KEY, LOG_KEY = "e2e:scenario", "e2e:log"
+# 가짜 코레일이 로그인에 답하지 않은 횟수. 시나리오를 바꿀 때마다 새로 세요(jari_fake_korail 참고).
+LOGIN_UNREACHABLE_KEY = "e2e:login_unreachable"
 
 # 운영 기본값(초 단위 대기)을 줄여 한 흐름이 몇 초 안에 끝나게 해요. 로직은 그대로예요.
 FAST_SETTINGS = {
@@ -55,6 +60,7 @@ FAST_SETTINGS = {
     "WATCHDOG_POLL_SECONDS": "1",
     "SCHEDULE_POLL_SECONDS": "1",
     "MAX_CONCURRENT_SEARCHES": "0",
+    "LOGIN_RETRY_DELAYS_SECONDS": "0.2,0.2,0.2",
 }
 
 
@@ -91,6 +97,8 @@ class Stack:
         self.redis_url = f"redis://127.0.0.1:{args.redis_port}/0"
         self.admin = {"username": "e2eadmin", "password": secrets.token_urlsafe(18)}
         self.server: subprocess.Popen | None = None
+        # 재시작하는 동안 잡아요. 그 사이 옛 서버가 멈춘 것을 스택이 서버가 죽은 것으로 보지 않게요.
+        self.lock = threading.RLock()
         self.tokens: list[str] = []
         self.ready = False
         pythonpath = os.pathsep.join(filter(None, [str(FAKE_KORAIL), os.environ.get("PYTHONPATH")]))
@@ -135,6 +143,12 @@ class Stack:
         )
         # 스택이 끝날 때까지 서버와 워커의 출력을 받아요. stop() 에서 닫아요.
         self.log = (self.data / "server.log").open("wb")
+        self.spawn()
+        self.reset()
+        self.ready = True
+
+    def spawn(self) -> None:
+        """서버를 띄우고, 답하고 가짜 코레일을 끼웠다고 남길 때까지 기다려요."""
         self.server = subprocess.Popen(
             [
                 self.python,
@@ -173,8 +187,25 @@ class Stack:
             raise SystemExit(
                 "서버에 가짜 코레일이 끼워지지 않았어요. 실제 코레일로 나갈 수 있어 멈춰요."
             )
-        self.reset()
-        self.ready = True
+
+    def restart(self) -> int:
+        """
+        운영 배포처럼 서버만 SIGTERM 으로 내리고 같은 설정으로 다시 띄워요.
+
+        서버는 멈추면서 워커를 멈추고 실행 기록을 남겨 두고, 새 서버는 시작하면서 그 기록으로
+        찾기를 다시 띄워요(reconcile_after_restart). 워커는 서버가 멈추니 여기서 건드리지 않아요.
+        Windows 의 SIGTERM 은 정리 없이 끝내는 것이라 이 재시작을 흉내 내지 못해요.
+        """
+        with self.lock:
+            self.server.send_signal(signal.SIGTERM)
+            # 운영의 stop_grace_period 와 같은 60초. 넘기면 정리가 멈춘 것이라 테스트가 실패해야 해요.
+            self.server.wait(timeout=60)
+            self.spawn()
+            return self.server.pid
+
+    def alive(self) -> bool:
+        with self.lock:
+            return self.server.poll() is None
 
     def reset(self) -> None:
         # 앞 테스트의 찾기가 다음 테스트의 시나리오로 좌석을 잡지 않게 멈춰요.
@@ -191,7 +222,7 @@ class Stack:
                     child.kill()
             except psutil.Error:
                 pass
-        self.redis.delete(SCENARIO_KEY, LOG_KEY)
+        self.redis.delete(SCENARIO_KEY, LOG_KEY, LOGIN_UNREACHABLE_KEY)
         with sqlite3.connect(self.data / "identity.sqlite3") as db:
             db.execute("DELETE FROM rate_limits")
 
@@ -266,7 +297,10 @@ def control(stack: Stack):
             body = json.loads(self.rfile.read(length) or b"{}")
             if self.path == "/scenario":
                 stack.redis.set(SCENARIO_KEY, json.dumps(body))
+                stack.redis.delete(LOGIN_UNREACHABLE_KEY)
                 return self.reply(200, body)
+            if self.path == "/restart":
+                return self.reply(200, {"pid": stack.restart()})
             if self.path == "/reset":
                 stack.reset()
                 return self.reply(200, {"reset": True})
@@ -297,7 +331,7 @@ def main() -> None:
         print(
             "E2E_READY " + json.dumps({"api": stack.api, "control": args.control_port}), flush=True
         )
-        while stack.server.poll() is None:
+        while stack.alive():
             time.sleep(0.5)
         raise SystemExit(f"서버가 멈췄어요. 로그: {stack.data / 'server.log'}")
     except KeyboardInterrupt:

@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 import redis
 from korail2 import TrainType
 from korail2.korail2 import Reservation, Train
+from korail_mobile_api.errors import KorailTransportError
 from korail_mobile_api.models import (
     PhysicalSeat,
     SeatCar,
@@ -37,6 +38,8 @@ KST = ZoneInfo("Asia/Seoul")
 SCENARIO_KEY = "e2e:scenario"
 LOG_KEY = "e2e:log"
 COUNTER_KEY = "e2e:counter"
+# 시나리오를 바꾼 뒤 코레일이 로그인에 답하지 않은 횟수. 스택이 시나리오를 바꿀 때 지워요.
+LOGIN_UNREACHABLE_KEY = "e2e:login_unreachable"
 
 # 한 번의 조회가 돌려줄 열차. 시각은 조회한 출발 시각부터의 분, 좌석 코드는 코레일 것 그대로
 # ("11" 예약 가능, "13" 매진, "00" 없음), wait 은 예약대기 가능(9) 여부예요.
@@ -86,6 +89,8 @@ DEFAULT_TRAINS = [
 DEFAULT_SCENARIO = {
     # 코레일이 이 계정을 받아 주는지
     "login": True,
+    # 시나리오를 바꾼 뒤 처음 몇 번의 로그인에 코레일이 답하지 않는지(HTTP 503). 그 뒤로는 login 대로 답해요.
+    "login_unreachable": 0,
     # 예약 워커의 조회 결과: seats(몇 번 헛돈 뒤 빈자리) | sold_out(계속 매진) | unavailable(조회 실패)
     "search": "seats",
     "seat_after_polls": 2,
@@ -171,8 +176,15 @@ class FakeKorail:
     """KorailService 에 덮어쓸 메서드 모음. self 는 실제 KorailService 인스턴스예요."""
 
     def _login_with_current_api(self, username: str, password: str) -> bool:
-        accepted = bool(scenario()["login"])
-        _log("login", username=username, accepted=accepted)
+        state = scenario()
+        if _client().incr(LOGIN_UNREACHABLE_KEY) <= state["login_unreachable"]:
+            _log("login", username=username, accepted=False, unreachable=True, pid=os.getpid())
+            # 실제 클라이언트가 5xx 를 받았을 때 올리는 그 예외예요.
+            raise KorailTransportError(
+                "KORAIL HTTP 503 for POST /classes/com.korail.mobile.login.Login"
+            )
+        accepted = bool(state["login"])
+        _log("login", username=username, accepted=accepted, pid=os.getpid())
         return accepted
 
     def close(self) -> None:
@@ -232,7 +244,7 @@ class FakeKorail:
         state = scenario()
         polls = getattr(self, "_e2e_polls", 0) + 1
         self._e2e_polls = polls
-        _log("search", polls=polls, mode=state["search"])
+        _log("search", polls=polls, mode=state["search"], pid=os.getpid())
         if state["search"] == "unavailable":
             raise SearchUnavailableError("가짜 코레일: 조회 실패")
         if state["search"] == "sold_out" or polls <= state["seat_after_polls"]:

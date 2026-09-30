@@ -12,6 +12,8 @@ export interface User {
 
 export interface Scenario {
   login?: boolean;
+  /** 시나리오를 바꾼 뒤 처음 몇 번의 로그인에 코레일이 답하지 않는지(HTTP 503) */
+  login_unreachable?: number;
   search?: "seats" | "sold_out" | "unavailable";
   seat_after_polls?: number;
   outcome?: "OUTSTANDING" | "PAID" | "RELEASED" | "UNKNOWN";
@@ -38,6 +40,11 @@ export class Control {
   /** 관리자가 만든 것과 같은 일회용 초대 코드예요. */
   async newInvite(): Promise<string> {
     return (await this.post<{ invite: string }>("/invite", {})).invite;
+  }
+
+  /** 운영 배포처럼 API 서버를 SIGTERM 으로 내리고 같은 설정으로 다시 띄워요. 새 서버가 답하면(재시작 복구가 끝난 뒤) 돌아와요. */
+  async restart(): Promise<number> {
+    return (await this.post<{ pid: number }>("/restart", {})).pid;
   }
 
   async korailLog(): Promise<Array<Record<string, unknown>>> {
