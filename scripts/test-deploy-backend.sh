@@ -268,12 +268,17 @@ search() { # id runId workerAlive loggedIn resumable reason
 stopped() { # id why at
   printf '{"id":%s,"why":"%s","at":%s}' "$1" "$2" "$3"
 }
-# running <now> <stopped json|-> <search json>...
+ended() { # id why at
+  printf '{"id":%s,"why":"%s","at":%s}' "$1" "$2" "$3"
+}
+# running <now> <stopped json|-> <search json>...; ENDED=<ended json> and
+# UNREADABLE=<count> add the rest of the listing.
 running() {
   local now="$1" gone="$2"; shift 2
   [[ "$gone" == "-" ]] && gone=""
   local IFS=,
-  printf 'RUNNING={"now":%s,"searches":[%s],"stopped":[%s]}\n' "$now" "$*" "$gone"
+  printf 'RUNNING={"now":%s,"searches":[%s],"unreadable":%s,"stopped":[%s],"ended":[%s]}\n' \
+    "$now" "$*" "${UNREADABLE:-0}" "$gone" "${ENDED:-}"
 }
 BEFORE="$(running 1000 - "$(search -1 old true true true -)" "$(search -2 old true true false seats_reserved)")"
 
@@ -341,7 +346,17 @@ verify_resumed_against() { # the listing the new container reports; timeout
 }
 set +e
 RESUMED_OK="$(verify_resumed_against "$(running 1300 - "$(search -1 new true true true -)")")"
-RESUMED_ENDED="$(verify_resumed_against "$(running 1300 "$(stopped -1 crashed 900)")")"
+# Booked while the deploy waited; an older stop on file changes nothing.
+RESUMED_ENDED="$(verify_resumed_against "$(ENDED="$(ended -1 booked 1200)" running 1300 "$(stopped -1 crashed 900)")")"
+RESUMED_CANCELLED="$(verify_resumed_against "$(ENDED="$(ended -1 cancelled 1200)" running 1300 -)")"
+# Gone with no mark of how: not taken on trust, waited for, then reported.
+RESUMED_VANISHED="$(verify_resumed_against "$(running 1300 -)")"
+# An end mark from before the snapshot is not how this search ended.
+RESUMED_OLD_END="$(verify_resumed_against "$(ENDED="$(ended -1 booked 900)" running 1300 -)")"
+RESUMED_ERROR="$(verify_resumed_against "$(ENDED="$(ended -1 error 1200)" running 1300 -)" 600)"
+# A record the new build cannot read: failed at once, even with the search
+# itself listed as fine.
+RESUMED_UNREADABLE="$(verify_resumed_against "$(UNREADABLE=1 running 1300 - "$(search -1 new true true true -)")" 600)"
 RESUMED_OLD="$(verify_resumed_against "$(running 1300 - "$(search -1 old true true true -)")")"
 RESUMED_DEAD="$(verify_resumed_against "$(running 1300 - "$(search -1 new false true true -)")")"
 RESUMED_LOGGING_IN="$(verify_resumed_against "$(running 1300 - "$(search -1 new true false true -)")")"
@@ -357,19 +372,27 @@ else
   echo "$RESUMED_OK"
   FAIL=1
 fi
-if ! echo "$RESUMED_ENDED" | grep -q "VERIFY_RESUMED_RC" && echo "$RESUMED_ENDED" | grep -qF -- "-1 ended while this waited"; then
-  echo "ok: a search that finished on its own (only an older stop on file) does not fail the deploy"
-else
-  echo "FAIL: verify_resumed() failed the deploy for a search that finished on its own"
-  echo "$RESUMED_ENDED"
-  FAIL=1
-fi
+for case in "RESUMED_ENDED:booked" "RESUMED_CANCELLED:cancelled"; do
+  name="${case%%:*}"
+  want="${case#*:}"
+  out="${!name}"
+  if ! echo "$out" | grep -q "VERIFY_RESUMED_RC" && echo "$out" | grep -qF -- "-1 ended while this waited ($want)"; then
+    echo "ok: a search marked as ended ($want) while the deploy waited does not fail it"
+  else
+    echo "FAIL: verify_resumed() failed the deploy for a search that ended on its own ($want)"
+    echo "$out"
+    FAIL=1
+  fi
+done
 for case in \
   "RESUMED_OLD:not resumed yet" \
   "RESUMED_DEAD:resumed, but its worker is gone" \
   "RESUMED_LOGGING_IN:resumed, not logged in to Korail yet" \
   "RESUMED_STOPPED:stopped (korail_unreachable)" \
-  "RESUMED_ABANDONED:stopped (not_resumed_seat_held)"; do
+  "RESUMED_ABANDONED:stopped (not_resumed_seat_held)" \
+  "RESUMED_VANISHED:record gone with no mark of how it ended" \
+  "RESUMED_OLD_END:record gone with no mark of how it ended" \
+  "RESUMED_ERROR:ended on an error (error)"; do
   name="${case%%:*}"
   want="${case#*:}"
   out="${!name}"
@@ -381,6 +404,30 @@ for case in \
     FAIL=1
   fi
 done
+
+if echo "$RESUMED_UNREADABLE" | grep -q "VERIFY_RESUMED_RC=1" \
+  && echo "$RESUMED_UNREADABLE" | grep -q "1 running record(s) the new build cannot read"; then
+  echo "ok: verify_resumed() fails at once on running records the new build cannot read"
+else
+  echo "FAIL: verify_resumed() passed with running records the new build cannot read"
+  echo "$RESUMED_UNREADABLE"
+  FAIL=1
+fi
+
+set +e
+SNAP_UNREADABLE_RECORD="$(
+  run_remote() { cat >/dev/null; UNREADABLE=2 running 1000 -; }
+  DRY_RUN=0; ALLOW_UNRESUMABLE=0; SKIP_RESUME_CHECK=0; EXPECTED_RESUMES=""
+  { snapshot_running || echo "SNAPSHOT_RC=$?"; } 2>&1
+)"
+set -e
+if echo "$SNAP_UNREADABLE_RECORD" | grep -q "SNAPSHOT_RC=1" && echo "$SNAP_UNREADABLE_RECORD" | grep -q "2 running record(s) cannot be read"; then
+  echo "ok: snapshot_running() refuses when running records cannot be read by the running build"
+else
+  echo "FAIL: snapshot_running() ignored unreadable running records"
+  echo "$SNAP_UNREADABLE_RECORD"
+  FAIL=1
+fi
 
 echo "== main(): the listing is read again right before the restart =="
 READS="$(mktemp)"

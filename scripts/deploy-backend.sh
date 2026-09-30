@@ -24,13 +24,16 @@ SKIP_RESUME_CHECK=0
 #   135 s  a lease the old container failed to release (runtime.LEASE_WAIT)
 #   310 s  every resume retry before the runtime gives up
 #          (10+20+40+80+160, reservation_service._RESUME_RETRY_SECONDS)
+#    60 s  those six tries only happen on a pass of the background loop,
+#          one every 10 s (runtime.PASS_WAIT), so each can start up to one
+#          pass after it falls due
 #   230 s  the resumed worker's login retries while Korail does not answer
 #          (5+15+30+60+120, settings.LOGIN_RETRY_DELAYS_SECONDS)
 #    45 s  the starts and the logins themselves
 # A login attempt that hangs to the client's own timeout instead of failing
 # at once can take longer than this; the check then fails loudly, naming the
 # search as not logged in yet, and the search may still come back.
-RESUME_TIMEOUT="${DEPLOY_RESUME_TIMEOUT:-$((135 + 310 + 230 + 45))}"
+RESUME_TIMEOUT="${DEPLOY_RESUME_TIMEOUT:-$((135 + 310 + 60 + 230 + 45))}"
 RESUME_POLL="${DEPLOY_RESUME_POLL:-5}"
 # "<id> <runId>" per search the new container must bring back, one per line,
 # and the container's clock when that list was read: a search stopped after
@@ -182,8 +185,10 @@ EOF
 
 # running_rows < read_running output: the last RUNNING= line, as
 #   now <epoch>
+#   unreadable <count>      running records this build cannot parse
 #   search <id> <runId> <alive|gone> <in|out> <yes|no> <reason|->
-#   stopped <id> <why> <epoch>
+#   stopped <id> <why> <epoch>   stopped without finishing, or not resumed
+#   ended <id> <why> <epoch>     ended on its own: booked|cancelled|error
 # (in|out: logged in to Korail; yes|no: resumable). Only that line is read,
 # so whatever else reaches stdout cannot spoil it; fails without one.
 running_rows() {
@@ -192,12 +197,15 @@ import json, sys
 lines = [line[len("RUNNING="):] for line in sys.stdin if line.startswith("RUNNING=")]
 listing = json.loads(lines[-1])
 print("now", listing["now"])
+print("unreadable", listing["unreadable"])
 for row in listing["searches"]:
     print("search", row["id"], row["runId"], "alive" if row["workerAlive"] else "gone",
           "in" if row["loggedIn"] else "out", "yes" if row["resumable"] else "no",
           row["reason"] or "-")
 for row in listing["stopped"]:
     print("stopped", row["id"], row["why"], row["at"])
+for row in listing["ended"]:
+    print("ended", row["id"], row["why"], row["at"])
 '
 }
 
@@ -222,12 +230,21 @@ snapshot_running() {
     log "DRY-RUN refuse if a running search is not resumable; after the restart wait up to ${RESUME_TIMEOUT}s for each to be searching again"
     return 0
   fi
-  local out rows searches unresumable
+  local out rows searches unresumable unreadable
   if ! out="$(read_running)" || ! rows="$(printf '%s\n' "$out" | running_rows)"; then
     echo "[deploy] REFUSING: could not read the running searches from $SERVICE (an image without 'python -m korail_bot.mobile running'?); pass --skip-resume-check to deploy without checking them" >&2
     return 1
   fi
   SNAPSHOT_AT="$(printf '%s\n' "$rows" | awk '$1 == "now" { print $2 }')"
+  unreadable="$(printf '%s\n' "$rows" | awk '$1 == "unreadable" { print $2 }')"
+  if [[ "${unreadable:-0}" -gt 0 ]]; then
+    if [[ "$ALLOW_UNRESUMABLE" -ne 1 ]]; then
+      echo "[deploy] REFUSING: $unreadable running record(s) cannot be read by the running build; nothing would resume them" >&2
+      echo "[deploy] pass --allow-unresumable to accept losing them" >&2
+      return 1
+    fi
+    log "WARNING: $unreadable unreadable running record(s) will not come back (--allow-unresumable)"
+  fi
   searches="$(printf '%s\n' "$rows" | awk '$1 == "search" { $1 = ""; sub(/^ /, ""); print }')"
   if [[ -z "$searches" ]]; then
     EXPECTED_RESUMES=""
@@ -251,16 +268,21 @@ snapshot_running() {
 }
 
 # judge_resumes <rows>: one line per expected search -
-#   ok <id> <note>    searching again, or ended on its own while this waited
+#   ok <id> <note>    searching again, or booked or cancelled while this waited
 #   wait <id> <why>   not back yet; may still come back
-#   lost <id> <why>   stopped after the snapshot, or cleaned up by the restart
-# A record gone with nothing stopped on file is a search that finished - a
-# seat booked, or stopped by its user - which no deploy should be failed for.
+#   lost <id> <why>   stopped, not resumed, or ended on an error after the
+#                     snapshot; or records the new build cannot read
+# A record that is simply gone counts as finished only with the mark the end
+# of a search leaves (search_ended): without one it may as well have been
+# lost - unreadable to the new build, or gone with Redis - and it is waited
+# for, then reported, rather than taken on trust.
 judge_resumes() {
   awk -v since="$SNAPSHOT_AT" '
     NR == FNR {
+      if ($1 == "unreadable") unreadable = $2 + 0
       if ($1 == "search") { run[$2] = $3; alive[$2] = $4; login[$2] = $5 }
       if ($1 == "stopped" && $4 + 0 >= since + 0) stopped[$2] = $3
+      if ($1 == "ended" && $4 + 0 >= since + 0) ended[$2] = $3
       next
     }
     {
@@ -271,7 +293,14 @@ judge_resumes() {
         else if (login[id] != "in")      print "wait", id, "resumed, not logged in to Korail yet"
         else                             print "ok", id, "resumed and searching"
       } else if (id in stopped)          print "lost", id, "stopped (" stopped[id] ")"
-      else                               print "ok", id, "ended while this waited (finished, or stopped by its user)"
+      # "in" before any lookup: reading ended[id] would create the entry.
+      else if (!(id in ended))           print "wait", id, "record gone with no mark of how it ended"
+      else if (ended[id] == "booked" || ended[id] == "cancelled")
+                                         print "ok", id, "ended while this waited (" ended[id] ")"
+      else                               print "lost", id, "ended on an error (" ended[id] ")"
+    }
+    END {
+      if (unreadable > 0) print "lost", "-", unreadable " running record(s) the new build cannot read"
     }
   ' <(printf '%s\n' "$1") <(printf '%s\n' "$EXPECTED_RESUMES")
 }
