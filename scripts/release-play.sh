@@ -92,29 +92,35 @@ chmod 600 "$TEMP_KEYSTORE"
 secret JARI_ANDROID_RELEASE_KEYSTORE_B64 | base64 --decode > "$TEMP_KEYSTORE" \
   || fail "Doppler($DOPPLER_PROJECT/$DOPPLER_CONFIG)에서 업로드 키스토어(JARI_ANDROID_RELEASE_KEYSTORE_B64)를 꺼내지 못했어요. doppler login 과 시크릿 이름을 확인해 주세요."
 [[ -s "$TEMP_KEYSTORE" ]] || fail "업로드 키스토어가 비어 있어요."
-JARI_RELEASE_STORE_PASSWORD="$(secret JARI_ANDROID_RELEASE_STORE_PASSWORD || true)"
-JARI_RELEASE_KEY_ALIAS="$(secret JARI_ANDROID_RELEASE_KEY_ALIAS || true)"
-JARI_RELEASE_KEY_PASSWORD="$(secret JARI_ANDROID_RELEASE_KEY_PASSWORD || true)"
-[[ -n "$JARI_RELEASE_STORE_PASSWORD" && -n "$JARI_RELEASE_KEY_ALIAS" && -n "$JARI_RELEASE_KEY_PASSWORD" ]] \
+# 내보내지(export) 않는 셸 변수예요. 비밀번호는 keytool 과 Gradle 빌드에만 그 명령의 환경으로 넘기고, npm·npx 에는 가지 않아요.
+UPLOAD_STORE_PASSWORD="$(secret JARI_ANDROID_RELEASE_STORE_PASSWORD || true)"
+UPLOAD_KEY_ALIAS="$(secret JARI_ANDROID_RELEASE_KEY_ALIAS || true)"
+UPLOAD_KEY_PASSWORD="$(secret JARI_ANDROID_RELEASE_KEY_PASSWORD || true)"
+[[ -n "$UPLOAD_STORE_PASSWORD" && -n "$UPLOAD_KEY_ALIAS" && -n "$UPLOAD_KEY_PASSWORD" ]] \
   || fail "업로드 키의 비밀번호·별칭 시크릿이 비어 있어요."
-JARI_RELEASE_STORE_FILE="$TEMP_KEYSTORE"
-# android/app/build.gradle 이 이 네 값으로 release 서명 설정을 만들어요.
-export JARI_RELEASE_STORE_FILE JARI_RELEASE_STORE_PASSWORD JARI_RELEASE_KEY_ALIAS JARI_RELEASE_KEY_PASSWORD
 
-KEYSTORE_LIST="$(keytool -list -v -keystore "$TEMP_KEYSTORE" -storepass:env JARI_RELEASE_STORE_PASSWORD -alias "$JARI_RELEASE_KEY_ALIAS" 2>/dev/null)" \
+KEYSTORE_LIST="$(JARI_UPLOAD_STORE_PASSWORD="$UPLOAD_STORE_PASSWORD" keytool -list -v -keystore "$TEMP_KEYSTORE" -storepass:env JARI_UPLOAD_STORE_PASSWORD -alias "$UPLOAD_KEY_ALIAS" 2>/dev/null)" \
   || fail "업로드 키스토어를 열지 못했어요(비밀번호·별칭 확인)."
 KEYSTORE_SHA256="$(awk -F'SHA256: ' '/SHA256:/ {print $2; exit}' <<<"$KEYSTORE_LIST")"
 [[ -n "$KEYSTORE_SHA256" ]] || fail "업로드 키의 인증서 지문을 읽지 못했어요."
 
 echo "== 앱 $VERSION ($APP_ID, versionCode $VERSION_CODE) 웹 번들 ($API_BASE_URL)"
-VITE_API_BASE_URL="$API_BASE_URL" npm run build
+# 프로세스 환경이 .env 파일보다 먼저예요: 로컬 .env.local 에 VITE_DEMO_MODE=true 가 있어도 실서버 빌드가 돼요.
+VITE_API_BASE_URL="$API_BASE_URL" VITE_DEMO_MODE=false npm run build
 npx cap sync android
 echo "== Gradle bundleRelease"
 # 데몬 없이: 업로드 키 비밀번호가 든 환경을 빌드가 끝난 뒤까지 들고 있는 프로세스를 남기지 않아요.
-(cd android && ./gradlew --no-daemon clean bundleRelease)
+# android/app/build.gradle 이 JARI_RELEASE_* 네 값으로 release 서명 설정을 만들어요.
+(cd android && JARI_RELEASE_STORE_FILE="$TEMP_KEYSTORE" JARI_RELEASE_STORE_PASSWORD="$UPLOAD_STORE_PASSWORD" \
+  JARI_RELEASE_KEY_ALIAS="$UPLOAD_KEY_ALIAS" JARI_RELEASE_KEY_PASSWORD="$UPLOAD_KEY_PASSWORD" \
+  ./gradlew --no-daemon clean bundleRelease)
 # 광고·분석 없음(Play 에 그렇게 신고했어요): 분석·광고 SDK 가 의존성으로 끌려 들어오면 멈춰요.
-ANALYTICS="$(cd android && ./gradlew --no-daemon -q :app:dependencies --configuration releaseRuntimeClasspath \
-  | grep -oE 'com\.google\.(firebase:firebase-analytics|android\.gms:play-services-(measurement|ads))[a-z-]*' | sort -u || true)"
+# 목록을 읽지 못하면 통과가 아니라 실패예요. 푸시 라이브러리가 보여야 제대로 읽은 목록이에요.
+DEPENDENCIES="$(cd android && ./gradlew --no-daemon -q :app:dependencies --configuration releaseRuntimeClasspath)" \
+  || fail "릴리스 의존성 목록을 읽지 못했어요."
+grep -q 'com.google.firebase:firebase-messaging' <<<"$DEPENDENCIES" \
+  || fail "릴리스 의존성 목록에 firebase-messaging 이 없어요. 목록을 제대로 읽지 못한 것 같아요."
+ANALYTICS="$(grep -oE 'com\.google\.(firebase:firebase-analytics|android\.gms:play-services-(measurement|ads))[a-z-]*' <<<"$DEPENDENCIES" | sort -u || true)"
 [[ -z "$ANALYTICS" ]] || fail "광고·분석 라이브러리가 들어왔어요: $ANALYTICS"
 
 BUILT="$ROOT/android/app/build/outputs/bundle/release/app-release.aab"
@@ -160,13 +166,16 @@ else
 fi
 # unzip 뒤의 grep 은 -q 대신 -c 로 끝까지 읽어요. -q 가 먼저 끝나면 unzip 이 SIGPIPE 로 실패해 pipefail 이 결과를 뒤집어요.
 # WebView 디버깅은 Capacitor 가 앱이 debuggable 일 때만 켜요. 설정으로 켠 것도 없어야 해요.
-if unzip -p "$OUT" base/assets/capacitor.config.json | grep -c '"webContentsDebuggingEnabled": *true' >/dev/null; then
+CAP_CONFIG="$(unzip -p "$OUT" base/assets/capacitor.config.json)" || reject "AAB 에 capacitor.config.json 이 없어요."
+grep -q '"appId": *"'"$APP_ID"'"' <<<"$CAP_CONFIG" || reject "capacitor.config.json 을 읽지 못했거나 appId 가 $APP_ID 가 아니에요."
+if grep -q '"webContentsDebuggingEnabled": *true' <<<"$CAP_CONFIG"; then
   reject "capacitor.config.json 이 WebView 디버깅을 켜요."
 fi
 unzip -p "$OUT" base/assets/public/index.html >/dev/null 2>&1 || reject "AAB 에 웹 번들이 없어요."
-if ! unzip -p "$OUT" 'base/assets/public/assets/*.js' | grep -cF "$API_BASE_URL" >/dev/null; then
-  reject "웹 번들에 운영 API 주소($API_BASE_URL)가 없어요."
-fi
+WEB_JS="$(unzip -p "$OUT" 'base/assets/public/assets/*.js')" || reject "AAB 의 웹 번들을 읽지 못했어요."
+grep -qF "$API_BASE_URL" <<<"$WEB_JS" || reject "웹 번들에 운영 API 주소($API_BASE_URL)가 없어요."
+# 데모 빌드가 아니어야 해요. main.ts 의 `?demo=1 || VITE_DEMO_MODE === "true"` 를 Vite 가 접으면 실서버 빌드는 `||!1`, 데모 빌드는 `||!0` 이에요.
+grep -qF 'get("demo")==="1"||!1' <<<"$WEB_JS" || reject "웹 번들이 데모 빌드이거나 데모 여부를 확인할 수 없어요."
 # google-services 플러그인이 넣은 google_app_id 가 있어야 앱이 푸시를 켤 수 있어요(SecureSessionPlugin.pushConfigured).
 unzip -p "$OUT" base/resources.pb | LC_ALL=C grep -ac google_app_id >/dev/null || reject "AAB 에 Firebase 설정(google_app_id)이 없어요."
 
