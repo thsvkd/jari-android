@@ -1,6 +1,12 @@
 from types import SimpleNamespace
 
+import pytest
 import requests
+from korail_mobile_api.errors import (
+    KorailAuthError,
+    KorailServiceUnavailableError,
+    KorailTransportError,
+)
 
 from korail_bot.services.korail_service import KorailService
 
@@ -117,3 +123,54 @@ def test_successful_relogin_replaces_and_closes_previous_client(monkeypatch):
     assert second.closed is False
     assert service._modern_client is second
     assert service._relogin_count == 1
+
+
+class _UnreachableClient(_ModernClient):
+    def __init__(self, error: Exception):
+        super().__init__()
+        self.error = error
+
+    def login(self, username: str, password: str, **kwargs):
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        KorailTransportError("KORAIL HTTP 503 for POST /classes/login"),
+        KorailServiceUnavailableError("SEMGTK", "점검 중"),
+        TimeoutError("timed out"),
+    ],
+)
+def test_a_login_korail_never_answered_is_told_apart_from_a_refusal(monkeypatch, error):
+    service = KorailService()
+    modern = _UnreachableClient(error)
+    monkeypatch.setattr(service, "_build_modern_client", lambda: modern)
+
+    assert service.login("1234567890", "synthetic-password") is False
+
+    assert service.login_unavailable is True
+    assert modern.closed is True
+    assert service._modern_client is None
+
+
+def test_a_refused_login_is_not_mistaken_for_korail_being_down(monkeypatch):
+    service = KorailService()
+    service.login_unavailable = True  # left by an earlier try
+    modern = _UnreachableClient(KorailAuthError("비밀번호 오류"))
+    monkeypatch.setattr(service, "_build_modern_client", lambda: modern)
+
+    assert service.login("1234567890", "synthetic-password") is False
+
+    assert service.login_unavailable is False
+
+
+def test_a_relogin_korail_never_answered_fails_quietly(monkeypatch):
+    service = KorailService()
+    service._username, service._password = "1234567890", "synthetic-password"
+    monkeypatch.setattr(
+        service, "_build_modern_client", lambda: _UnreachableClient(KorailTransportError("x"))
+    )
+
+    assert service._relogin() is False
+    assert service._logged_in is False

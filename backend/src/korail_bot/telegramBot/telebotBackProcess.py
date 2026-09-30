@@ -326,14 +326,55 @@ class BackgroundReservationProcess:
 
         return getattr(ReserveOption, name)
 
+    def _log_in(self) -> bool:
+        """
+        Log in to Korail, trying again while Korail cannot be reached.
+
+        A search's first login is the one a restart depends on: the app comes
+        back up, starts the search again, and the search logs in that moment.
+        Korail not answering then - a timeout, a 5xx, a dropped connection -
+        says nothing about the credentials, and ending the search over it
+        deletes the login that resuming needs. So it is asked again after each
+        of LOGIN_RETRY_DELAYS_SECONDS. A refusal is Korail's answer and is
+        final at once: asking again with a wrong password only gets the
+        account locked.
+
+        Returns:
+            True once logged in; False on a refusal or once the waits run out,
+            with rail.login_unavailable saying which
+        """
+        delays = settings.LOGIN_RETRY_DELAYS_SECONDS
+        for attempt in range(len(delays) + 1):
+            if self.rail.login(self.username, self.password):
+                return True
+            if not self.rail.login_unavailable or attempt == len(delays):
+                return False
+            logger.warning(
+                f"Korail could not be reached to log in (try {attempt + 1} of "
+                f"{len(delays) + 1}); trying again in {delays[attempt]:g}s"
+            )
+            time.sleep(delays[attempt])
+        return False
+
     def run(self):
         """Run the reservation process."""
         try:
             logger.info(f"Logging in as {mask_phone(self.username)}...")
 
             # Login
-            if not self.rail.login(self.username, self.password):
+            if not self._log_in():
                 logger.error("Login failed")
+                if self.rail.login_unavailable:
+                    # Korail never answered. Saying the password is wrong
+                    # would send the user off to fix something that is fine.
+                    self._send_callback(
+                        "🌐 코레일 서버에 연결하지 못해 검색을 멈췄습니다.\n\n"
+                        "로그인을 여러 번 다시 시도했지만 코레일이 응답하지 않았습니다. "
+                        "코레일 서버가 점검 중이거나 불안정할 수 있습니다.\n\n"
+                        "잠시 후 /start 로 다시 시작해주세요.",
+                        status=1,
+                    )
+                    return
                 message = f"""
 ❌ 코레일 로그인 실패
 

@@ -58,6 +58,11 @@ class ReservationService:
         # the watchdog is told to stop looking rather than left to announce
         # every search as dead on the way out.
         self._shutting_down = False
+        # Searches left by an earlier run that could not be started again yet:
+        # how many tries each has had, and when the next is due (monotonic).
+        # Keyed by the record itself - chat, run and PID - so that nothing
+        # said here about one record can ever be read as being about another.
+        self._resume_attempts: dict[tuple[int, str, int], tuple[int, float]] = {}
 
     def start_reservation_process(
         self,
@@ -67,6 +72,7 @@ class ReservationService:
         search_params: TrainSearchParams,
         resumed: bool = False,
         resumed_message: str | None = None,
+        restoring: bool = False,
     ) -> bool:
         """
         Start a background reservation process.
@@ -82,11 +88,25 @@ class ReservationService:
                      resume notice. A restart and a user pressing "resume" are
                      both resumptions, but explaining one as the other is a
                      small lie the user has no way to check.
+            restoring: True when bringing back a search an earlier run left
+                     behind. A failure to start then leaves that record where
+                     it is, for reconcile_after_restart to try again, instead
+                     of recording a death: the user was never told the search
+                     stopped, and a retry that works means they never need to
+                     be - where a death notice followed by the search coming
+                     back is two contradictory messages about one search.
 
         Returns:
             True if process started successfully
         """
         try:
+            # Shutdown kills every search it knows of and leaves the records
+            # for the next run. One started after that would outlive the app,
+            # searching for a user nobody can tell about what it finds.
+            if self._shutting_down:
+                logger.warning(f"Not starting a search for chat_id={chat_id}: shutting down")
+                return False
+
             self._reap_children()
 
             # A search already recorded for this chat must not be replaced.
@@ -219,7 +239,7 @@ class ReservationService:
             # Only now is the search real. Everything below records it and
             # tells people about it, and doing that for a process that is
             # already gone is how a user ends up waiting all day on nothing.
-            if not self._confirm_started(proc, chat_id, username, search_params):
+            if not self._confirm_started(proc, chat_id, username, search_params, not restoring):
                 return False
 
             logger.info(f"Started reservation process for chat_id={chat_id}, pid={proc.pid}")
@@ -312,6 +332,7 @@ class ReservationService:
         chat_id: int,
         username: str,
         search_params: TrainSearchParams,
+        record_death: bool = True,
     ) -> bool:
         """
         Check that a freshly spawned search is actually running.
@@ -328,6 +349,8 @@ class ReservationService:
             chat_id: Telegram chat ID
             username: Korail username, for the record kept if it died
             search_params: What the search was to do
+            record_death: False when the caller keeps the search's record and
+                          tries again itself (see start_reservation_process)
 
         Returns:
             True when the process is still alive after the grace period
@@ -347,7 +370,8 @@ class ReservationService:
             f"Search process for chat_id={chat_id} exited immediately "
             f"with code {proc.returncode} - treating it as failed to start"
         )
-        self._record_death(chat_id, username, search_params, DeathCause.START_FAILED)
+        if record_death:
+            self._record_death(chat_id, username, search_params, DeathCause.START_FAILED)
         return False
 
     # ==================== Searches that stopped on their own ====================
@@ -401,6 +425,7 @@ class ReservationService:
         causes = {
             DeathCause.START_FAILED: Messages.SEARCH_DIED_CAUSE_START_FAILED,
             DeathCause.CRASHED: Messages.SEARCH_DIED_CAUSE_CRASHED,
+            DeathCause.RESUME_FAILED: Messages.SEARCH_DIED_CAUSE_RESUME_FAILED,
         }
         params = dead.search_params
         timezone_name = self.storage.get_user_timezone(dead.chat_id)
@@ -469,6 +494,13 @@ class ReservationService:
             # a gap this would otherwise report as a crash.
             if not self.storage.get_running_reservation(reservation.chat_id):
                 continue
+
+            # And the flag again. Shutdown can begin while this pass is under
+            # way, and from then on a process that is gone was killed on
+            # purpose: recording it as a death would move its record out of
+            # reach of the next run, which is the one meant to resume it.
+            if self._shutting_down:
+                break
 
             logger.warning(
                 f"Search process {reservation.process_id} for "
@@ -792,21 +824,33 @@ class ReservationService:
             except Exception as e:
                 logger.error(f"Failed to stop search process {pid}: {e}")
 
+    # How many times a search left by an earlier run is tried before it is
+    # given up on, and how long the first retry waits; each wait doubles, so
+    # the last try comes about five minutes after the first. A start that
+    # fails is almost always passing trouble - the machine still busy coming
+    # back up, a child that died inside the start grace, Redis dropping a
+    # call - and giving up on the first one lost searches a deploy was meant
+    # to carry across.
+    _RESUME_ATTEMPTS = 6
+    _RESUME_RETRY_SECONDS = 10.0
+
     def reconcile_after_restart(self) -> dict:
         """
         Deal with searches left behind by a previous run of the application.
 
         The search runs in a child process, so restarting the app abandons it
         while its record stays in Redis - /status would report a search that
-        nothing is performing. Every record from an earlier run is either
-        resumed or cleaned up and reported.
+        nothing is performing. Every record from an earlier run is resumed,
+        cleaned up and reported when it cannot be, or - when resuming it
+        failed - kept and tried again on a later call, up to _RESUME_ATTEMPTS
+        tries. The runtime calls this at startup and then on every pass of its
+        background loop; a record not yet due for another try is skipped.
 
         Returns:
-            Counts keyed 'resumed', 'interrupted' and 'failed'
+            Counts keyed 'resumed', 'interrupted', 'retrying' and 'failed'
+            ('failed': given up on after the last try)
         """
-        from korail_bot.telegramBot.messages import Messages
-
-        summary = {"resumed": 0, "interrupted": 0, "failed": 0}
+        summary = {"resumed": 0, "interrupted": 0, "retrying": 0, "failed": 0}
 
         try:
             reservations = self.storage.get_all_running_reservations()
@@ -814,36 +858,154 @@ class ReservationService:
             logger.error(f"Could not read running reservations: {e}", exc_info=True)
             return summary
 
-        stale = [r for r in reservations if r.is_stale(settings.RUN_ID)]
-        if not stale:
+        now = time.monotonic()
+        due = [
+            r
+            for r in reservations
+            if r.is_stale(settings.RUN_ID)
+            and self._resume_attempts.get(self._resume_key(r), (0, 0.0))[1] <= now
+        ]
+        if not due:
             return summary
 
-        logger.info(f"Found {len(stale)} reservation(s) left over from an earlier run")
+        logger.info(f"Reconciling {len(due)} reservation(s) left over from an earlier run")
 
-        for reservation in stale:
-            chat_id = reservation.chat_id
+        for reservation in due:
+            if self._shutting_down:
+                # What is left stays recorded for the next run to resume.
+                break
+            key = self._resume_key(reservation)
             try:
-                # A previous run may have left the process alive - a bare
-                # restart of the app does not kill its children.
-                self._terminate_search_process(reservation.process_id)
-
-                if self._resume(reservation):
-                    summary["resumed"] += 1
-                    continue
-
-                self._abandon(reservation, Messages)
-                summary["interrupted"] += 1
+                outcome = self._reconcile_record(reservation)
             except Exception as e:
                 logger.error(
-                    f"Failed to reconcile reservation for chat_id={chat_id}: {e}", exc_info=True
+                    f"Failed to reconcile reservation for chat_id={reservation.chat_id}: {e}",
+                    exc_info=True,
                 )
-                summary["failed"] += 1
+                outcome = "failed"
+
+            if outcome != "failed":
+                self._resume_attempts.pop(key, None)
+                if outcome in summary:
+                    summary[outcome] += 1
+                continue
+
+            tries = self._resume_attempts.get(key, (0, 0.0))[0] + 1
+            if tries < self._RESUME_ATTEMPTS:
+                wait = self._RESUME_RETRY_SECONDS * 2 ** (tries - 1)
+                self._resume_attempts[key] = (tries, time.monotonic() + wait)
+                logger.warning(
+                    f"Could not resume chat_id={reservation.chat_id} (try {tries} of "
+                    f"{self._RESUME_ATTEMPTS}); trying again in {wait:.0f}s"
+                )
+                summary["retrying"] += 1
+                continue
+
+            # Never due again in this run, whatever becomes of the record: the
+            # user hears about this search exactly once.
+            self._resume_attempts[key] = (tries, float("inf"))
+            logger.error(f"Giving up on resuming chat_id={reservation.chat_id} after {tries} tries")
+            try:
+                self._give_up_resuming(reservation)
+            except Exception as e:
+                logger.error(
+                    f"Could not record the search chat_id={reservation.chat_id} gave up on: {e}",
+                    exc_info=True,
+                )
+            summary["failed"] += 1
 
         logger.info(
             f"Restart recovery: {summary['resumed']} resumed, "
-            f"{summary['interrupted']} interrupted, {summary['failed']} failed"
+            f"{summary['interrupted']} interrupted, {summary['retrying']} to retry, "
+            f"{summary['failed']} given up"
         )
         return summary
+
+    @staticmethod
+    def _resume_key(reservation: RunningReservation) -> tuple[int, str, int]:
+        return (reservation.chat_id, reservation.run_id, reservation.process_id)
+
+    def _reconcile_record(self, reservation: RunningReservation) -> str:
+        """
+        Resume one record left by an earlier run, or clean it up.
+
+        Returns:
+            'resumed', 'interrupted' (cleaned up and reported), 'gone' (no
+            longer the record that was read) or 'failed' (kept, to try again)
+        """
+        chat_id = reservation.chat_id
+
+        # Read again: by the time a retry is due, the user may have stopped
+        # the search, or started another in its place.
+        current = self.storage.get_running_reservation(chat_id)
+        if current is None or self._resume_key(current) != self._resume_key(reservation):
+            return "gone"
+
+        # A previous run may have left the process alive - a bare restart of
+        # the app does not kill its children. Never one of this run's own:
+        # PIDs are handed out again, and in a fresh container the old record's
+        # PID is as likely as not the one just given to a search this very
+        # call resumed - with the same command line, so nothing else tells
+        # them apart.
+        if reservation.process_id not in self._children:
+            self._terminate_search_process(reservation.process_id)
+
+        blocker = self.resume_blocker(reservation)
+        if blocker:
+            logger.info(f"Not resuming chat_id={chat_id}: {blocker}")
+            self._abandon(reservation, blocker)
+            return "interrupted"
+
+        return "resumed" if self._resume(reservation) else "failed"
+
+    def resume_blocker(self, reservation: RunningReservation) -> str | None:
+        """
+        Why a restart would not bring this search back, or None when it would.
+
+        Asked by reconcile_after_restart before resuming, and by the deploy
+        check before a restart, so both give the same answer.
+        """
+        chat_id = reservation.chat_id
+
+        if not settings.RESUME_ON_RESTART:
+            return "resume_disabled"
+
+        # Random seating reserves one seat at a time. Restarting that search
+        # from the beginning would try to book seats the user already holds,
+        # so it is left to the user to decide.
+        if self.storage.get_partial_reservations(chat_id):
+            return "seats_reserved"
+
+        # A search stopped between Korail holding a seat and the record being
+        # cleared already did its job. Starting it again would go looking for
+        # a second seat beside the one waiting to be paid for.
+        if self._holds_seat_since(reservation):
+            return "seat_held"
+
+        if not self.storage.get_resume_credentials(chat_id):
+            return "no_credentials"
+
+        return None
+
+    def _holds_seat_since(self, reservation: RunningReservation) -> bool:
+        """Whether a seat this chat has yet to pay for was taken after the search began."""
+        from korail_bot.utils.timezone import as_utc
+
+        chat_id = reservation.chat_id
+        started = as_utc(reservation.started_at)
+
+        payment = self.storage.get_payment_status(chat_id)
+        if (
+            payment
+            and not payment.completed
+            and not payment.cancelled
+            and payment.created_at
+            and as_utc(payment.created_at) >= started
+        ):
+            return True
+
+        multi = self.storage.get_multi_reservation_status(chat_id)
+        return bool(multi and multi.get_pending_count() > 0 and as_utc(multi.created_at) >= started)
 
     def _resume(self, reservation: RunningReservation) -> bool:
         """
@@ -857,19 +1019,10 @@ class ReservationService:
         """
         chat_id = reservation.chat_id
 
-        if not settings.RESUME_ON_RESTART:
-            return False
-
-        # Random seating reserves one seat at a time. Restarting that search
-        # from the beginning would try to book seats the user already holds,
-        # so it is left to the user to decide.
-        if self.storage.get_partial_reservations(chat_id):
-            logger.info(f"Not resuming chat_id={chat_id}: seats are already reserved")
-            return False
-
         credentials = self.storage.get_resume_credentials(chat_id)
         if not credentials:
-            logger.info(f"Not resuming chat_id={chat_id}: no usable credentials")
+            # resume_blocker found them a moment ago; gone since is a failure
+            # to try again, not a verdict.
             return False
 
         username, password = credentials
@@ -881,19 +1034,41 @@ class ReservationService:
             password=password,
             search_params=reservation.search_params,
             resumed=True,
+            restoring=True,
         )
 
-    def _abandon(self, reservation: RunningReservation, messages) -> None:
+    def _give_up_resuming(self, reservation: RunningReservation) -> None:
+        """
+        Stop trying to bring a search back, and tell the user once.
+
+        Kept as a stopped search rather than dropped, with its login: every
+        try failed on this side, not on anything the user did, and the same
+        search started again by hand may well work.
+        """
+        self._record_death(
+            reservation.chat_id,
+            reservation.korail_id,
+            reservation.search_params,
+            DeathCause.RESUME_FAILED,
+        )
+
+    def _abandon(self, reservation: RunningReservation, reason: str | None = None) -> None:
         """Tell the user their search is over and drop every trace of it."""
+        from korail_bot.telegramBot.messages import Messages
+
         chat_id = reservation.chat_id
         params = reservation.search_params
 
-        if self.storage.get_partial_reservations(chat_id):
-            text = messages.RESERVATION_INTERRUPTED_PARTIAL.format(
+        if reason == "seats_reserved":
+            text = Messages.RESERVATION_INTERRUPTED_PARTIAL.format(
+                paymentUrl=settings.KORAIL_PAYMENT_URL
+            )
+        elif reason == "seat_held":
+            text = Messages.RESERVATION_INTERRUPTED_HELD.format(
                 paymentUrl=settings.KORAIL_PAYMENT_URL
             )
         else:
-            text = messages.RESERVATION_INTERRUPTED.format(
+            text = Messages.RESERVATION_INTERRUPTED.format(
                 srcLocate=params.src_locate, dstLocate=params.dst_locate, depDate=params.dep_date
             )
 
@@ -907,6 +1082,20 @@ class ReservationService:
         if session:
             session.reset()
             self.storage.save_user_session(session)
+
+    def keep_resumable(self) -> None:
+        """
+        Push back the expiry of the login each recorded search would resume
+        with. Called on every pass of the runtime's background loop.
+
+        Every record counts, this run's and ones still waiting to be resumed
+        alike: a record is exactly a search the user still expects to be
+        running.
+        """
+        if not settings.RESUME_ON_RESTART:
+            return
+        for reservation in self.storage.get_all_running_reservations():
+            self.storage.refresh_resume_credentials(reservation.chat_id)
 
     def cancel_reservation(self, chat_id: int) -> bool:
         """

@@ -305,8 +305,21 @@ class Settings:
     # moment the search ends. Turn this off to be told about the interruption
     # instead of recovering from it.
     RESUME_ON_RESTART: bool = _env_bool("RESUME_ON_RESTART", True)
-    # Backstop only: the credentials are deleted when the search finishes.
+    # Backstop only: the credentials are deleted when the search finishes, and
+    # the mobile runtime pushes this back on every pass for as long as the
+    # search is recorded as running, so a search older than this still resumes.
     RESUME_TTL_SECONDS: int = int(os.environ.get("RESUME_TTL_SECONDS", "259200"))
+    # How long a search process waits before each further try when Korail
+    # could not be reached to log in, comma-separated; one try more than there
+    # are waits. A resumed search logs in the moment the app is back up, and a
+    # Korail blip then would otherwise end it for good. About four minutes in
+    # all: long enough for a blip, short of leaving the user to believe a
+    # search is running that cannot log in.
+    LOGIN_RETRY_DELAYS_SECONDS: tuple[float, ...] = tuple(
+        float(delay)
+        for delay in os.environ.get("LOGIN_RETRY_DELAYS_SECONDS", "5,15,30,60,120").split(",")
+        if delay.strip()
+    )
 
     # ==================== Onboarding ====================
 

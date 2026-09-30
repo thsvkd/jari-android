@@ -9,6 +9,7 @@ import psutil
 
 from korail_bot.mobile.identity import digest
 from korail_bot.services.reservation_service import ReservationService
+from korail_bot.utils.timezone import as_utc
 
 
 class MobileReservationService(ReservationService):
@@ -31,6 +32,21 @@ class MobileReservationService(ReservationService):
         with self.start_lock:
             return super().detect_dead_searches()
 
+    def _reconcile_record(self, reservation):
+        # Retries come from the background loop while the API serves, so a
+        # user can stop the search, or start another, in the middle of one.
+        # Under the chat's lock the record read again inside is the one acted on.
+        with self.operation_lock(reservation.chat_id), self.start_lock:
+            return super()._reconcile_record(reservation)
+
+    def shutdown(self):
+        # The flag first, then the lock: a start already under way finishes
+        # and its child is among those killed below; one not yet begun sees
+        # the flag and starts nothing. Either way no search outlives the app.
+        self._shutting_down = True
+        with self.start_lock:
+            super().shutdown()
+
     def cancel_reservation(self, chat_id):
         with self.operation_lock(chat_id), self.start_lock:
             record = self.storage.get_running_reservation(chat_id)
@@ -48,6 +64,33 @@ class MobileReservationService(ReservationService):
                 self.storage.save_user_session(session)
             self.telegram.send_message(chat_id, "검색을 중지했어요.")
             return True
+
+    def describe_running(self):
+        """
+        Every running record as the deploy check reads it: which run it
+        belongs to, whether a worker is performing it, and whether a restart
+        would bring it back. Nothing secret - no Korail ID, no login.
+
+        Called from a process of its own (python -m korail_bot.mobile running)
+        beside the API, so no record is this process's run: whether a worker
+        is alive is asked of the process table, as _owns_process does.
+        """
+        rows = []
+        for record in self.storage.get_all_running_reservations():
+            blocker = self.resume_blocker(record)
+            rows.append(
+                {
+                    "id": record.chat_id,
+                    "runId": record.run_id,
+                    "pid": record.process_id,
+                    "workerAlive": self._owns_process(record.process_id),
+                    "resumable": blocker is None,
+                    "reason": blocker,
+                    "credentialTtlSeconds": self.storage.resume_credentials_ttl(record.chat_id),
+                    "startedAt": as_utc(record.started_at).isoformat(),
+                }
+            )
+        return sorted(rows, key=lambda row: row["id"])
 
     def _process_command(self, arguments):
         return [sys.executable, "-m", "korail_bot.mobile.worker", *arguments, self.tag]

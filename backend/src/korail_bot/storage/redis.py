@@ -867,6 +867,22 @@ class RedisStorage(StorageInterface):
         """Forget the credentials of a search that is over."""
         self.redis.delete(f"resume_credentials:{chat_id}")
 
+    def refresh_resume_credentials(self, chat_id: int) -> None:
+        """
+        Keep a running search's login, and its app session, for another
+        RESUME_TTL_SECONDS.
+
+        The expiry is a backstop for a login nothing cleaned up, not a limit
+        on how long a search may run: one waiting four days for a sold-out
+        train must still come back from a restart on the fourth.
+        """
+        self.redis.expire(f"resume_credentials:{chat_id}", settings.RESUME_TTL_SECONDS)
+        self.redis.expire(f"app_session_start:{chat_id}", settings.RESUME_TTL_SECONDS)
+
+    def resume_credentials_ttl(self, chat_id: int) -> int:
+        """Seconds left on a search's stored login; negative when there is none."""
+        return int(self.redis.ttl(f"resume_credentials:{chat_id}"))
+
     # ==================== Korail Client Identity ====================
 
     def get_or_create_app_session_start(self, chat_id: int) -> str:

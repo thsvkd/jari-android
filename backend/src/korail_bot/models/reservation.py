@@ -298,6 +298,8 @@ class DeathCause(StrEnum):
     # Ran for a while and then vanished, without the callback that a search
     # ending normally always sends.
     CRASHED = "crashed"
+    # Left behind by a restart, and every attempt to bring it back failed.
+    RESUME_FAILED = "resume_failed"
 
 
 @dataclass

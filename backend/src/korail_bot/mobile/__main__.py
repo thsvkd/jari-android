@@ -1,6 +1,7 @@
-"""python -m korail_bot.mobile {serve,invite,admin}; no BOTTOKEN required."""
+"""python -m korail_bot.mobile {serve,invite,admin,running}; no BOTTOKEN required."""
 
 import argparse
+import json
 import os
 import signal
 import sys
@@ -20,6 +21,11 @@ def main():
         "--password",
         help="Operator password; omit to read MOBILE_ADMIN_PASSWORD or stdin",
     )
+    running = commands.add_parser(
+        "running",
+        help="List the running searches and whether a restart would resume each (read-only)",
+    )
+    running.add_argument("--json", action="store_true", help="One JSON object, for scripts")
     serve = commands.add_parser("serve", help="Run one API and booking worker owner")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8081)
@@ -29,7 +35,7 @@ def main():
     args = parser.parse_args()
     try:
         config = MobileConfig.from_env(
-            auth_only=args.command in {"invite", "admin"} or args.auth_only
+            auth_only=args.command in {"invite", "admin"} or getattr(args, "auth_only", False)
         )
         if args.command == "invite":
             print(IdentityStore(config.database).create_invite(ttl=args.ttl_hours * 3600))
@@ -42,6 +48,9 @@ def main():
                 parser.error("Set --password or MOBILE_ADMIN_PASSWORD")
             user = IdentityStore(config.database).ensure_admin(args.username, password)
             print(user["username"])
+            return
+        if args.command == "running":
+            print_running(config, as_json=args.json)
             return
         from waitress import serve as serve_wsgi
 
@@ -83,6 +92,35 @@ def main():
         parser.error(str(exc))
     except KeyboardInterrupt:
         pass
+
+
+def print_running(config, *, as_json):
+    """
+    What scripts/deploy-backend.sh reads before and after it restarts the API.
+
+    Run beside the API (docker compose exec), against the same Redis: it only
+    reads. Each record says which run it belongs to - a restart that brought
+    it back gives it the new run's - and whether a worker is performing it.
+    """
+    from korail_bot.mobile.process import MobileReservationService
+    from korail_bot.mobile.storage import MobileStorage
+
+    storage = MobileStorage(secret=config.secret, url=config.redis_url)
+    try:
+        searches = MobileReservationService(storage, None, config).describe_running()
+    finally:
+        storage.close()
+    if as_json:
+        print(json.dumps({"searches": searches}))
+        return
+    for row in searches:
+        print(
+            f"{row['id']} run={row['runId']} pid={row['pid']} "
+            f"worker={'alive' if row['workerAlive'] else 'gone'} "
+            f"resumable={'yes' if row['resumable'] else 'no (' + row['reason'] + ')'} "
+            f"login_ttl={row['credentialTtlSeconds']}s"
+        )
+    print(f"{len(searches)} running")
 
 
 if __name__ == "__main__":

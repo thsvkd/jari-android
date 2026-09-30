@@ -36,7 +36,13 @@ from korail_mobile_api import (
 from korail_mobile_api import mutation_payloads as _mutation_payloads
 from korail_mobile_api import payloads as _read_payloads
 from korail_mobile_api.constants import KORAIL_STANDBY_WAIT_FLAG
-from korail_mobile_api.errors import KorailAppError, KorailNoResultsError
+from korail_mobile_api.errors import (
+    KorailAppError,
+    KorailNetFunnelError,
+    KorailNoResultsError,
+    KorailServiceUnavailableError,
+    KorailTransportError,
+)
 
 from korail_bot.config.settings import settings
 from korail_bot.models import ReservationOutcome, SeatPreference, SeatTarget
@@ -56,6 +62,19 @@ _SOLD_OUT_LOOKUP_OFFSETS = (7, 6, 5, 4, 3, 2, 1)
 # 목록은 왔는데 호차가 빠졌을 수 있어 편성만 채울 때는 같은 요일의 일주일·이주일 뒤를 봐요. 그 날의 목록도
 # 잔여석 있는 호차뿐이라 둘의 합집합을 쓰고, 열차마다 한 번이라 좌석표를 열 때의 대기를 검색 둘로 막아요.
 _FORMATION_LOOKUP_OFFSETS = (7, 14)
+
+# A login that failed on these never reached a verdict on the credentials:
+# the round trip failed (a timeout, a refused connection, an HTTP 5xx - all
+# KorailTransportError), Korail said it is down (SEMGTK), or its queue turned
+# the request away. Everything else - a KorailAuthError above all - is Korail
+# answering, and asking again gets the same answer. OSError covers a socket
+# failure that escaped the client's own wrapping, requests' included.
+_LOGIN_UNAVAILABLE = (
+    KorailTransportError,
+    KorailServiceUnavailableError,
+    KorailNetFunnelError,
+    OSError,
+)
 
 # PNR-keyed unpaid seat detail. korail2 never calls this; ReservationView
 # (which it does call) lists bookings without the seats. letskorail and srtgo
@@ -345,6 +364,9 @@ class KorailService(RailService):
                 mask_phone(username),
                 type(exc).__name__,
             )
+            if isinstance(exc, _LOGIN_UNAVAILABLE):
+                # Not an answer about the credentials; login() says so.
+                raise
             return False
 
         previous = self._modern_client
@@ -364,9 +386,15 @@ class KorailService(RailService):
             password: Korail password
 
         Returns:
-            True if login successful, False otherwise
+            True if login successful, False otherwise. login_unavailable
+            then says whether Korail could not be reached at all.
         """
-        self._logged_in = self._login_with_current_api(username, password)
+        try:
+            self._logged_in = self._login_with_current_api(username, password)
+            self.login_unavailable = False
+        except _LOGIN_UNAVAILABLE:
+            self._logged_in = False
+            self.login_unavailable = True
         if self._logged_in:
             self._username = username
             self._password = password
@@ -389,6 +417,12 @@ class KorailService(RailService):
             else:
                 logger.error("❌ Re-login failed")
             return self._logged_in
+        except _LOGIN_UNAVAILABLE as e:
+            # By type alone, as _login_with_current_api logs it: the text may
+            # quote the request, and the request carries the password.
+            logger.error(f"❌ Re-login failed: Korail unreachable ({type(e).__name__})")
+            self._logged_in = False
+            return False
         except Exception as e:
             logger.error(f"❌ Re-login error: {e}")
             self._logged_in = False

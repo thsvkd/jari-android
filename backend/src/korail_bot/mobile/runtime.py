@@ -326,13 +326,28 @@ class MobileRuntime:
             self.stop_event.wait(min(self.PASS_WAIT, max(0.0, self.lease_until - time.monotonic())))
 
     def _run(self):
+        steps = [self.notifications.deliver]
+        if self.storage:
+            # Searches an earlier run left that start() could not bring back
+            # are tried again here, as each falls due (reconcile_after_restart
+            # keeps the count and the backoff). And every search's stored
+            # login is kept from expiring while its record says it runs.
+            steps = [
+                self.reservation.reconcile_after_restart,
+                self.reservation.keep_resumable,
+                self.remind_pending,
+                *steps,
+            ]
         while not self.stop_event.is_set():
-            try:
-                if self.storage:
-                    self.remind_pending()
-                self.notifications.deliver()
-            except Exception as exc:
-                logger.error("Mobile background pass failed (%s)", type(exc).__name__)
+            # Each on its own: a push that fails must not cost a search its
+            # retry, or a login its expiry.
+            for step in steps:
+                if self.stop_event.is_set():
+                    return
+                try:
+                    step()
+                except Exception as exc:
+                    logger.error("Mobile background pass failed (%s)", type(exc).__name__)
             self.stop_event.wait(self.PASS_WAIT)
 
     def remind_pending(self):
@@ -363,6 +378,14 @@ class MobileRuntime:
         # SIGTERM, calls this too; returning at once would let the interpreter
         # exit and kill that daemon thread before it stopped the searches and
         # released the lease - which the next start then finds still held.
+        #
+        # Before anything, and before waiting for that lock: from here every
+        # search that stops is being stopped on purpose, its record left for
+        # the next run. A dead-search pass already under way must not report
+        # one as a death - that moves the record out of the next run's reach -
+        # and no retry may start a search the teardown would then miss.
+        if self.reservation:
+            self.reservation._shutting_down = True
         with self.stop_lock:
             if self.stop_event.is_set():
                 return

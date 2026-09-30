@@ -89,6 +89,16 @@ class RailService(ABC):
     #: which seat you got beats finding out at the platform.
     MAX_SEAT_REJECTIONS = 20
 
+    #: Whether the last login() failed because the operator could not be
+    #: reached, rather than because it turned the credentials down.
+    #:
+    #: login() answers False for both, and every caller that only needs to
+    #: know whether it is logged in keeps doing so. A search process needs the
+    #: difference: a restart brings its search back by logging in again, and
+    #: a Korail blip at that moment used to end the search as if the password
+    #: were wrong - which is worth one more try, where a password is not.
+    login_unavailable: bool = False
+
     def __init__(
         self,
         app_session_start: str | None = None,
