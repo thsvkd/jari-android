@@ -15,24 +15,25 @@
 ```
 
 - 진입점은 둘: `korail_bot.mobile`(API, Dockerfile CMD)과 `korail_bot.mobile.worker`(`mobile/process.py`가 spawn). 워커는 `telegramBot/telebotBackProcess.py`의 검색 루프를 그대로 쓴다.
-- 워커는 **API 컨테이너 안의 자식 프로세스**다. API를 재시작하면 워커도 죽고, 새 프로세스가 Redis의 실행 기록으로 다시 띄운다(§1.1). 배포 스크립트는 워커가 있으면 거부하고, `--force`면 재시작 뒤 재개 가능했던 검색이 모두 다시 도는지 확인해 아니면 실패한다.
+- 워커는 **API 컨테이너 안의 자식 프로세스**다. API를 재시작하면 워커도 죽고, 새 프로세스가 Redis의 실행 기록으로 다시 띄운다(§1.1). 배포 스크립트는 워커가 있으면 거부하고, `--force`면 재시작 뒤 재개 가능했던 검색이 모두 다시 로그인해 찾는지 확인해 아니면 실패한다.
 - 실서버: pit5, `scripts/deploy-backend.sh --host pit5 --root /home/pi/services/jari-android --compose-file compose.yaml --compose-file pit5-edge.yaml --ref <sha>`. 배포 전 이미지는 `jari-api:pre-<sha>`로 태그된다.
 
 ### 1.1 재시작 중 검색 보존
 
-**보장**: API가 SIGTERM으로 멈추고(compose `stop_grace_period` 60초 안) 새 프로세스가 같은 Redis·`MOBILE_SECRET`으로 뜨면, 재개 가능한 실행 기록(`running_reservation:*`)은 모두 새 프로세스에서 다시 돈다. `docker compose up -d --no-deps api`(`deploy-backend.sh --force`)가 이 경우다.
+**보장**: API가 SIGTERM으로 멈추고(compose `stop_grace_period` 60초 안) 새 프로세스가 같은 Redis·`MOBILE_SECRET`으로 뜨면, 재개 가능한 실행 기록(`running_reservation:*`)은 모두 새 프로세스에서 다시 돌고, 워커가 코레일에 다시 로그인한다. `docker compose up -d --no-deps api`(`deploy-backend.sh --force`)가 이 경우다.
 
 - 멈출 때: `MobileRuntime.stop()`은 무엇보다 먼저(리스 락을 기다리기 전) `_shutting_down`을 세운다. 그 뒤로는 죽은 검색 감시가 사라진 워커를 죽음으로 기록하지 않고(기록 직전에 한 번 더 확인), 새 검색도 시작하지 않는다(`start_reservation_process`가 거부, 모바일은 `shutdown()`이 `start_lock`을 잡은 뒤 워커를 죽여 이미 시작 중인 것도 놓치지 않는다). 워커는 SIGTERM으로 콜백 없이 끝나고 기록·로그인은 남는다.
 - 뜰 때: 리스를 잡은 뒤 `reconcile_after_restart`가 옛 run의 기록마다 옛 PID를 정리하고(이번 run의 자식 PID는 건드리지 않는다 — 새 컨테이너에서는 옛 PID가 방금 재개한 워커의 PID와 겹칠 수 있다) 같은 조건으로 워커를 띄운다. 사용자에게는 "검색을 다시 시작했습니다" 알림 하나만 간다.
-- 재개 실패(시작 유예 안에 워커가 죽음, 예외): 기록·로그인을 그대로 두고 죽음으로 기록하지 않는다. 백그라운드 루프(10초)가 10·20·40·80·160초 간격으로 다시 시도하고, 6번째도 실패하면 `RESUME_FAILED`로 멈춘 검색에 옮기며 알림을 한 번 보낸다(로그인은 남겨 손으로 다시 시작할 수 있다). 재시도 사이에 사용자가 멈추거나 새로 시작한 기록은 건드리지 않는다(사용자별 락 안에서 다시 읽는다).
-- 워커의 첫 로그인: 코레일이 답하지 못한 실패(`KorailTransportError`=전송 실패·HTTP 오류, `KorailServiceUnavailableError`, `KorailNetFunnelError`, `OSError`)는 `LOGIN_RETRY_DELAYS_SECONDS`(기본 5·15·30·60·120초, 최대 6회) 동안 다시 시도한다. 계정 거절은 바로 끝난다. 끝내 닿지 못하면 "코레일 서버에 연결하지 못해 검색을 멈췄습니다"(status 1)로 끝난다.
+- 재개 실패(시작 유예 안에 워커가 죽음, 예외): 기록·로그인을 그대로 두고 죽음으로 기록하지 않는다. 백그라운드 루프(10초)가 10·20·40·80·160초 간격으로 다시 시도하고, 6번째도 실패하면 `RESUME_FAILED`로 멈춘 검색에 옮기며 알림을 한 번 보낸다(로그인은 남긴다). 시도와 포기는 모두 사용자별 락 안에서 기록을 다시 읽고 하므로, 그 사이 사용자가 멈추거나 새로 시작한 검색은 건드리지 않는다. 포기를 기록하지 못하면(Redis 실패) 아무 알림 없이 기록을 두고 다음 회차에 다시 포기한다.
+- 재개를 기다리는 동안 앱: 옛 run의 기록은 `health: "unknown"`으로 보여, 앱은 이미 있는 "자리 찾기는 서버에 등록돼 있어요"(running-unverified) 상태로 그린다. 예전에는 기록을 숨겨 검색이 없어 보이면서도 새 검색은 "이미 진행 중"으로 거절됐다.
+- 워커의 첫 로그인: 코레일이 답하지 못한 실패(`KorailTransportError`=전송 실패·HTTP 오류, `KorailServiceUnavailableError`(SEMGTK), `KorailNetFunnelError`, `KorailProtocolError`=코레일 응답이 아님, `OSError`, 그리고 라이브러리가 로그인 POST에서 이것들을 `KorailAuthError`로 감싸 올린 것)는 `LOGIN_RETRY_DELAYS_SECONDS`(기본 5·15·30·60·120초, 최대 6회) 동안 다시 시도한다. 계정 거절은 바로 끝난다. 끝내 닿지 못하면 로그인을 지우지 않고 `KORAIL_UNREACHABLE` 멈춘 검색(재개 가능)으로 옮겨 알린다. 로그인에 성공하면 워커가 `search_logged_in:{id}`에 자기 PID를 적는다(배포 확인이 기다리는 것).
 - 로그인 보관: `resume_credentials`·`app_session_start`의 TTL(`RESUME_TTL_SECONDS`, 72시간)은 백그라운드 루프가 기록이 있는 동안 매번 다시 늘린다. 72시간보다 오래 기다린 검색도 재개된다. 런타임이 72시간 넘게 내려가 있으면 만료된다.
 
-**의도한 예외**(재개하지 않고 기록·로그인을 지우고 알림 한 번): `RESUME_ON_RESTART=0`(`resume_disabled`), 떨어져 앉기로 이미 일부 좌석을 잡음(`seats_reserved`), 검색 시작 뒤 생긴 미결제 좌석이 있음(`seat_held`: `payment_status`나 `multi_reservation_status`의 `created_at` ≥ 기록의 `started_at` — 좌석을 잡고 기록을 지우기 전에 멈춘 경우로, 이어서 찾으면 좌석을 두 번 잡는다), 로그인이 없거나 풀리지 않음(`no_credentials`, `MOBILE_SECRET` 변경 포함).
+**의도한 예외**(재개하지 않고 기록·로그인을 지우고 알림 한 번, `resume_abandoned:{id}`에 이유를 하루 남긴다): `RESUME_ON_RESTART=0`(`resume_disabled`), 떨어져 앉기로 이미 일부 좌석을 잡음(`seats_reserved`), 그 검색의 워커가 좌석을 잡았음(`seat_held`: 워커가 코레일의 홀드를 받자마자 `search_held_seat:{id}`에 자기 PID를 적고, 그 PID가 기록의 PID와 같을 때 — 좌석을 잡고 기록을 지우기 전에 멈춘 경우로, 이어서 찾으면 좌석을 두 번 잡는다. 떨어져 앉기 지정 좌석은 일부만 잡고 이어 찾던 중이어도 여기에 든다), 로그인이 없거나 풀리지 않음(`no_credentials`, `MOBILE_SECRET` 변경 포함). 좌석표에서 바로 잡은 좌석(`reservations/designated`)은 검색이 도는 중에도 허용되지만 표시를 남기지 않으므로 검색 재개를 막지 않는다. 두 표시(`search_logged_in`·`search_held_seat`)는 새 실행 기록을 쓰기 전에 지워, 같은 PID를 받은 예전 워커의 표시로 읽히지 않는다.
 
-**보장 밖**: 코레일이 좌석을 잡은 뒤 워커가 그것을 적기 전(수 ms)에 멈추면 알 길이 없어 재개하고, 좌석을 두 번 잡을 수 있다(코레일 예약 목록은 보지 않는다). 풀리지 않은 예전 결제 기록 위에 새 좌석을 적으면 `created_at`이 예전 것이라 `seat_held`로 보이지 않는다. SIGKILL·OOM·전원 차단처럼 정상 종료가 없어도 기록은 남아 다음 시작이 재개한다. 다만 놓아주지 못한 리스가 풀릴 때까지(최대 `LEASE_WAIT` 135초) 기다린다.
+**보장 밖**: 코레일이 좌석을 잡은 뒤 워커가 표시를 적기 전(수 ms)에 멈추면 알 길이 없어 재개하고, 좌석을 두 번 잡을 수 있다(코레일 예약 목록은 보지 않는다). SIGKILL·OOM·전원 차단처럼 정상 종료가 없어도 기록은 남아 다음 시작이 재개한다. 다만 놓아주지 못한 리스가 풀릴 때까지(최대 `LEASE_WAIT` 135초) 기다린다.
 
-**배포 확인**: `deploy-backend.sh`는 교체 전에 `docker compose exec -T api python -m korail_bot.mobile running --json`(읽기 전용, 비밀 없음: `id, runId, pid, workerAlive, resumable, reason, credentialTtlSeconds, startedAt`)으로 실행 목록을 적는다. 재개하지 못할 검색이 있거나 목록을 읽지 못하면 거부한다(`--allow-unresumable`로 감수). 재시작 뒤에는 5초마다 최대 480초(`DEPLOY_RESUME_POLL`·`DEPLOY_RESUME_TIMEOUT`; `up -d`는 옛 컨테이너가 멈춘 뒤 돌아오므로 그 뒤의 풀리지 않은 리스 대기 135초 + 재개 재시도 합계 310초 + 시작) 동안 재개 가능했던 검색마다 새 `runId`와 살아 있는 워커를 기다리고, 못 채우면 id와 상태(기록 없음·아직 옛 run·워커 없음)를 적고 실패한다. 롤백 안내는 내지 않는다(옛 워커는 이미 없다).
+**배포 확인**: `docker compose exec -T api python -m korail_bot.mobile running --json`은 읽기만 하고 비밀 없이 한 줄 `RUNNING=<json>`을 낸다(로그는 stderr): `now`(컨테이너 시계), `searches[]`(`id, runId, pid, workerAlive, loggedIn, resumable, reason, credentialTtlSeconds, startedAt`), `stopped[]`(멈춘 검색의 원인과 재개하지 않은 기록의 `not_resumed_<이유>`, 각 `at`). `deploy-backend.sh`는 아무것도 바꾸기 전에 한 번, 빌드가 끝나 `up` 직전에 한 번 더 읽는다(빌드는 몇 분 걸린다). 재개하지 못할 검색이 있으면 거부하고(`--allow-unresumable`로 감수), 목록을 읽지 못해도 거부한다(`--skip-resume-check`로 확인 자체를 건너뜀). `up` 직전에 거부하면 재시작하지 않고, 이미 바뀐 src와 이미지를 재시작 없이 되돌리는 명령을 보여 준다. 재시작 뒤에는 5초마다 최대 720초 동안(`DEPLOY_RESUME_POLL`·`DEPLOY_RESUME_TIMEOUT`; `up -d`는 옛 컨테이너가 멈춘 뒤 돌아오므로 그 뒤의 풀리지 않은 리스 대기 135초 + 재개 재시도 310초 + 워커의 로그인 재시도 230초 + 시작·로그인 45초) 재개 가능했던 검색마다 새 `runId`·살아 있는 워커·`loggedIn`을 기다린다. 기록이 사라졌으면 `up` 직전 읽은 시각 이후 `stopped`에 있을 때만 잃은 것으로 보고 곧바로 실패하며, 없으면 스스로 끝난 검색(좌석 잡음·사용자가 멈춤)으로 본다. 못 채우면 id와 상태(아직 옛 run·워커 없음·로그인 전·멈춤 원인)를 적고 실패한다. 롤백 안내는 내지 않는다(옛 워커는 이미 없다). 로그인 시도 하나가 코레일 클라이언트 제한 시간까지 걸리는 경우는 720초에 넣지 않았다: 그때는 "로그인 전"으로 실패를 알리지만 검색은 나중에 돌아올 수 있다.
 
 ## 2. 앱 구조
 

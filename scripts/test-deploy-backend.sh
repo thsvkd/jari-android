@@ -57,13 +57,14 @@ for needle in \
   "backup: cp -a backend" \
   "git archive HEAD backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile" \
   "swap backend/src" \
-  "build + up -d --no-deps api" \
+  "build api" \
+  "up -d --no-deps api" \
   "up -d --no-deps" \
   "docker top" \
   "read running searches in api" \
   "python -m korail_bot.mobile running --json" \
   "refuse if a running search is not resumable" \
-  "wait for the resumable searches read above to run again"; do
+  "wait for the resumable searches read above to be searching again"; do
   if echo "$OUTPUT" | grep -qF "$needle"; then
     echo "ok: plan mentions '$needle'"
   else
@@ -225,8 +226,10 @@ echo "== main(): a failing transfer step ends main() non-zero and rolls back =="
 set +e
 MAIN_OUT="$(
   preflight() { return 0; }
+  snapshot_running() { return 0; }
   backup() { return 0; }
-  deploy() { return 0; }
+  build() { return 0; }
+  up() { return 0; }
   verify() { return 0; }
   after_hook() { return 0; }
   ssh() { echo "FAKE SSH FAILING: $*" >&2; return 1; }
@@ -256,81 +259,117 @@ echo "== snapshot_running(): a search the restart would lose is refused =="
 COMPOSE_FILES=(compose.yaml)
 COMPOSE_ARGS=(-f compose.yaml)
 # What `python -m korail_bot.mobile running --json` prints inside the container.
-search() { # id runId workerAlive resumable reason
+search() { # id runId workerAlive loggedIn resumable reason
   local reason="null"
-  [[ "$5" != "-" ]] && reason="\"$5\""
-  printf '{"id":%s,"runId":"%s","pid":10,"workerAlive":%s,"resumable":%s,"reason":%s,"credentialTtlSeconds":259000,"startedAt":"2026-09-30T00:00:00+00:00"}' \
-    "$1" "$2" "$3" "$4" "$reason"
+  [[ "$6" != "-" ]] && reason="\"$6\""
+  printf '{"id":%s,"runId":"%s","pid":10,"workerAlive":%s,"loggedIn":%s,"resumable":%s,"reason":%s,"credentialTtlSeconds":259000,"startedAt":"2026-09-30T00:00:00+00:00"}' \
+    "$1" "$2" "$3" "$4" "$5" "$reason"
 }
-running() { local IFS=,; printf 'RUNNING={"searches":[%s]}\n' "$*"; }
-BEFORE="$(running "$(search -1 old true true -)" "$(search -2 old true false seats_reserved)")"
+stopped() { # id why at
+  printf '{"id":%s,"why":"%s","at":%s}' "$1" "$2" "$3"
+}
+# running <now> <stopped json|-> <search json>...
+running() {
+  local now="$1" gone="$2"; shift 2
+  [[ "$gone" == "-" ]] && gone=""
+  local IFS=,
+  printf 'RUNNING={"now":%s,"searches":[%s],"stopped":[%s]}\n' "$now" "$*" "$gone"
+}
+BEFORE="$(running 1000 - "$(search -1 old true true true -)" "$(search -2 old true true false seats_reserved)")"
 
 set +e
 SNAP_REFUSED="$(
   run_remote() { cat >/dev/null; echo "$BEFORE"; }
-  DRY_RUN=0; ALLOW_UNRESUMABLE=0; EXPECTED_RESUMES=""
+  DRY_RUN=0; ALLOW_UNRESUMABLE=0; SKIP_RESUME_CHECK=0; EXPECTED_RESUMES=""
   { snapshot_running || echo "SNAPSHOT_RC=$?"; } 2>&1
 )"
 SNAP_ALLOWED="$(
-  run_remote() { cat >/dev/null; echo "$BEFORE"; }
-  DRY_RUN=0; ALLOW_UNRESUMABLE=1; EXPECTED_RESUMES=""
+  # A log line ahead of the listing, as an image with stdout logging printed.
+  run_remote() { cat >/dev/null; echo "2026-09-30 WARNING something"; echo "$BEFORE"; }
+  DRY_RUN=0; ALLOW_UNRESUMABLE=1; SKIP_RESUME_CHECK=0; EXPECTED_RESUMES=""
   { snapshot_running || echo "SNAPSHOT_RC=$?"; } 2>&1
-  echo "EXPECTED=[$EXPECTED_RESUMES]"
+  echo "EXPECTED=[$EXPECTED_RESUMES] AT=[$SNAPSHOT_AT]"
 )"
 SNAP_UNREADABLE="$(
   run_remote() { cat >/dev/null; echo "usage: python -m korail_bot.mobile {serve,invite,admin}" >&2; return 2; }
-  DRY_RUN=0; ALLOW_UNRESUMABLE=0; EXPECTED_RESUMES=""
+  DRY_RUN=0; ALLOW_UNRESUMABLE=1; SKIP_RESUME_CHECK=0; EXPECTED_RESUMES=""
+  { snapshot_running || echo "SNAPSHOT_RC=$?"; } 2>&1
+)"
+SNAP_SKIPPED="$(
+  run_remote() { echo "FAKE run_remote CALLED" >&2; return 1; }
+  DRY_RUN=0; ALLOW_UNRESUMABLE=0; SKIP_RESUME_CHECK=1; EXPECTED_RESUMES=""
   { snapshot_running || echo "SNAPSHOT_RC=$?"; } 2>&1
 )"
 set -e
 if echo "$SNAP_REFUSED" | grep -q "SNAPSHOT_RC=1" \
   && echo "$SNAP_REFUSED" | grep -q "REFUSING" \
-  && echo "$SNAP_REFUSED" | grep -qF -- "-2 old alive no seats_reserved"; then
+  && echo "$SNAP_REFUSED" | grep -qF -- "-2 old alive in no seats_reserved"; then
   echo "ok: snapshot_running() refuses a search that would not come back, and names it"
 else
   echo "FAIL: snapshot_running() let a search that would not come back through"
   echo "$SNAP_REFUSED"
   FAIL=1
 fi
-if ! echo "$SNAP_ALLOWED" | grep -q "SNAPSHOT_RC" && echo "$SNAP_ALLOWED" | grep -qF "EXPECTED=[-1 old]"; then
-  echo "ok: --allow-unresumable deploys, expecting back only the resumable search"
+if ! echo "$SNAP_ALLOWED" | grep -q "SNAPSHOT_RC" && echo "$SNAP_ALLOWED" | grep -qF "EXPECTED=[-1 old] AT=[1000]"; then
+  echo "ok: --allow-unresumable deploys, expecting back only the resumable search (a log line ahead of the listing is ignored)"
 else
   echo "FAIL: --allow-unresumable did not narrow the expected searches to the resumable one"
   echo "$SNAP_ALLOWED"
   FAIL=1
 fi
-if echo "$SNAP_UNREADABLE" | grep -q "SNAPSHOT_RC=1" && echo "$SNAP_UNREADABLE" | grep -q "could not read the running searches"; then
-  echo "ok: snapshot_running() refuses when the running searches cannot be read"
+if echo "$SNAP_UNREADABLE" | grep -q "SNAPSHOT_RC=1" && echo "$SNAP_UNREADABLE" | grep -q -- "--skip-resume-check"; then
+  echo "ok: an unreadable listing is refused even with --allow-unresumable, pointing at --skip-resume-check"
 else
   echo "FAIL: snapshot_running() read an unreadable listing as nothing running"
   echo "$SNAP_UNREADABLE"
   FAIL=1
 fi
+if ! echo "$SNAP_SKIPPED" | grep -q "SNAPSHOT_RC\|FAKE run_remote CALLED" && echo "$SNAP_SKIPPED" | grep -q "skipping"; then
+  echo "ok: --skip-resume-check reads nothing and says so"
+else
+  echo "FAIL: --skip-resume-check still read the running searches"
+  echo "$SNAP_SKIPPED"
+  FAIL=1
+fi
 
-echo "== verify_resumed(): every search must run again under the new run =="
-verify_resumed_against() { # the listing the new container reports
+echo "== verify_resumed(): every search must be searching again, or have ended on its own =="
+verify_resumed_against() { # the listing the new container reports; timeout
   local AFTER="$1"
   run_remote() { cat >/dev/null; echo "$AFTER"; }
-  DRY_RUN=0; RESUME_TIMEOUT=0; RESUME_POLL=0; EXPECTED_RESUMES="-1 old"
+  DRY_RUN=0; RESUME_TIMEOUT="${2:-0}"; RESUME_POLL=0; EXPECTED_RESUMES="-1 old"; SNAPSHOT_AT=1000
   { verify_resumed || echo "VERIFY_RESUMED_RC=$?"; } 2>&1
 }
 set +e
-RESUMED_OK="$(verify_resumed_against "$(running "$(search -1 new true true -)")")"
-RESUMED_OLD="$(verify_resumed_against "$(running "$(search -1 old true true -)")")"
-RESUMED_GONE="$(verify_resumed_against "$(running)")"
-RESUMED_DEAD="$(verify_resumed_against "$(running "$(search -1 new false true -)")")"
+RESUMED_OK="$(verify_resumed_against "$(running 1300 - "$(search -1 new true true true -)")")"
+RESUMED_ENDED="$(verify_resumed_against "$(running 1300 "$(stopped -1 crashed 900)")")"
+RESUMED_OLD="$(verify_resumed_against "$(running 1300 - "$(search -1 old true true true -)")")"
+RESUMED_DEAD="$(verify_resumed_against "$(running 1300 - "$(search -1 new false true true -)")")"
+RESUMED_LOGGING_IN="$(verify_resumed_against "$(running 1300 - "$(search -1 new true false true -)")")"
+# Stopped after the snapshot: lost for good, so failed at once however long
+# the wait would have been.
+RESUMED_STOPPED="$(verify_resumed_against "$(running 1300 "$(stopped -1 korail_unreachable 1200)")" 600)"
+RESUMED_ABANDONED="$(verify_resumed_against "$(running 1300 "$(stopped -1 not_resumed_seat_held 1100)")" 600)"
 set -e
-if ! echo "$RESUMED_OK" | grep -q "VERIFY_RESUMED_RC" && echo "$RESUMED_OK" | grep -q "every running search resumed"; then
-  echo "ok: verify_resumed() passes once the search runs under the new run with a live worker"
+if ! echo "$RESUMED_OK" | grep -q "VERIFY_RESUMED_RC" && echo "$RESUMED_OK" | grep -qF -- "-1 resumed and searching"; then
+  echo "ok: verify_resumed() passes once the search runs under the new run, logged in"
 else
   echo "FAIL: verify_resumed() did not accept a resumed search"
   echo "$RESUMED_OK"
   FAIL=1
 fi
+if ! echo "$RESUMED_ENDED" | grep -q "VERIFY_RESUMED_RC" && echo "$RESUMED_ENDED" | grep -qF -- "-1 ended while this waited"; then
+  echo "ok: a search that finished on its own (only an older stop on file) does not fail the deploy"
+else
+  echo "FAIL: verify_resumed() failed the deploy for a search that finished on its own"
+  echo "$RESUMED_ENDED"
+  FAIL=1
+fi
 for case in \
   "RESUMED_OLD:not resumed yet" \
-  "RESUMED_GONE:not running (record gone)" \
-  "RESUMED_DEAD:resumed, but its worker is gone"; do
+  "RESUMED_DEAD:resumed, but its worker is gone" \
+  "RESUMED_LOGGING_IN:resumed, not logged in to Korail yet" \
+  "RESUMED_STOPPED:stopped (korail_unreachable)" \
+  "RESUMED_ABANDONED:stopped (not_resumed_seat_held)"; do
   name="${case%%:*}"
   want="${case#*:}"
   out="${!name}"
@@ -343,17 +382,57 @@ for case in \
   fi
 done
 
+echo "== main(): the listing is read again right before the restart =="
+READS="$(mktemp)"
+set +e
+MAIN_REFUSED_OUT="$(
+  preflight() { return 0; }
+  backup() { return 0; }
+  transfer() { SWAPPED=1; }
+  build() { echo "BUILT" >&2; }
+  up() { echo "UP CALLED" >&2; }
+  verify() { return 0; }
+  after_hook() { return 0; }
+  # Resumable when first read; by the time the build is done a seat is held.
+  run_remote() {
+    cat >/dev/null
+    echo x >>"$READS"
+    if [[ "$(wc -l <"$READS" | tr -d ' ')" -eq 1 ]]; then
+      running 1000 - "$(search -1 old true true true -)"
+    else
+      running 1100 - "$(search -1 old true true false seat_held)"
+    fi
+  }
+  HOST="fake@host"; ROOT="/srv/app"; REF="HEAD"; SERVICE="api"; DRY_RUN=0
+  SHORT_REF="deadbee"; TS="20260101T000000Z"; ALLOW_UNRESUMABLE=0; SKIP_RESUME_CHECK=0
+  main 2>&1
+)"
+MAIN_REFUSED_STATUS=$?
+set -e
+rm -f "$READS"
+if [[ "$MAIN_REFUSED_STATUS" -ne 0 ]] \
+  && echo "$MAIN_REFUSED_OUT" | grep -q "BUILT" \
+  && echo "$MAIN_REFUSED_OUT" | grep -q "REFUSED right before the restart" \
+  && ! echo "$MAIN_REFUSED_OUT" | grep -q "UP CALLED"; then
+  echo "ok: main() re-reads after the build and refuses without restarting"
+else
+  echo "FAIL: main() restarted on a listing read before the build"
+  echo "$MAIN_REFUSED_OUT"
+  FAIL=1
+fi
+
 echo "== main(): a search that does not come back fails the deploy without a rollback =="
 set +e
 MAIN_RESUME_OUT="$(
   preflight() { return 0; }
-  snapshot_running() { EXPECTED_RESUMES="-1 old"; }
+  snapshot_running() { EXPECTED_RESUMES="-1 old"; SNAPSHOT_AT=1000; }
   backup() { return 0; }
   transfer() { SWAPPED=1; }
-  deploy() { return 0; }
+  build() { return 0; }
+  up() { return 0; }
   verify() { return 0; }
   after_hook() { return 0; }
-  run_remote() { cat >/dev/null; running "$(search -1 old true true -)"; }
+  run_remote() { cat >/dev/null; running 1300 - "$(search -1 old true true true -)"; }
   HOST="fake@host"; ROOT="/srv/app"; REF="HEAD"; SERVICE="api"; DRY_RUN=0
   SHORT_REF="deadbee"; TS="20260101T000000Z"; RESUME_TIMEOUT=0; RESUME_POLL=0
   main 2>&1
