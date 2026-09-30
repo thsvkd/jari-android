@@ -350,6 +350,9 @@ RESUMED_OK="$(verify_resumed_against "$(running 1300 - "$(search -1 new true tru
 # Booked while the deploy waited; an older stop on file changes nothing.
 RESUMED_ENDED="$(verify_resumed_against "$(ENDED="$(ended -1 booked 1200)" running 1300 "$(stopped -1 crashed 900)")")"
 RESUMED_CANCELLED="$(verify_resumed_against "$(ENDED="$(ended -1 cancelled 1200)" running 1300 -)")"
+# Its mark a second older than the snapshot clock: the end left the mark just
+# before the record went, and the snapshot listed the record in between.
+RESUMED_ENDED_EDGE="$(verify_resumed_against "$(ENDED="$(ended -1 booked 999)" running 1300 -)")"
 # Gone with no mark of how: not taken on trust, waited for, then reported.
 RESUMED_VANISHED="$(verify_resumed_against "$(running 1300 -)")"
 # An end mark from before the snapshot is not how this search ended.
@@ -377,7 +380,7 @@ else
   echo "$RESUMED_OK"
   FAIL=1
 fi
-for case in "RESUMED_ENDED:booked" "RESUMED_CANCELLED:cancelled"; do
+for case in "RESUMED_ENDED:booked" "RESUMED_CANCELLED:cancelled" "RESUMED_ENDED_EDGE:booked"; do
   name="${case%%:*}"
   want="${case#*:}"
   out="${!name}"

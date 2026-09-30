@@ -709,6 +709,10 @@ def test_running_records_this_build_cannot_read_are_counted(tmp_path, monkeypatc
     _left_by_an_earlier_run(storage)
     # A record written by a build whose fields this one does not know.
     storage.redis.set("running_reservation:-7", json.dumps({"chat_id": -7}))
+    # Ones that are not records at all: a list, an empty value. Each must count,
+    # not take the whole listing down.
+    storage.redis.set("running_reservation:-9", "[]")
+    storage.redis.set("running_reservation:-10", "")
 
     # And one whose key is gone by the time it is read: neither kind.
     real_get = storage.redis.get
@@ -722,7 +726,7 @@ def test_running_records_this_build_cannot_read_are_counted(tmp_path, monkeypatc
     searches, unreadable = service.describe_running()
 
     assert [row["id"] for row in searches] == [CHAT]
-    assert unreadable == 1
+    assert unreadable == 3
     storage.close()
 
 

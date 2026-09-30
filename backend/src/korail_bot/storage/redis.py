@@ -329,12 +329,16 @@ class RedisStorage(StorageInterface):
         unreadable = 0
         for key in self._scan_keys("running_reservation:*"):
             data = self.redis.get(key)
-            if data:
-                try:
-                    res_dict = json.loads(data)
-                    reservations.append(self._deserialize_running_reservation(res_dict))
-                except (json.JSONDecodeError, KeyError):
-                    unreadable += 1
+            if data is None:
+                continue
+            try:
+                res_dict = json.loads(data)
+                reservations.append(self._deserialize_running_reservation(res_dict))
+            # Anything that is not a record this build understands - an empty
+            # value, a non-object, a bad date or enum - is unreadable, not a
+            # reason to fail the whole listing (JSONDecodeError is a ValueError).
+            except (ValueError, TypeError, KeyError):
+                unreadable += 1
         return reservations, unreadable
 
     # ==================== Onboarded accounts ====================

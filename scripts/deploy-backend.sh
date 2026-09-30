@@ -287,8 +287,12 @@ judge_resumes() {
     NR == FNR {
       if ($1 == "unreadable") unreadable = $2 + 0
       if ($1 == "search") { run[$2] = $3; alive[$2] = $4; login[$2] = $5 }
-      if ($1 == "stopped" && $4 + 0 >= since + 0) stopped[$2] = $3
-      if ($1 == "ended" && $4 + 0 >= since + 0) ended[$2] = $3
+      # One second of slack: an end leaves its mark just before its record goes,
+      # so the snapshot can still list a search whose mark (whole seconds) is a
+      # second older than the snapshot clock read after it. An older mark
+      # belongs to an earlier search and was cleared when this one started.
+      if ($1 == "stopped" && $4 + 0 >= since - 1) stopped[$2] = $3
+      if ($1 == "ended" && $4 + 0 >= since - 1) ended[$2] = $3
       next
     }
     {
