@@ -122,8 +122,9 @@ export async function layoutProblems(page: Page, rules: LayoutRules = {}): Promi
       }
     }
     // 7. 좌석 시트: 좌석표가 조건 칸에 밀려 몇 줄 안 남던 문제(4.13.4: 412×915 에서 2줄까지)를 잡아요.
-    //    344×780(폴드 커버)은 조건 칸이 커서 4.13.5 도 2줄이에요. 시트가 스크롤되는 폭이라 여기서는 2줄을 지켜요.
-    //    온전히 보이는 좌석 줄이 어느 폰이든 2줄, 높이 840px 이상인 보통 폰은 4줄 이상이에요(줄이 그보다 적은 호차는 전부).
+    //    온전히 보이는 좌석 줄이 어느 폰이든 2줄, 높이 840px 이상인 보통 폰은 3줄 이상이에요(줄이 그보다 적은 호차는 전부).
+    //    3줄인 까닭: 에뮬레이터·실폰 WebView 는 상태 표시줄·내비게이션 바만큼 헤드리스(915px)보다 낮아 4.13.5 도 3줄(214px)인 화면이 있어요.
+    //    344×780(폴드 커버)은 조건 칸이 커서 4.13.5 도 2줄이고 시트가 스크롤돼요.
     const seatMap = document.querySelector(".seat-dialog .seat-map-live");
     if (seatMap && visible(seatMap)) {
       const box = seatMap.getBoundingClientRect();
@@ -132,7 +133,7 @@ export async function layoutProblems(page: Page, rules: LayoutRules = {}): Promi
         const r = row.getBoundingClientRect();
         return r.top >= box.top - 0.5 && r.bottom <= box.bottom + 0.5;
       }).length;
-      const want = Math.min(rows.length, window.innerHeight >= 840 ? 4 : 2);
+      const want = Math.min(rows.length, window.innerHeight >= 840 ? 3 : 2);
       if (whole < want) problems.push(`좌석표가 좁음: 온전히 보이는 좌석 ${whole}줄 (규칙 ${want}줄, 좌석표 높이 ${Math.round(box.height)}px)`);
     }
 
