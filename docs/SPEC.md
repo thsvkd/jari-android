@@ -1,6 +1,6 @@
 # 자리났다 — 기술 명세 (SPEC)
 
-문서 기준일: 2026-10-02, 4.13.2(`fix/family-seats`). 제품 의도는 [PRD.md](PRD.md). 2026-09-14의 [좌석 선택·취소표 대기 설계](superpowers/specs/2026-09-14-seat-waitlist-flow-design.md)는 이 문서가 대체하되, 좌석 계획 도메인(연속 좌석·떨어져 앉기·결제 기한)은 그 문서의 "취소표 대기 동작" 절이 여전히 유효하다.
+문서 기준일: 2026-10-02, 4.13.3(`fix/play-minsdk-24`). 제품 의도는 [PRD.md](PRD.md). 2026-09-14의 [좌석 선택·취소표 대기 설계](superpowers/specs/2026-09-14-seat-waitlist-flow-design.md)는 이 문서가 대체하되, 좌석 계획 도메인(연속 좌석·떨어져 앉기·결제 기한)은 그 문서의 "취소표 대기 동작" 절이 여전히 유효하다.
 
 ## 1. 구성
 
@@ -158,7 +158,7 @@ seatPlanSummary: "015 일반실 3호차 5A·5B · 019 좌석 무관" | ""
 ## 11. Android 빌드·배포와 휴대폰 알림
 
 - `applicationId`는 `dev.thsvkd.jari`(Play에서 `com.jari.app`을 쓸 수 없었다), 코드의 `namespace`·Java 패키지·액티비티는 그대로 `com.jari.app`(`com.jari.app.MainActivity`). `capacitor.config.ts`의 `appId`도 `dev.thsvkd.jari`. 4.12.x 이하의 `com.jari.app` 앱 위에는 업데이트되지 않고 따로 깔린다.
-- `compileSdk`·`targetSdk` 36(Play는 2026-08-31부터 새 앱·업데이트에 API 36을 요구), AGP 8.9.3(API 36을 지원하는 첫 줄), Gradle 8.11.1, JDK 21. Android 16에서 바뀐 것: 가장자리까지 그리기를 끌 수 없다 — 앱은 이미 `env(safe-area-inset-*)`로 그리고 끄는 설정(`windowOptOutEdgeToEdgeEnforcement`)을 쓰지 않는다. 예측 뒤로가기가 기본으로 켜져 `onBackPressed`가 불리지 않는다 — `@capacitor/app`은 `OnBackPressedDispatcher` 콜백으로 받으므로 `backButton` 리스너(`platform.ts`)가 그대로 온다(`e2e/device.spec.ts`). 600dp 이상 화면에서는 `screenOrientation="sensorPortrait"`가 무시된다(태블릿·폴드 펼침은 가로로도 돈다). 받아들인다: 대상은 친구들의 폰이고, 화면은 이미 최대 520px 폭 가운데 정렬이라 가로에서도 한 열로 그려진다. 가로 레이아웃 e2e 프로젝트는 두지 않았다.
+- `minSdk` 24. Play 자동 보호가 최소 SDK 23 번들을 거부해서 4.13.3부터 Android 7.0 미만에는 설치되지 않는다. `compileSdk`·`targetSdk` 36(Play는 2026-08-31부터 새 앱·업데이트에 API 36을 요구), AGP 8.9.3(API 36을 지원하는 첫 줄), Gradle 8.11.1, JDK 21. Android 16에서 바뀐 것: 가장자리까지 그리기를 끌 수 없다 — 앱은 이미 `env(safe-area-inset-*)`로 그리고 끄는 설정(`windowOptOutEdgeToEdgeEnforcement`)을 쓰지 않는다. 예측 뒤로가기가 기본으로 켜져 `onBackPressed`가 불리지 않는다 — `@capacitor/app`은 `OnBackPressedDispatcher` 콜백으로 받으므로 `backButton` 리스너(`platform.ts`)가 그대로 온다(`e2e/device.spec.ts`). 600dp 이상 화면에서는 `screenOrientation="sensorPortrait"`가 무시된다(태블릿·폴드 펼침은 가로로도 돈다). 받아들인다: 대상은 친구들의 폰이고, 화면은 이미 최대 520px 폭 가운데 정렬이라 가로에서도 한 열로 그려진다. 가로 레이아웃 e2e 프로젝트는 두지 않았다.
 - 광고·분석 없음(Play에 "광고 없음·광고 ID 쓰지 않음·분석 없음"으로 신고): 매니페스트가 `com.google.android.gms.permission.AD_ID`를 `tools:node="remove"`로 빼고, `firebase-analytics`·`play-services-measurement`·`play-services-ads*`는 의존성에 없다(`firebase-messaging`이 끌어오는 것은 인터페이스뿐인 `firebase-measurement-connector`). `release-play.sh`가 둘 다 확인한다.
 - 앱 안의 개인정보 링크(Play 요구): 설정 → 개인정보와 로그인 화면 아래에 "개인정보처리방침"(`https://jari.thsvkd.dev/privacy`)·"계정·데이터 삭제 안내"(`/delete-account`). 체험 중에도 보인다. 보통의 `<a target="_blank">`이고, Capacitor가 앱 밖 주소로 가는 이동을 가로채 `ACTION_VIEW`로 시스템 브라우저에 넘긴다(`e2e/device.spec.ts`가 앞 화면이 앱이 아니게 되는지 본다).
 - 아이콘: 앱 안의 로고(홈 왼쪽 위 `brand-mark`, 짙은 둥근 네모 속 좌석 둘과 바닥선)를 모든 곳에 쓴다. `node scripts/render-icons.mjs`가 Playwright(Chromium)로 적응형 아이콘(벡터 앞면·바탕색 `#202631`·Android 13+ 한 색 레이어), 옛 런처용 `mipmap-*/ic_launcher{,_round}.png`, 런치 화면 `drawable*/splash.png`, `public/icon.svg`, Play 그림 `store/icon-512.png`(32비트)·`store/feature-graphic.png`(1024×500, 알파 없음)을 만든다. 스토어 스크린숏(데모 모드, 1080×2160)은 `store/screenshots/`.
