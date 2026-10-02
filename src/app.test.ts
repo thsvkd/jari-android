@@ -955,7 +955,7 @@ it("starts cancellation waiting with the selected physical-seat range", async ()
   expect(Object.keys(sentTrain).sort()).toEqual(["seatClass", "targets", "trainNo"].sort());
 });
 
-it("picks one facing family set when four people ask for family seats only", async () => {
+it("offers family seats only as an exclude switch, which leaves the facing sets out", async () => {
   const seat = (row: number, column: "A" | "B" | "C" | "D"): SeatMapSeat => ({
     carNo: 3,
     seatNo: `${row}${column}`,
@@ -983,14 +983,19 @@ it("picks one facing family set when four people ask for family seats only", asy
   root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
   await vi.waitFor(() => expect(root.querySelector("[data-train-no='025'][data-seat-mode='immediate']")).not.toBeNull());
   root.querySelector<HTMLButtonElement>("[data-train-no='025'][data-seat-mode='immediate']")!.click();
-  await vi.waitFor(() => expect(root.querySelector("[data-seat-filter='family:only']")).not.toBeNull());
-  root.querySelector<HTMLButtonElement>("[data-seat-filter='family:only']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-filter='family:exclude']")).not.toBeNull());
+  // "가족석만"은 없어요. 가족석 제외는 칩이 아니라 조건 칸 밖의 스위치예요.
+  expect(root.querySelector("[data-seat-filter='family:only']")).toBeNull();
+  const toggle = root.querySelector<HTMLButtonElement>("[data-seat-filter='family:exclude']")!;
+  expect(toggle.getAttribute("role")).toBe("switch");
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  expect(toggle.closest(".seat-filter")).toBeNull();
+  toggle.click();
 
   const selected = [...root.querySelectorAll(".seat-cell.selected")].map((node) => node.getAttribute("data-seat-no"));
-  expect(selected).toEqual(["7A", "7B", "8A", "8B"]);
-  expect(root.querySelector("[data-seat-filter='family:only']")!.getAttribute("aria-pressed")).toBe("true");
-  expect(root.querySelector("[data-seat-filter='family:exclude']")!.getAttribute("aria-pressed")).toBe("false");
-  expect(root.querySelectorAll(".seat-row.excluded")).toHaveLength(1);
+  expect(selected).toEqual(["9A", "9B", "9C", "9D"]);
+  expect(root.querySelector("[data-seat-filter='family:exclude']")!.getAttribute("aria-checked")).toBe("true");
+  expect(root.querySelectorAll(".seat-row.excluded")).toHaveLength(2);
 });
 
 // Train 015, whose wait dialog these cars fill, is sold out: a for-sale seat tapped there would switch the dialog to booking now.

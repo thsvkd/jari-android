@@ -169,28 +169,23 @@ test.describe("빈자리를 찾아 예약하기", () => {
     await expect(page.locator(".train-card", { has: page.locator("[data-train-toggle='00101']") })).toContainText("1석 지정");
   });
 
-  test("가족석만은 다른 줄을 빼고, 네 명은 마주 보는 한 세트를 골라요 @layout", async ({ signedIn: page }) => {
+  test("가족석은 \"제외\" 스위치 하나로 고르고, 켜면 4인 동반석 줄을 빼요 @layout", async ({ signedIn: page }) => {
     await searchTrains(page, { seatMode: "specific", seatClasses: ["general"], passengerCount: 4 });
     await page.locator("[data-seat-map][data-train-no='00101'][data-seat-class='general']").click();
     await expect(page.locator(".seat-cell").first()).toBeVisible();
-    const only = page.locator("[data-seat-filter='family:only']");
+    await expect(page.locator("[data-seat-filter='family:only']")).toHaveCount(0);
     const exclude = page.locator("[data-seat-filter='family:exclude']");
-    await expect(only).toBeVisible();
-    await expect(exclude).toBeVisible();
-    await only.click();
-    await expect(only).toHaveAttribute("aria-pressed", "true");
-    await expect(exclude).toHaveAttribute("aria-pressed", "false");
-    await expect(page.locator(".seat-row.excluded")).toHaveCount(12);
-    await expect(page.locator(".seat-cell small", { hasText: /^가족$/ })).toHaveCount(8);
-    const selected = await page.locator(".seat-cell.selected").evaluateAll((nodes) =>
-      nodes.map((node) => {
-        const row = node.closest(".seat-row")?.querySelector(":scope > span")?.textContent ?? "";
-        const column = node.querySelector("b")?.textContent ?? "";
-        return `${row}${column}`;
-      }),
-    );
-    expect(selected).toEqual(["7A", "7B", "8A", "8B"]);
-    await expectCleanLayout(page, "좌석표(가족석만)");
+    await expect(exclude).toHaveAttribute("role", "switch");
+    await expect(exclude).toHaveAttribute("aria-checked", "false");
+    // 창가·복도 칩과 같은 줄의 칩이 아니라 조건 칸 밖의 한 줄이에요.
+    expect(await exclude.evaluate((node) => node.closest(".seat-filter") === null && !node.classList.contains("seat-chip"))).toBe(true);
+    await exclude.click();
+    await expect(exclude).toHaveAttribute("aria-checked", "true");
+    await expect(page.locator(".seat-row.excluded")).toHaveCount(2);
+    const picked = await page.locator(".seat-cell.selected small").allTextContents();
+    expect(picked).toHaveLength(4);
+    expect(picked).not.toContain("가족");
+    await expectCleanLayout(page, "좌석표(가족석 제외)");
   });
 
   test("거의 매진된 열차도 편성의 모든 호차가 탭에 보이고 매진 호차의 좌석을 취소표 대기로 고를 수 있어요 @layout", async ({ signedIn: page, control }) => {

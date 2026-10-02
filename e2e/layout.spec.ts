@@ -120,6 +120,45 @@ test.describe("레이아웃 @layout", () => {
     expect(boxes.mark!.y + boxes.mark!.height).toBeLessThanOrEqual(boxes.row!.y + boxes.row!.height + 1);
   });
 
+  test("좌석 범위는 좌석표가 호차 바로 아래, 조건은 확인 버튼 위이고 열 칩은 A B | C D 한 줄이에요", async ({ signedIn: page }) => {
+    await searchTrains(page);
+    const soldOut = page.locator("article.train-card", { has: page.locator("[data-train-toggle='00103']") });
+    await soldOut.locator("[data-seat-class='general']").click();
+    await expect(page.locator(".seat-cell").first()).toBeVisible();
+    await expectCleanLayout(page, "좌석 범위(조건 아래)");
+
+    const filters = await page.locator(".seat-dialog [data-seat-filter]:not([data-seat-filter='clear'])").evaluateAll(
+      (nodes) => nodes.map((node) => node.getAttribute("data-seat-filter")),
+    );
+    expect(filters).toEqual(expect.arrayContaining(["col:A", "col:B", "col:C", "col:D", "pair:window", "pair:aisle", "trim:-", "trim:+", "cars:-", "cars:+"]));
+    expect(filters).not.toContain("family:only");
+
+    const layout = await page.evaluate(() => {
+      const top = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      const letters = [...document.querySelectorAll("[data-seat-filter^='col:']")].map((node) => node.getBoundingClientRect());
+      return {
+        tabs: top(".car-tabs").bottom,
+        map: top(".seat-map-live"),
+        filter: top(".seat-filter").top,
+        confirm: top("[data-action='confirm-seat-dialog']").top,
+        letterRows: new Set(letters.map((box) => Math.round(box.y))).size,
+        gaps: letters.slice(1).map((box, index) => box.x - letters[index]!.right),
+      };
+    });
+    expect(layout.map.top - layout.tabs, "좌석표는 호차 탭 바로 아래(범례 한 줄만 사이)").toBeLessThan(48);
+    expect(layout.map.bottom).toBeLessThanOrEqual(layout.filter);
+    expect(layout.filter).toBeLessThan(layout.confirm);
+    expect(layout.letterRows, "열 칩 한 줄").toBe(1);
+    expect(layout.gaps[1]!, "B와 C 사이 통로").toBeGreaterThan(layout.gaps[0]! + 4);
+
+    await page.locator("[data-seat-filter='pair:window']").click();
+    await page.locator("[data-seat-filter='trim:+']").click();
+    await page.locator("[data-seat-filter='cars:+']").click();
+    await expect(page.locator(".car-tab.trimmed")).toHaveCount(2);
+    await expect(page.locator("[data-action='apply-all-cars']")).toBeVisible();
+    await expectCleanLayout(page, "좌석 범위(조건 선택)");
+  });
+
   test("찾는 중·결제 대기", async ({ signedIn: page }) => {
     await searchTrains(page);
     await keepOnlyTrains(page, ["00101"]);

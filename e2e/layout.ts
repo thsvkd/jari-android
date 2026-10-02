@@ -121,6 +121,30 @@ export async function layoutProblems(page: Page, rules: LayoutRules = {}): Promi
         }
       }
     }
+    // 7. 좌석 시트: 좌석표가 조건 칸에 밀려 몇 줄 안 남던 문제(4.13.4: 412×915 에서 2줄까지)를 잡아요.
+    //    344×780(폴드 커버)은 조건 칸이 커서 4.13.5 도 2줄이에요. 시트가 스크롤되는 폭이라 여기서는 2줄을 지켜요.
+    //    온전히 보이는 좌석 줄이 어느 폰이든 2줄, 높이 840px 이상인 보통 폰은 4줄 이상이에요(줄이 그보다 적은 호차는 전부).
+    const seatMap = document.querySelector(".seat-dialog .seat-map-live");
+    if (seatMap && visible(seatMap)) {
+      const box = seatMap.getBoundingClientRect();
+      const rows = [...seatMap.querySelectorAll(".seat-row")];
+      const whole = rows.filter((row) => {
+        const r = row.getBoundingClientRect();
+        return r.top >= box.top - 0.5 && r.bottom <= box.bottom + 0.5;
+      }).length;
+      const want = Math.min(rows.length, window.innerHeight >= 840 ? 4 : 2);
+      if (whole < want) problems.push(`좌석표가 좁음: 온전히 보이는 좌석 ${whole}줄 (규칙 ${want}줄, 좌석표 높이 ${Math.round(box.height)}px)`);
+    }
+
+    // 7-1. 좌석 조건의 칩 묶음은 꺾이지 않아요. 열 칩이 A B C / D 로 꺾여 좌석표와 모양이 달라지던 문제를 잡아요.
+    //      묶음끼리는 자리가 모자라면 다음 줄로 가도 돼요(창가·복도가 열 칩 아래로).
+    //      묶음은 마크업 이름과 상관없이 "칩이나 앞뒤 제외 칸을 둘 이상 바로 품은 상자"예요.
+    for (const group of document.querySelectorAll(".seat-dialog *")) {
+      const items = [...group.children].filter((child) => child.matches(".seat-chip, .seat-stepper-block") && visible(child));
+      if (items.length < 2 || ignored(group)) continue;
+      const tops = new Set(items.map((child) => Math.round(child.getBoundingClientRect().top)));
+      if (tops.size > 1) problems.push(`좌석 조건 묶음이 ${tops.size}줄로 꺾임: ${name(group)}`);
+    }
     return problems;
   }, { minTarget: rules.minTarget ?? 48, ignore: rules.ignore ?? [], smaller: SMALLER_TARGETS });
 }

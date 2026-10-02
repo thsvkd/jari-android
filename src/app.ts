@@ -164,6 +164,17 @@ function rememberRoute(conditions: Conditions): void {
 
 
 // True when a seat's label is the real seat number rather than the synthetic column letter the grid uses to lay it out (e.g. 무궁화 "23" vs KTX "3A").
+// 가장 긴 줄의 열 순서와 통로 위치(A B | C D). 문 옆 짧은 줄은 통로 자리를 말해 주지 못해요.
+function seatColumnGroups(layout: SeatMapSeat[][]): Array<{ column: string; aisleBefore: boolean }> {
+  const widest = layout.reduce<SeatMapSeat[]>((best, row) => (row.length > best.length ? row : best), []);
+  return widest
+    .filter((seat) => seat.column)
+    .map((seat, index, row) => ({
+      column: seat.column!,
+      aisleBefore: index > 0 && Boolean(row[index - 1]!.adjacencyGroup && seat.adjacencyGroup && row[index - 1]!.adjacencyGroup !== seat.adjacencyGroup),
+    }));
+}
+
 function isNumericSeatLabel(seat: SeatMapSeat): boolean {
   return Boolean(seat.column) && !seat.label.endsWith(seat.column);
 }
@@ -951,15 +962,18 @@ export class JariApp {
     const confirmDisabled = locked || (dialog.mode === "immediate"
       ? dialog.selected.length !== passengerCount
       : dialog.selected.length === 0);
+    // "모든 호차에 적용"은 조건 칸에 한 줄을 차지하지 않게 "선택 해제" 옆 글자 버튼으로 둬요.
+    const applyAll = dialog.mode === "wait" && dialog.cars.length > 1
+      ? `<button type="button" class="seat-filter-clear" data-action="apply-all-cars" ${locked ? "disabled" : ""}>${locked ? "모든 호차 확인 중…" : "모든 호차에 적용"}</button>`
+      : "";
     return overlay({ className: "seat-dialog", labelledBy: "seat-dialog-title", content: `
       <header><div><p class="eyebrow">${escapeHtml(`${dialog.train.name || "열차"} ${dialog.train.no}`)} · ${classLabel}</p><h2 id="seat-dialog-title">${title}</h2></div>${button({ variant: "icon", action: "close-seat-dialog", ariaLabel: "좌석 선택 닫기", content: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>' })}</header>
       ${dialog.canBookNow && !dialog.layoutReference ? `<div class="segmented seat-mode" role="radiogroup" aria-label="좌석을 고르는 방식">${(["immediate", "wait"] as const).map((mode) => `<button type="button" role="radio" class="${dialog.mode === mode ? "active" : ""}" aria-checked="${dialog.mode === mode}" data-seat-mode-switch="${mode}" ${locked ? "disabled" : ""}>${mode === "immediate" ? "바로 예약" : "취소표 대기"}</button>`).join("")}</div>` : ""}
       <div class="car-tabs" aria-label="호차 선택">${cars}</div>
-      ${dialog.inventory ? this.renderSeatFilter(dialog, dialog.inventory.seats) : ""}
       <div class="seat-legend">${dialog.layoutReference ? "" : '<span><i class="available"></i>현재 예약 가능</span>'}<span><i class="occupied"></i>${dialog.mode === "wait" || !dialog.layoutReference ? "취소표 대기 가능" : "선택 불가"}</span><span><i class="selected"></i>선택</span></div>
       <div class="seat-map-live">${rows}</div>
       ${dialog.inventory && dialog.error ? notice({ tone: "warning", className: "seat-inline-error", alert: true, text: dialog.error }) : ""}
-      <footer>${dialog.modeNotice ? `<p class="seat-mode-notice" role="status">${escapeHtml(dialog.modeNotice)}</p>` : ""}<div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || filtersActive ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div>${button({ action: "confirm-seat-dialog", content: confirmText, disabled: confirmDisabled })}</footer>` });
+      <footer>${dialog.inventory ? this.renderSeatFilter(dialog, dialog.inventory.seats) : ""}${dialog.modeNotice ? `<p class="seat-mode-notice" role="status">${escapeHtml(dialog.modeNotice)}</p>` : ""}<div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${applyAll || dialog.selected.length || filtersActive ? `<div class="seat-selection-actions">${applyAll}${dialog.selected.length || filtersActive ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div>` : ""}</div>${button({ action: "confirm-seat-dialog", content: confirmText, disabled: confirmDisabled })}</footer>` });
   }
 
   private renderSheet(): string {
@@ -1030,30 +1044,23 @@ export class JariApp {
     const chip = (action: string, label: string, on: boolean) =>
       chipButton({ label, pressed: on, disabled: locked, attrs: { "data-seat-filter": action } });
     const allOn = (columns: string[]) => columns.length > 0 && columns.every((column) => filter.columns.includes(column));
-    const columnChips = numericLabels ? "" : sets.columns.map((column) => chip(`col:${column}`, column, filter.columns.includes(column))).join("");
     const trimLabel = `${filter.trimRows}줄`;
-    const family = seats.some((seat) => seat.familyLabel)
-      ? `<div class="seat-filter-row seat-family"><div class="seat-chips" role="group" aria-label="가족석">${chip("family:only", "가족석만", filter.onlyFamily)}${chip("family:exclude", "가족석 제외", filter.excludeFamily)}</div></div>`
-      : "";
     // Both steppers on one row, each captioned underneath, so "좌석 앞뒤 제외 1줄" and "호차 앞뒤 제외 1개" read the same way.
     const stepper = (key: string, caption: string, value: string, atMin: boolean, atMax: boolean) =>
       `<div class="seat-stepper-block"><div class="seat-stepper"><button type="button" data-seat-filter="${key}:-" aria-label="${caption} 줄이기" ${atMin || locked ? "disabled" : ""}>−</button><output>${value}</output><button type="button" data-seat-filter="${key}:+" aria-label="${caption} 늘리기" ${atMax || locked ? "disabled" : ""}>+</button></div><small>${caption}</small></div>`;
-    const multiCar = dialog.mode === "wait" && dialog.cars.length > 1;
-    const carStepper = multiCar
+    const carStepper = dialog.mode === "wait" && dialog.cars.length > 1
       ? stepper("cars", "호차 앞뒤 제외", `${dialog.trimCars}개`, dialog.trimCars <= 0, dialog.trimCars >= maxTrimCars(dialog.cars.length))
       : "";
-    const applyAll = multiCar
-      ? `${button({ variant: "ghost", className: "seat-apply-all", action: "apply-all-cars", label: locked ? "모든 호차 확인 중…" : "모든 호차에 적용", disabled: locked })}`
+    // 열은 좌석표처럼 A B | C D 한 묶음으로 꺾이지 않고, 창가·복도 묶음은 자리가 모자라면 다음 줄로 가요.
+    const letters = numericLabels
+      ? ""
+      : `<div class="seat-col-row" role="group" aria-label="좌석 열">${seatColumnGroups(groupSeatsByLayout(seats)).map(({ column, aisleBefore }) => `${aisleBefore ? '<span class="seat-col-gap" aria-hidden="true"></span>' : ""}${chip(`col:${column}`, column, filter.columns.includes(column))}`).join("")}</div>`;
+    const pairs = `<div class="seat-pair-row" role="group" aria-label="창가·복도">${chip("pair:window", "창가", allOn(sets.window))}${sets.aisle.length ? chip("pair:aisle", "복도", allOn(sets.aisle)) : ""}</div>`;
+    // 가족석 제외는 자리를 고르는 칩이 아니라 켜고 끄는 조건이라 조건 칸 밖의 스위치예요.
+    const familyToggle = seats.some((seat) => seat.familyLabel)
+      ? `<button type="button" class="seat-family-toggle" role="switch" aria-checked="${filter.excludeFamily}" data-seat-filter="family:exclude" ${locked ? "disabled" : ""}><span><b>가족석 제외</b><small>마주 보는 4인 동반석은 고르지 않아요</small></span><i aria-hidden="true"></i></button>`
       : "";
-    // Letters and the window/aisle pair wrap as groups. A lone chip with flex-grow fills the next line,
-    // which is how "복도" became a full-width bar on narrow phones.
-    const pairChips = `${chip("pair:window", "창가", allOn(sets.window))}${sets.aisle.length ? chip("pair:aisle", "복도", allOn(sets.aisle)) : ""}`;
-    return `<div class="seat-filter">
-      <div class="seat-filter-row seat-columns"><div class="seat-chips" role="group" aria-label="좌석 열">${columnChips ? `<div class="seat-chip-letters">${columnChips}</div>` : ""}<div class="seat-chip-pairs">${pairChips}</div></div></div>
-      <div class="seat-filter-row seat-steppers">${stepper("trim", "좌석 앞뒤 제외", trimLabel, filter.trimRows <= 0, filter.trimRows >= maxTrimRows(seats))}${carStepper}</div>
-      ${family}
-      ${applyAll}
-    </div>`;
+    return `<div class="seat-filter"><div class="seat-pick-row">${letters}${pairs}</div><div class="seat-filter-row seat-steppers">${stepper("trim", "좌석 앞뒤 제외", trimLabel, filter.trimRows <= 0, filter.trimRows >= maxTrimRows(seats))}${carStepper}</div></div>${familyToggle}`;
   }
 
   private async openSeatMap(trainKey: string, trainNo: string, seatClass: SeatClass, mode: SeatSelectionMode): Promise<void> {
@@ -1313,10 +1320,6 @@ export class JariApp {
     }
     if (kind === "trim") {
       filter.trimRows = Math.max(0, Math.min(maxTrimRows(inventory.seats), filter.trimRows + (value === "+" ? 1 : -1)));
-    }
-    if (kind === "family" && value === "only") {
-      filter.onlyFamily = !filter.onlyFamily;
-      if (filter.onlyFamily) filter.excludeFamily = false;
     }
     if (kind === "family" && value === "exclude") {
       filter.excludeFamily = !filter.excludeFamily;
