@@ -868,7 +868,7 @@ export class JariApp {
             const targets = this.cancellationTargets.filter((target) => target.trainNo === train.no);
             const selectedCount = targets.reduce((sum, target) => sum + target.targets.length, 0);
             const wholeTrain = targets.some((target) => !target.targets.length);
-            return `<article class="train-card ${targets.length ? "selected" : ""}"><button type="button" class="train-main" data-train-toggle="${escapeHtml(train.no)}" aria-pressed="${wholeTrain}"><span class="train-check" aria-hidden="true"></span><span class="train-main-text"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b></span></button>${badge({ shape: "tag", className: "seat-badge", tone: wholeTrain ? "solid" : anyAvailable ? "success" : "danger", label: wholeTrain ? "좌석 무관 선택" : selectedCount ? `${selectedCount}석 지정` : anyAvailable ? "좌석 있음" : "매진" })}<div class="train-actions">${anyAction}${official}</div></article>`;
+            return `<article class="train-card ${targets.length ? "selected" : ""}" data-train-card="${escapeHtml(train.no)}"><button type="button" class="train-main" data-train-toggle="${escapeHtml(train.no)}" aria-pressed="${wholeTrain}"><span class="train-check" aria-hidden="true"></span><span class="train-main-text"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b></span></button>${badge({ shape: "tag", className: "seat-badge", tone: wholeTrain ? "solid" : anyAvailable ? "success" : "danger", label: wholeTrain ? "좌석 무관 선택" : selectedCount ? `${selectedCount}석 지정` : anyAvailable ? "좌석 있음" : "매진" })}<div class="train-actions">${anyAction}${official}</div></article>`;
           })
           .join("")
       : emptyState({ mark: "train", title: "조회된 열차가 없어요", text: "시간이나 구간을 바꿔 다시 조회해 주세요." });
@@ -2202,11 +2202,13 @@ export class JariApp {
       return;
     }
     const button = target.closest<HTMLButtonElement>("button");
-    if (!button) return;
-    if (button.dataset.trainToggle) {
-      this.toggleWholeTrain(button.dataset.trainToggle);
+    const trainNo = button?.dataset.trainToggle
+      ?? (!button ? target.closest<HTMLElement>("[data-train-card]")?.dataset.trainCard : undefined);
+    if (trainNo) {
+      this.toggleWholeTrain(trainNo);
       return;
     }
+    if (!button) return;
     if (button.dataset.seatMap !== undefined) {
       const seatClass = button.dataset.seatClass === "special" ? "special" : "general";
       const mode = button.dataset.seatMode === "wait" ? "wait" : "immediate";

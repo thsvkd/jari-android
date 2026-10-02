@@ -5,6 +5,51 @@ import { expectCleanLayout } from "./layout";
 // 코레일만 가짜예요. 로그인·조회·예약 워커·결제 감시·알림은 운영 코드가 그대로 돌아요.
 
 test.describe("빈자리를 찾아 예약하기", () => {
+  for (const { name, trainNo, seatClasses } of [
+    { name: "좌석 예약", trainNo: "00101", seatClasses: ["general"] as const },
+    { name: "취소표 대기", trainNo: "00103", seatClasses: undefined },
+    { name: "일반실·특실 지정", trainNo: "00103", seatClasses: ["general", "special"] as const },
+  ]) {
+    test(`${name}: 좌석 지정 버튼 밖 카드 전체를 눌러 선택·해제해요 @layout`, async ({ signedIn: page }) => {
+      await searchTrains(page, seatClasses ? { seatMode: "specific", seatClasses: [...seatClasses] } : {});
+      const card = page.locator(".train-card", { has: page.locator(`[data-train-toggle='${trainNo}']`) });
+      const toggle = card.locator("[data-train-toggle]");
+      await expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+      for (const area of ["padding", "badge", "actions"]) {
+        const clickArea = async () => {
+          if (area === "badge") {
+            await card.locator(".seat-badge").click();
+          } else {
+            const target = area === "padding" ? card : card.locator(".train-actions");
+            await target.scrollIntoViewIfNeeded();
+            const box = (await target.boundingBox())!;
+            // 아래쪽 카드 패딩, 한 버튼 옆 빈 칸 또는 두 버튼 사이 틈을 직접 눌러요.
+            await target.click({ position: area === "padding"
+              ? { x: 5, y: box.height - 5 }
+              : { x: seatClasses?.length === 2 ? box.width / 2 : box.width * 0.75, y: 24 } });
+          }
+        };
+        await clickArea();
+        await expect(toggle).toHaveAttribute("aria-pressed", "true");
+        await expect(card).toContainText("좌석 무관 선택");
+        await expect(page.locator(".seat-dialog")).toHaveCount(0);
+        await expectCleanLayout(page, `${name} ${area} 선택`);
+        await clickArea();
+        await expect(toggle).toHaveAttribute("aria-pressed", "false");
+        await expect(card).not.toHaveClass(/selected/);
+        await expectCleanLayout(page, `${name} ${area} 해제`);
+      }
+
+      // 버튼 안쪽의 글자를 눌러도 카드 선택으로 새지 않고 좌석표만 열어요.
+      await card.locator("[data-seat-map][data-seat-class='general'] span").first().click();
+      await expect(page.locator(".seat-cell").first()).toBeVisible();
+      await page.locator("[data-action='close-seat-dialog']").click();
+      await expect(toggle).toHaveAttribute("aria-pressed", "false");
+      await expect(card).not.toHaveClass(/selected/);
+    });
+  }
+
   test("워커가 좌석을 잡으면 홈에는 결제 카드만, 한 줄 열차 정보와 줄어드는 남은 시간이 보여요", async ({ signedIn: page, control }) => {
     await searchTrains(page);
     await keepOnlyTrains(page, ["00101"]);

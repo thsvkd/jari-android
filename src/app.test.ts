@@ -1791,6 +1791,9 @@ it("asks before 바로 예약 starts a real reservation, and does nothing when d
   const sheet = root.querySelector<HTMLElement>(".action-sheet")!;
   expect(sheet.textContent).toContain("바로 예약할까요?");
   expect(sheet.textContent).toContain("09:00→11:42 KTX · 일반실 우선 · 1명");
+  const card = root.querySelector("[data-immediate-any]")!.closest(".train-card")!;
+  expect(card.querySelector("[data-train-toggle]")!.getAttribute("aria-pressed")).toBe("false");
+  expect(card.classList.contains("selected")).toBe(false);
   root.querySelector<HTMLButtonElement>("[data-action='sheet-cancel']")!.click();
   expect(search).not.toHaveBeenCalled();
 
@@ -1809,6 +1812,9 @@ it("asks before 코레일 예약 대기 is submitted, and does nothing when dism
   root.querySelector<HTMLButtonElement>("[data-official-waitlist='015']")!.click();
   expect(root.querySelector(".action-sheet")?.textContent).toContain("코레일 예약 대기를 신청할까요?");
   expect(root.querySelector(".action-sheet")?.textContent).toContain("07:27→10:12 KTX · 일반실만 · 1명");
+  const card = root.querySelector("[data-official-waitlist='015']")!.closest(".train-card")!;
+  expect(card.querySelector("[data-train-toggle]")!.getAttribute("aria-pressed")).toBe("false");
+  expect(card.classList.contains("selected")).toBe(false);
   root.querySelector<HTMLButtonElement>("[data-action='sheet-cancel']")!.click();
   expect(search).not.toHaveBeenCalled();
 });
@@ -2009,6 +2015,31 @@ it("says what each train-list button will do", async () => {
   expect(root.querySelector("[data-action='trains-next']")?.textContent).toContain("다음: 조건 확인");
   root.querySelector<HTMLButtonElement>("[data-train-toggle='015']")!.click();
   expect(root.querySelector("[data-action='trains-next']")?.textContent).toContain("1편 선택 · 다음: 조건 확인");
+});
+
+it.each(["015", "025"])("toggles train %s without a seat plan from every non-button card area", async (trainNo) => {
+  const { app, root } = await mountLive();
+  app.navigate("journey");
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  const toggle = () => root.querySelector<HTMLButtonElement>(`[data-train-toggle='${trainNo}']`)!;
+  await vi.waitFor(() => expect(toggle()).not.toBeNull());
+  const card = () => toggle().closest<HTMLElement>(".train-card")!;
+
+  for (const area of [null, ".seat-badge", ".train-actions"]) {
+    const clickArea = () => (area ? card().querySelector<HTMLElement>(area)! : card()).click();
+    clickArea();
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    expect(card().textContent).toContain("좌석 무관 선택");
+    expect(root.querySelector(".seat-dialog")).toBeNull();
+    clickArea();
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    expect(card().classList.contains("selected")).toBe(false);
+  }
+
+  card().querySelector<HTMLElement>(".train-actions")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='trains-next']")!.click();
+  expect(root.querySelector(".screen-confirm")).not.toBeNull();
+  expect(root.querySelector(".summary-card")!.textContent).not.toContain("좌석 지정");
 });
 
 it("shows the whole-train pick as a check mark that matches aria-pressed", async () => {
