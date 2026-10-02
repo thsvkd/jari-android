@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   consecutiveGroups,
+  familyQuartets,
   filterSeats,
   groupSeatsByLayout,
+  limitedFamilySeats,
   maxTrimRows,
   seatColumnSets,
 } from "./seat-map";
@@ -47,11 +49,12 @@ describe("dynamic Korail seat layouts", () => {
       seat(3, "A", "left", 1), seat(3, "B", "left", 2),
       seat(3, "C", "right", 1), seat(3, "D", "right", 2),
     ];
-    expect(labels(filterSeats(seats, { columns: ["A", "D"], trimRows: 0, excludeFamily: false }))).toEqual(["1A", "1D", "2A", "2D"]);
-    expect(labels(filterSeats(seats, { columns: [], trimRows: 0, excludeFamily: true }))).toEqual(["1A", "1B", "1C", "1D", "2C", "2D"]);
+    expect(labels(filterSeats(seats, { columns: ["A", "D"], trimRows: 0, onlyFamily: false, excludeFamily: false }))).toEqual(["1A", "1D", "2A", "2D"]);
+    expect(labels(filterSeats(seats, { columns: [], trimRows: 0, onlyFamily: false, excludeFamily: true }))).toEqual(["1A", "1B", "1C", "1D", "2C", "2D"]);
+    expect(labels(filterSeats(seats, { columns: [], trimRows: 0, onlyFamily: true, excludeFamily: false }))).toEqual(["2A", "2B"]);
     expect(maxTrimRows(seats)).toBe(0);
     expect(maxTrimRows(threeRows)).toBe(1);
-    expect(labels(filterSeats(threeRows, { columns: ["A"], trimRows: 1, excludeFamily: false }))).toEqual(["2A"]);
+    expect(labels(filterSeats(threeRows, { columns: ["A"], trimRows: 1, onlyFamily: false, excludeFamily: false }))).toEqual(["2A"]);
   });
 
   it("reads window and aisle columns from the layout, including a 1+2 car", () => {
@@ -87,5 +90,41 @@ describe("dynamic Korail seat layouts", () => {
 
     const twoAcrossAisle = [seat(1, "B", "left", 2, "", 2), seat(1, "C", "right", 1, "", 3)];
     expect(consecutiveGroups(twoAcrossAisle, 2)).toEqual([]);
+  });
+
+  it("treats a facing family set as one block and leaves a single family row as a row", () => {
+    const labels = (groups: SeatMapSeat[][]) => groups.map((group) => group.map((item) => item.label));
+    const family = (row: number, column: string, side: string, position: number, rowPosition: number) =>
+      seat(row, column, side, position, "4인 동반석", rowPosition);
+    const facing = [7, 8].flatMap((row) => [
+      family(row, "A", "left", 1, 1), family(row, "B", "left", 2, 2),
+      family(row, "C", "right", 1, 3), family(row, "D", "right", 2, 4),
+    ]);
+    expect(labels(familyQuartets(facing))).toEqual([
+      ["7A", "7B", "8A", "8B"],
+      ["7C", "7D", "8C", "8D"],
+    ]);
+    // The same-row blocks would book half of each set, so they are dropped.
+    expect(labels(consecutiveGroups(facing, 4))).toEqual([
+      ["7A", "7B", "8A", "8B"],
+      ["7C", "7D", "8C", "8D"],
+    ]);
+    const oneRow = [
+      family(2, "A", "left", 1, 1), family(2, "B", "left", 2, 2),
+      family(2, "C", "right", 1, 3), family(2, "D", "right", 2, 4),
+    ];
+    expect(familyQuartets(oneRow)).toEqual([]);
+    expect(labels(consecutiveGroups(oneRow, 4))).toEqual([["2A", "2B", "2C", "2D"]]);
+    // A hyphen group is not a side, so it cannot become a quartet.
+    const hyphen = oneRow.map((item) => ({ ...item, adjacencyGroup: `${item.row}-left` }));
+    expect(familyQuartets(hyphen)).toEqual([]);
+    const saleable = facing.map((item) => ({ ...item, salePossible: item.label !== "8D" }));
+    const open = saleable.filter((item) => item.salePossible);
+    expect(labels([limitedFamilySeats(open, { columns: [], trimRows: 0, onlyFamily: true, excludeFamily: false }, 4)])).toEqual([
+      ["7A", "7B", "8A", "8B"],
+    ]);
+    expect(limitedFamilySeats(open, { columns: [], trimRows: 0, onlyFamily: false, excludeFamily: false }, 4).map((item) => item.label)).toEqual([
+      "7A", "7B", "7C", "7D",
+    ]);
   });
 });

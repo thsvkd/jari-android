@@ -171,6 +171,92 @@ def test_the_same_seats_on_two_trains_stay_with_their_own_train():
     ] == [("015", ["5A", "5B"]), ("017", ["5A", "5B"])]
 
 
+def test_family_label_round_trips_only_when_korail_sent_one():
+    bare = target("S1", "5A")
+    marked = {**target("S2", "5B", position=2), "familyLabel": "4인 동반석"}
+    plan = CancellationWaitPlan.from_payload(
+        {
+            "strategy": "independent",
+            "passengerCount": 1,
+            "trains": [{"trainNo": "015", "seatClass": "general", "targets": [bare, marked]}],
+        }
+    )
+
+    assert plan.trains[0].targets[0].family_label == ""
+    assert plan.trains[0].targets[1].family_label == "4인 동반석"
+    sent = plan.as_payload()["trains"][0]["targets"]
+    assert "familyLabel" not in sent[0]
+    assert sent[1]["familyLabel"] == "4인 동반석"
+    assert parse_seat_plan(plan.to_json()) == plan
+
+
+def _four(targets: list[dict]) -> CancellationWaitPlan:
+    return CancellationWaitPlan.from_payload(
+        {
+            "strategy": "consecutive",
+            "passengerCount": 4,
+            "trains": [{"trainNo": "015", "seatClass": "general", "targets": targets}],
+        }
+    )
+
+
+def test_four_ordinary_seats_may_take_a_whole_row():
+    plan = _four(
+        [
+            target("S1", "5A", group="5-left", position=1, row_position=1),
+            target("S2", "5B", group="5-left", position=2, row_position=2),
+            target("S3", "5C", group="5-right", position=1, row_position=3),
+            target("S4", "5D", group="5-right", position=2, row_position=4),
+        ]
+    )
+
+    labels = [[seat.label for seat in block] for _, block in plan.consecutive_groups()]
+    assert labels == [["5A", "5B", "5C", "5D"]]
+
+
+def test_one_family_row_stays_a_row_because_it_has_no_facing_set():
+    seats = [
+        target("S1", "2A", group="2-left", position=1, row=2, row_position=1),
+        target("S2", "2B", group="2-left", position=2, row=2, row_position=2),
+        target("S3", "2C", group="2-right", position=1, row=2, row_position=3),
+        target("S4", "2D", group="2-right", position=2, row=2, row_position=4),
+    ]
+    plan = _four([{**seat, "familyLabel": "4인 동반석"} for seat in seats])
+
+    labels = [[seat.label for seat in block] for _, block in plan.consecutive_groups()]
+    assert labels == [["2A", "2B", "2C", "2D"]]
+
+
+def test_four_family_seats_book_the_facing_set_not_half_of_two_sets():
+    def seat(row: int, column: str, side: str, position: int, row_position: int) -> dict:
+        return {
+            **target(
+                f"{row}{column}",
+                f"{row}{column}",
+                group=f"{row}:{side}",
+                position=position,
+                row=row,
+                row_position=row_position,
+            ),
+            "familyLabel": "4인 동반석",
+        }
+
+    targets = []
+    for row in (7, 8):
+        targets.extend(
+            [
+                seat(row, "A", "left", 1, 1),
+                seat(row, "B", "left", 2, 2),
+                seat(row, "C", "right", 1, 3),
+                seat(row, "D", "right", 2, 4),
+            ]
+        )
+    plan = _four(targets)
+
+    labels = [[seat.label for seat in block] for _, block in plan.consecutive_groups()]
+    assert labels == [["7A", "7B", "8A", "8B"], ["7C", "7D", "8C", "8D"]]
+
+
 def test_three_passengers_cannot_be_split_over_two_rows():
     with pytest.raises(SeatPlanError, match="같은 줄"):
         three_seat_plan(

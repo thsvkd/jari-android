@@ -784,7 +784,7 @@ wheels = [
 
 [[package]]
 name = "korail-ktx-bot"
-version = "4.13.1"
+version = "4.13.2"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },

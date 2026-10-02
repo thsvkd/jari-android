@@ -16,10 +16,20 @@ export function groupSeatsByLayout(seats: SeatMapSeat[]): SeatMapSeat[][] {
 export interface SeatFilter {
   columns: string[];
   trimRows: number;
+  /** Keep only seats Korail marked as a 4인 동반석. */
+  onlyFamily: boolean;
   excludeFamily: boolean;
 }
 
-export const emptySeatFilter = (): SeatFilter => ({ columns: [], trimRows: 0, excludeFamily: false });
+export const emptySeatFilter = (): SeatFilter => ({
+  columns: [],
+  trimRows: 0,
+  onlyFamily: false,
+  excludeFamily: false,
+});
+
+export const seatFilterActive = (filter: SeatFilter): boolean =>
+  filter.columns.length > 0 || filter.trimRows > 0 || filter.onlyFamily || filter.excludeFamily;
 
 const distinctRows = (seats: SeatMapSeat[]): number[] =>
   [...new Set(seats.map((seat) => seat.row).filter((row): row is number => row !== null))].sort((a, b) => a - b);
@@ -61,7 +71,54 @@ export function filterSeats(seats: SeatMapSeat[], filter: SeatFilter): SeatMapSe
     seat.row !== null
     && kept.has(seat.row)
     && (!filter.columns.length || filter.columns.includes(seat.column))
+    && !(filter.onlyFamily && !seat.familyLabel)
     && !(filter.excludeFamily && seat.familyLabel));
+}
+
+/** One side of two facing rows: the 4인 동반석 set, not the four seats of a single row. */
+export function familyQuartets(seats: SeatMapSeat[]): SeatMapSeat[][] {
+  const bySide = new Map<string, SeatMapSeat[]>();
+  for (const seat of seats) {
+    if (!seat.familyLabel || seat.row === null || !seat.adjacencyGroup.includes(":")) continue;
+    const side = seat.adjacencyGroup.slice(seat.adjacencyGroup.lastIndexOf(":") + 1);
+    if (!side) continue;
+    const key = `${seat.carNo}:${side}`;
+    const group = bySide.get(key) ?? [];
+    group.push(seat);
+    bySide.set(key, group);
+  }
+  const results: SeatMapSeat[][] = [];
+  for (const group of bySide.values()) {
+    const byRow = new Map<number, SeatMapSeat[]>();
+    for (const seat of group) {
+      const row = byRow.get(seat.row!) ?? [];
+      row.push(seat);
+      byRow.set(seat.row!, row);
+    }
+    const rows = [...byRow.keys()].sort((a, b) => a - b);
+    for (let index = 0; index < rows.length - 1; index += 1) {
+      const top = rows[index]!;
+      const bottom = rows[index + 1]!;
+      if (bottom !== top + 1) continue;
+      const pair = (row: number): SeatMapSeat[] | null => {
+        const ordered = [...byRow.get(row)!].sort((a, b) => a.position - b.position);
+        return ordered.length === 2 && ordered[0]!.position === 1 && ordered[1]!.position === 2 ? ordered : null;
+      };
+      const upper = pair(top);
+      const lower = pair(bottom);
+      if (upper && lower) results.push([...upper, ...lower]);
+    }
+  }
+  return results;
+}
+
+/** Immediate booking of four people takes one facing set when the filter asked for family seats only. */
+export function limitedFamilySeats(seats: SeatMapSeat[], filter: SeatFilter, limit: number): SeatMapSeat[] {
+  if (filter.onlyFamily && limit === 4) {
+    const quartet = familyQuartets(seats)[0];
+    if (quartet) return quartet;
+  }
+  return seats.slice(0, limit);
 }
 
 const blocksInGroups = (groups: Map<string, SeatMapSeat[]>, count: number, order: (seat: SeatMapSeat) => number): SeatMapSeat[][] => {
@@ -100,6 +157,16 @@ export function consecutiveGroups(seats: SeatMapSeat[], count: number): SeatMapS
       rowGroups.set(key, group);
     }
     results.push(...blocksInGroups(rowGroups, count, (seat) => seat.rowPosition));
+  }
+  // A 4인 동반석 is two pairs facing across a table, not A–D of one row. A same-row
+  // block of those seats would book half of each set. seat_plan.py mirrors this.
+  if (count === 4) {
+    const quartets = familyQuartets(seats);
+    if (quartets.length) {
+      const covered = new Set(quartets.flat().map((seat) => `${seat.carNo}:${seat.seatNo}`));
+      const kept = results.filter((block) => block.some((seat) => !covered.has(`${seat.carNo}:${seat.seatNo}`)));
+      return [...kept, ...quartets];
+    }
   }
   return results;
 }

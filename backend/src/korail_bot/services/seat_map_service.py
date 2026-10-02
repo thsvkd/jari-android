@@ -9,6 +9,18 @@ from secrets import token_urlsafe
 
 from korail_bot.models import parse_seat_label
 
+_FAMILY_LABEL = "4인 동반석"
+
+
+def _family_label(message: str) -> str:
+    """Return the family-seat label only when Korail's own message says so."""
+
+    text = message.strip()
+    compact = "".join(text.split())
+    if "4인동반석" in compact or "가족석" in text:
+        return _FAMILY_LABEL
+    return ""
+
 
 class SeatMapNotFoundError(LookupError):
     """A train handle does not exist for this owner."""
@@ -92,12 +104,10 @@ class SeatMapService:
             parsed = parse_seat_label(seat.specification)
             row, column = parsed if parsed else self._numeric_grid(seat.specification)
             side, position = self._seat_side(column)
-            family_label = ""
-            message = seat.message.strip()
             # requested_attribute_code 015 is present on ordinary KTX seats
-            # too. Korail's seat-specific message is the reliable marker.
-            if "4인 동반석" in message:
-                family_label = "4인 동반석"
+            # too, and a 유아동반 car is not a 4인 동반석. The seat message is
+            # the marker: "4인 동반석" with any spacing, or the word "가족석".
+            family_label = _family_label(seat.message)
             entry = {
                 "carNo": car_no,
                 "seatNo": seat.seat_no,

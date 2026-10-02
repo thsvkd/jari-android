@@ -383,12 +383,8 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 .seat-stepper-block { flex: 1; display: grid; justify-items: center; gap: 3px; }
 .seat-stepper-block > .seat-stepper { justify-self: stretch; }
 .seat-stepper-block > small { color: var(--muted); font-size: 12px; font-weight: 700; }
-.seat-steppers .seat-switch { min-height: 48px; }
-.seat-switch { display: inline-flex; align-items: center; gap: 8px; min-height: 48px; padding: 0; background: transparent; font-size: 13px; font-weight: 700; }
-.seat-switch > span { position: relative; width: 36px; height: 22px; border-radius: 11px; background: var(--line); transition: background .15s; }
-.seat-switch > span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px rgb(0 0 0 / 22%); transition: transform .15s; }
-.seat-switch[aria-checked="true"] > span { background: var(--accent-strong); }
-.seat-switch[aria-checked="true"] > span::after { transform: translateX(14px); }
+/* The two family labels are wider than a column letter, so they keep their text width instead of shrinking to 48px and clipping. */
+.seat-family .seat-chip { flex: 1 1 auto; min-width: max(48px, fit-content); }
 /* Tall enough for the clear button and a two-line summary, so choosing seats never resizes the sheet. */
 .seat-selection { display: flex; align-items: center; gap: 12px; min-height: 40px; }
 .seat-selection p { flex: 1; min-width: 0; }

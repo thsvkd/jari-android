@@ -924,7 +924,7 @@ it("starts cancellation waiting with the selected physical-seat range", async ()
   expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(3);
   root.querySelector<HTMLButtonElement>("[data-seat-filter='col:A']")!.click();
   expect(root.querySelectorAll(".seat-cell.selected")).toHaveLength(0);
-  for (const action of ["pair:window", "family", "trim:+"]) {
+  for (const action of ["pair:window", "family:exclude", "trim:+"]) {
     root.querySelector<HTMLButtonElement>(`[data-seat-filter='${action}']`)!.click();
   }
   expect(root.querySelector("[data-seat-filter='pair:window']")!.getAttribute("aria-pressed")).toBe("true");
@@ -947,12 +947,50 @@ it("starts cancellation waiting with the selected physical-seat range", async ()
   const sentTrain = search.mock.calls[0]![0].conditions.seat_plan.trains[0];
   const targets = sentTrain.targets;
   expect(targets.map((seat: { label: string }) => seat.label)).toEqual(["3A", "3D"]);
-  // Only the fields SeatTarget.from_payload reads; salePossible/familyLabel would just bloat a big plan.
+  // Only the fields SeatTarget.from_payload reads. An empty familyLabel is omitted.
   expect(Object.keys(targets[0]).sort()).toEqual(
     ["adjacencyGroup", "carNo", "column", "direction", "floor", "label", "position", "row", "rowPosition", "seatNo"].sort(),
   );
   // trainKey is never read by the server; keeping it in the plan just bloats the payload.
   expect(Object.keys(sentTrain).sort()).toEqual(["seatClass", "targets", "trainNo"].sort());
+});
+
+it("picks one facing family set when four people ask for family seats only", async () => {
+  const seat = (row: number, column: "A" | "B" | "C" | "D"): SeatMapSeat => ({
+    carNo: 3,
+    seatNo: `${row}${column}`,
+    label: `${row}${column}`,
+    salePossible: true,
+    direction: row === 7 ? "1" : "2",
+    floor: "",
+    row,
+    column,
+    adjacencyGroup: `${row}:${column < "C" ? "left" : "right"}`,
+    position: column === "A" || column === "C" ? 1 : 2,
+    rowPosition: "ABCD".indexOf(column) + 1,
+    familyLabel: row === 9 ? "" : "4인 동반석",
+  });
+  const seats = [7, 8, 9].flatMap((row) => (["A", "B", "C", "D"] as const).map((column) => seat(row, column)));
+  const { app, root } = await mountLive({
+    seatInventory: async () => ({
+      carNo: 3, layoutType: 2, arrangementCode: "4", remainingCount: seats.length, totalCount: seats.length, seats,
+    }),
+  });
+  app.navigate("journey");
+  for (let extra = 0; extra < 3; extra += 1) root.querySelector<HTMLButtonElement>("[data-action='passenger-plus']")!.click();
+  edit(root, "seat_grade_mode", "specific");
+  root.querySelector<HTMLInputElement>("[name='seat_class'][value='general']")!.click();
+  root.querySelector<HTMLFormElement>("#conditions-form")!.requestSubmit();
+  await vi.waitFor(() => expect(root.querySelector("[data-train-no='025'][data-seat-mode='immediate']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-train-no='025'][data-seat-mode='immediate']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-seat-filter='family:only']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-seat-filter='family:only']")!.click();
+
+  const selected = [...root.querySelectorAll(".seat-cell.selected")].map((node) => node.getAttribute("data-seat-no"));
+  expect(selected).toEqual(["7A", "7B", "8A", "8B"]);
+  expect(root.querySelector("[data-seat-filter='family:only']")!.getAttribute("aria-pressed")).toBe("true");
+  expect(root.querySelector("[data-seat-filter='family:exclude']")!.getAttribute("aria-pressed")).toBe("false");
+  expect(root.querySelectorAll(".seat-row.excluded")).toHaveLength(1);
 });
 
 // Train 015, whose wait dialog these cars fill, is sold out: a for-sale seat tapped there would switch the dialog to booking now.

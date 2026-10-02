@@ -23,8 +23,10 @@ import {
   emptySeatFilter,
   filterSeats,
   groupSeatsByLayout,
+  limitedFamilySeats,
   maxTrimRows,
   seatColumnSets,
+  seatFilterActive,
   type SeatFilter,
 } from "./seat-map";
 import type {
@@ -796,7 +798,7 @@ export class JariApp {
           ${this.draft.seatGradeMode === "specific" ? `<fieldset class="choice-grid seat-class-picker"><legend>찾을 좌석 등급</legend>
             ${choice({ type: "checkbox", look: "tile", name: "seat_class", value: "general", title: "일반실", hint: "일반 좌석", checked: (this.draft.seatClasses ?? []).includes("general") })}
             ${choice({ type: "checkbox", look: "tile", name: "seat_class", value: "special", title: "특실", hint: "넓은 좌석", checked: (this.draft.seatClasses ?? []).includes("special") })}
-          </fieldset>${notice({ tone: "calm", className: "seat-detail-note", title: "세부 좌석은 다음 단계에서 골라요.", text: "열차별 실제 좌석표에서 맨 앞·맨 뒤·4인 동반석·원하는 자리를 선택할 수 있어요." })}` : ""}
+          </fieldset>${notice({ tone: "calm", className: "seat-detail-note", title: "세부 좌석은 다음 단계에서 골라요.", text: "열차별 실제 좌석표에서 맨 앞·맨 뒤를 빼거나, 가족석만 고르거나 빼고, 원하는 자리를 선택할 수 있어요." })}` : ""}
           <div class="passenger-row"><span><b>인원</b><small>최대 9명</small></span>${stepper({ label: "인원", value: `${this.draft.passengerCount}명`, decrease: "passenger-minus", increase: "passenger-plus", atMin: this.draft.passengerCount <= 1, atMax: this.draft.passengerCount >= 9 })}</div>
           ${this.draft.passengerCount > 1 ? `<fieldset class="choice-grid"><legend>좌석 배치</legend>${this.radioCard("seat_strategy", "1", "연속 좌석", "같은 열차·호차에서 붙은 자리만", this.draft.seatStrategy === "1")}${this.radioCard("seat_strategy", "2", "따로 앉아도 괜찮아요", "한 자리만 잡혀도 바로 알려드려요", this.draft.seatStrategy === "2")}</fieldset>` : ""}
         </section>
@@ -912,7 +914,8 @@ export class JariApp {
     };
     // 조건(열·앞뒤 줄·가족석)이 빼는 자리. 판매 여부와 상관없이 빗금으로 덮어 매진 좌석과 헷갈리지 않아요.
     const { filter } = dialog;
-    const filtering = Boolean(dialog.inventory) && (filter.columns.length > 0 || filter.trimRows > 0 || filter.excludeFamily);
+    const filtersActive = seatFilterActive(filter);
+    const filtering = Boolean(dialog.inventory) && filtersActive;
     const keptSeats = filtering
       ? new Set(filterSeats(dialog.inventory!.seats, { ...filter, trimRows: Math.min(filter.trimRows, maxTrimRows(dialog.inventory!.seats)) }).map((seat) => seat.seatNo))
       : null;
@@ -956,7 +959,7 @@ export class JariApp {
       <div class="seat-legend">${dialog.layoutReference ? "" : '<span><i class="available"></i>현재 예약 가능</span>'}<span><i class="occupied"></i>${dialog.mode === "wait" || !dialog.layoutReference ? "취소표 대기 가능" : "선택 불가"}</span><span><i class="selected"></i>선택</span></div>
       <div class="seat-map-live">${rows}</div>
       ${dialog.inventory && dialog.error ? notice({ tone: "warning", className: "seat-inline-error", alert: true, text: dialog.error }) : ""}
-      <footer>${dialog.modeNotice ? `<p class="seat-mode-notice" role="status">${escapeHtml(dialog.modeNotice)}</p>` : ""}<div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || dialog.filter.columns.length || dialog.filter.trimRows || dialog.filter.excludeFamily ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div>${button({ action: "confirm-seat-dialog", content: confirmText, disabled: confirmDisabled })}</footer>` });
+      <footer>${dialog.modeNotice ? `<p class="seat-mode-notice" role="status">${escapeHtml(dialog.modeNotice)}</p>` : ""}<div class="seat-selection"><p>${selectedLabels ? escapeHtml(selectedLabels) : "선택한 좌석이 없어요."}</p>${dialog.selected.length || filtersActive ? '<button type="button" class="seat-filter-clear" data-seat-filter="clear">선택 해제</button>' : ""}</div>${button({ action: "confirm-seat-dialog", content: confirmText, disabled: confirmDisabled })}</footer>` });
   }
 
   private renderSheet(): string {
@@ -1030,7 +1033,7 @@ export class JariApp {
     const columnChips = numericLabels ? "" : sets.columns.map((column) => chip(`col:${column}`, column, filter.columns.includes(column))).join("");
     const trimLabel = `${filter.trimRows}줄`;
     const family = seats.some((seat) => seat.familyLabel)
-      ? `<button type="button" role="switch" class="seat-switch" data-seat-filter="family" aria-checked="${filter.excludeFamily}" ${locked ? "disabled" : ""}><span aria-hidden="true"></span>가족석 제외</button>`
+      ? `<div class="seat-filter-row seat-family"><div class="seat-chips" role="group" aria-label="가족석">${chip("family:only", "가족석만", filter.onlyFamily)}${chip("family:exclude", "가족석 제외", filter.excludeFamily)}</div></div>`
       : "";
     // Both steppers on one row, each captioned underneath, so "좌석 앞뒤 제외 1줄" and "호차 앞뒤 제외 1개" read the same way.
     const stepper = (key: string, caption: string, value: string, atMin: boolean, atMax: boolean) =>
@@ -1047,7 +1050,8 @@ export class JariApp {
     const pairChips = `${chip("pair:window", "창가", allOn(sets.window))}${sets.aisle.length ? chip("pair:aisle", "복도", allOn(sets.aisle)) : ""}`;
     return `<div class="seat-filter">
       <div class="seat-filter-row seat-columns"><div class="seat-chips" role="group" aria-label="좌석 열">${columnChips ? `<div class="seat-chip-letters">${columnChips}</div>` : ""}<div class="seat-chip-pairs">${pairChips}</div></div></div>
-      <div class="seat-filter-row seat-steppers">${stepper("trim", "좌석 앞뒤 제외", trimLabel, filter.trimRows <= 0, filter.trimRows >= maxTrimRows(seats))}${carStepper}${family}</div>
+      <div class="seat-filter-row seat-steppers">${stepper("trim", "좌석 앞뒤 제외", trimLabel, filter.trimRows <= 0, filter.trimRows >= maxTrimRows(seats))}${carStepper}</div>
+      ${family}
       ${applyAll}
     </div>`;
   }
@@ -1179,7 +1183,7 @@ export class JariApp {
     // Snapshot the filter and the current car's selection once, up front, so every other car is judged by the same condition
     // the user tapped with, not by whatever dialog.filter happens to hold by the time the request resolves.
     const filterSnapshot: SeatFilter = { ...dialog.filter };
-    const filterEmpty = !filterSnapshot.columns.length && !filterSnapshot.trimRows && !filterSnapshot.excludeFamily;
+    const filterEmpty = !seatFilterActive(filterSnapshot);
     const currentLabels = new Set(dialog.selected.filter((seat) => seat.carNo === currentCarNo).map((seat) => seat.label));
     if (filterEmpty && !currentLabels.size) {
       dialog.error = "먼저 이 호차에서 좌석이나 조건을 골라 주세요.";
@@ -1310,18 +1314,31 @@ export class JariApp {
     if (kind === "trim") {
       filter.trimRows = Math.max(0, Math.min(maxTrimRows(inventory.seats), filter.trimRows + (value === "+" ? 1 : -1)));
     }
-    if (kind === "family") filter.excludeFamily = !filter.excludeFamily;
+    if (kind === "family" && value === "only") {
+      filter.onlyFamily = !filter.onlyFamily;
+      if (filter.onlyFamily) filter.excludeFamily = false;
+    }
+    if (kind === "family" && value === "exclude") {
+      filter.excludeFamily = !filter.excludeFamily;
+      if (filter.excludeFamily) filter.onlyFamily = false;
+    }
     if (kind === "cars") {
       dialog.trimCars = Math.max(0, Math.min(maxTrimCars(dialog.cars.length), dialog.trimCars + (value === "+" ? 1 : -1)));
     }
     // The conditions pick seats in the car on screen; seats already chosen in other cars stay chosen.
     // Turning the last condition off clears the car rather than selecting every seat in it.
-    const empty = !filter.columns.length && !filter.trimRows && !filter.excludeFamily;
+    const empty = !seatFilterActive(filter);
     const perCar = (seats: SeatMapSeat[]) => empty ? [] : filterSeats(seats, { ...filter, trimRows: Math.min(filter.trimRows, maxTrimRows(seats)) });
     // 대기는 팔린 자리를 기다리는 것이라, 조건이 고르는 자리에서도 지금 살 수 있는 좌석은 빼요(좌석을 누를 때 모드가 바뀌는 규칙과 같아요).
     const waitable = (seats: SeatMapSeat[]) => perCar(seats).filter((seat) => !this.seatAvailable(dialog, seat));
     if (dialog.mode === "immediate") {
-      dialog.selected = perCar(inventory.seats).filter((seat) => seat.salePossible).slice(0, this.draft.passengerCount);
+      // Four people asking for family seats take one facing set. The first four
+      // saleable seats of a 2+2 car are one row, which splits two sets.
+      dialog.selected = limitedFamilySeats(
+        perCar(inventory.seats).filter((seat) => seat.salePossible),
+        filter,
+        this.draft.passengerCount,
+      );
     } else if (dialog.appliedToAll) {
       // Every kept car follows the new condition, from the inventories the bulk apply cached; no request needed.
       const kept = keptCarNos(dialog);
@@ -1404,8 +1421,8 @@ export class JariApp {
     const next = this.cancellationTargets.filter((target) =>
       !(target.trainNo === dialog.train.no && (target.seatClass === dialog.seatClass || !target.targets.length)));
     // Only the fields the server reads; a full SeatMapSeat per seat bloats large multi-car plans.
-    const targets: SeatTarget[] = dialog.selected.map(({ carNo, seatNo, label, row, column, direction, floor, adjacencyGroup, position, rowPosition }) => (
-      { carNo, seatNo, label, row, column, direction, floor, adjacencyGroup, position, rowPosition }
+    const targets: SeatTarget[] = dialog.selected.map(({ carNo, seatNo, label, row, column, direction, floor, adjacencyGroup, position, rowPosition, familyLabel }) => (
+      { carNo, seatNo, label, row, column, direction, floor, adjacencyGroup, position, rowPosition, ...(familyLabel ? { familyLabel } : {}) }
     ));
     next.push({ trainNo: dialog.train.no, trainKey: dialog.train.trainKey, seatClass: dialog.seatClass, targets });
     this.cancellationTargets = next;

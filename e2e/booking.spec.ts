@@ -124,6 +124,30 @@ test.describe("빈자리를 찾아 예약하기", () => {
     await expect(page.locator(".train-card", { has: page.locator("[data-train-toggle='00101']") })).toContainText("1석 지정");
   });
 
+  test("가족석만은 다른 줄을 빼고, 네 명은 마주 보는 한 세트를 골라요 @layout", async ({ signedIn: page }) => {
+    await searchTrains(page, { seatMode: "specific", seatClasses: ["general"], passengerCount: 4 });
+    await page.locator("[data-seat-map][data-train-no='00101'][data-seat-class='general']").click();
+    await expect(page.locator(".seat-cell").first()).toBeVisible();
+    const only = page.locator("[data-seat-filter='family:only']");
+    const exclude = page.locator("[data-seat-filter='family:exclude']");
+    await expect(only).toBeVisible();
+    await expect(exclude).toBeVisible();
+    await only.click();
+    await expect(only).toHaveAttribute("aria-pressed", "true");
+    await expect(exclude).toHaveAttribute("aria-pressed", "false");
+    await expect(page.locator(".seat-row.excluded")).toHaveCount(12);
+    await expect(page.locator(".seat-cell small", { hasText: /^가족$/ })).toHaveCount(8);
+    const selected = await page.locator(".seat-cell.selected").evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const row = node.closest(".seat-row")?.querySelector(":scope > span")?.textContent ?? "";
+        const column = node.querySelector("b")?.textContent ?? "";
+        return `${row}${column}`;
+      }),
+    );
+    expect(selected).toEqual(["7A", "7B", "8A", "8B"]);
+    await expectCleanLayout(page, "좌석표(가족석만)");
+  });
+
   test("거의 매진된 열차도 편성의 모든 호차가 탭에 보이고 매진 호차의 좌석을 취소표 대기로 고를 수 있어요 @layout", async ({ signedIn: page, control }) => {
     // 코레일은 잔여석이 있는 호차만 목록에 줘서, 예전에는 3호차 한 개만 탭에 떴어요.
     await control.scenario({ sold_out_cars: [1, 2] });

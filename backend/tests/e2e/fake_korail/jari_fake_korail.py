@@ -327,7 +327,7 @@ class FakeKorail:
                         specification=label,
                         sequence_no=str(len(seats) + 1),
                         message_code="",
-                        message="",
+                        message="4인 동반석" if row in (7, 8) else "",
                         visual_message_division_code="",
                     )
                 )

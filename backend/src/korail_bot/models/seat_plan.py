@@ -77,6 +77,8 @@ class SeatTarget:
     adjacency_group: str = ""
     position: int = 0
     row_position: int = 0
+    # Empty on ordinary seats, so a plan of a whole train does not repeat it.
+    family_label: str = ""
 
     @classmethod
     def from_payload(cls, raw: object) -> SeatTarget:
@@ -96,6 +98,7 @@ class SeatTarget:
             ),
             position=_bounded_int(item.get("position", 0), "좌석 위치", 0, 99),
             row_position=_bounded_int(item.get("rowPosition", 0), "좌석 줄 위치", 0, 99),
+            family_label=_small_text(item.get("familyLabel", ""), "가족석", required=False),
         )
 
     def as_payload(self) -> dict[str, object]:
@@ -110,6 +113,7 @@ class SeatTarget:
             "adjacencyGroup": self.adjacency_group,
             "position": self.position,
             "rowPosition": self.row_position,
+            **({"familyLabel": self.family_label} if self.family_label else {}),
         }
 
 
@@ -227,22 +231,80 @@ class CancellationWaitPlan:
                 if not target.adjacency_group:
                     continue
                 by_group.setdefault((target.car_no, target.adjacency_group), []).append(target)
+            blocks: list[tuple[SeatTarget, ...]] = []
             for targets in by_group.values():
-                for block in _contiguous_blocks(targets, lambda t: t.position, wanted):
-                    groups.append((train, block))
-            if wanted < 3:
-                continue
-            # A KTX row seats two and two, so three people can only sit
-            # together by taking the aisle: the whole row, not one side.
-            by_row: dict[tuple[int, int], list[SeatTarget]] = {}
-            for target in train.targets:
-                if target.row is None or target.row_position <= 0:
-                    continue
-                by_row.setdefault((target.car_no, target.row), []).append(target)
-            for targets in by_row.values():
-                for block in _contiguous_blocks(targets, lambda t: t.row_position, wanted):
-                    groups.append((train, block))
+                blocks.extend(_contiguous_blocks(targets, lambda t: t.position, wanted))
+            if wanted >= 3:
+                # A KTX row seats two and two, so three people can only sit
+                # together by taking the aisle: the whole row, not one side.
+                by_row: dict[tuple[int, int], list[SeatTarget]] = {}
+                for target in train.targets:
+                    if target.row is None or target.row_position <= 0:
+                        continue
+                    by_row.setdefault((target.car_no, target.row), []).append(target)
+                for targets in by_row.values():
+                    blocks.extend(_contiguous_blocks(targets, lambda t: t.row_position, wanted))
+            # src/seat-map.ts consecutiveGroups: a 4인 동반석 is two facing pairs.
+            # A same-row block of those seats would take half of each set.
+            # A car whose family seats are only one row keeps that row block.
+            if wanted == 4:
+                quartets = _family_quartets(train.targets)
+                if quartets:
+                    covered = {(seat.car_no, seat.seat_no) for block in quartets for seat in block}
+                    blocks = [
+                        block
+                        for block in blocks
+                        if any((seat.car_no, seat.seat_no) not in covered for seat in block)
+                    ]
+                    blocks.extend(quartets)
+            for block in blocks:
+                groups.append((train, block))
         return tuple(groups)
+
+
+def _family_side(adjacency_group: str) -> str:
+    """The side after the last colon. "5-left" is not a side, so it is not a quartet."""
+
+    if ":" not in adjacency_group:
+        return ""
+    return adjacency_group.rsplit(":", 1)[1]
+
+
+def _facing_pair(seats: list[SeatTarget]) -> tuple[SeatTarget, SeatTarget] | None:
+    ordered = sorted(seats, key=lambda seat: seat.position)
+    if len(ordered) == 2 and ordered[0].position == 1 and ordered[1].position == 2:
+        return ordered[0], ordered[1]
+    return None
+
+
+def _family_quartets(targets: tuple[SeatTarget, ...]) -> list[tuple[SeatTarget, ...]]:
+    """One side of two adjacent rows, each row a position-1 and position-2 pair."""
+
+    by_side: dict[tuple[int, str], list[SeatTarget]] = {}
+    for seat in targets:
+        if not seat.family_label or seat.row is None:
+            continue
+        side = _family_side(seat.adjacency_group)
+        if not side:
+            continue
+        by_side.setdefault((seat.car_no, side), []).append(seat)
+    results: list[tuple[SeatTarget, ...]] = []
+    for group in by_side.values():
+        by_row: dict[int, list[SeatTarget]] = {}
+        for seat in group:
+            if seat.row is None:
+                continue
+            by_row.setdefault(seat.row, []).append(seat)
+        rows = sorted(by_row)
+        for index in range(len(rows) - 1):
+            top, bottom = rows[index], rows[index + 1]
+            if bottom != top + 1:
+                continue
+            upper = _facing_pair(by_row[top])
+            lower = _facing_pair(by_row[bottom])
+            if upper and lower:
+                results.append((*upper, *lower))
+    return results
 
 
 def parse_seat_plan(text: str | None) -> CancellationWaitPlan | None:

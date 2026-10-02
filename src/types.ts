@@ -193,7 +193,8 @@ export interface SeatInventoriesResult {
   layoutReference: boolean;
 }
 
-// Only the fields SeatTarget.from_payload reads on the server; dropping salePossible/familyLabel keeps big plans small.
+// Only the fields SeatTarget.from_payload reads on the server. salePossible stays off the plan.
+// familyLabel is omitted when empty so a plan of ordinary seats stays the same size.
 export interface SeatTarget {
   carNo: number;
   seatNo: string;
@@ -206,6 +207,7 @@ export interface SeatTarget {
   position: number;
   // See SeatMapSeat.rowPosition: left-to-right order within the row's returned seats, not a fixed A=1..D=4 map.
   rowPosition: number;
+  familyLabel?: string;
 }
 
 export interface TrainSeatTargets {

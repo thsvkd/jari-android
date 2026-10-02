@@ -817,6 +817,25 @@ def test_attribute_code_alone_does_not_invent_family_seat():
     assert service.describe_inventory(inventory(seat))["seats"][0]["familyLabel"] == ""
 
 
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("4인동반석", "4인 동반석"),
+        ("가족석", "4인 동반석"),
+        ("유아동반", ""),
+        ("가족", ""),
+    ],
+)
+def test_family_label_follows_the_seat_message_only(message, expected):
+    seat = PhysicalSeat(
+        **{**physical_seat().__dict__, "requested_attribute_code": "015", "message": message}
+    )
+
+    assert (
+        SeatMapService().describe_inventory(inventory(seat))["seats"][0]["familyLabel"] == expected
+    )
+
+
 def test_korail_companion_message_marks_family_seat():
     seat = physical_seat()
     seat = PhysicalSeat(

@@ -56,6 +56,7 @@ export interface JourneyOptions {
   daysAhead?: number;
   seatMode?: "any" | "specific";
   seatClasses?: Array<"general" | "special">;
+  passengerCount?: number;
 }
 
 /** 홈에서 새 여정을 열고 조건을 채워 열차 목록까지 가요. */
@@ -65,6 +66,9 @@ export async function searchTrains(page: Page, options: JourneyOptions = {}): Pr
   await pickDate(page, travelDay(options.daysAhead ?? 3).iso);
   await pickTime(page, "dep_time", "07:00");
   await page.locator("[name=unlimited_time]").check();
+  for (let extra = 1; extra < (options.passengerCount ?? 1); extra += 1) {
+    await page.locator("[data-action='passenger-plus']").click();
+  }
   if (options.seatMode === "specific") {
     // 사용자는 숨은 입력이 아니라 그 카드를 눌러요.
     await page.locator("label", { has: page.locator("[name=seat_grade_mode][value=specific]") }).click();
