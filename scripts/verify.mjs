@@ -35,13 +35,14 @@ if (process.platform === "darwin") {
   if (process.env.JAVA_HOME) process.env.PATH = `${process.env.JAVA_HOME}/bin:${process.env.PATH}`;
 }
 
-function run(command, { cwd = ROOT, env = {}, capture = false } = {}) {
+function run(command, { cwd = ROOT, env = {}, capture = false, timeout } = {}) {
   const result = spawnSync(command, {
     cwd,
     env: { ...process.env, ...env },
     shell: true,
     stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
     encoding: "utf8",
+    timeout,
   });
   if (result.status !== 0) {
     const detail = capture ? `\n${result.stdout}${result.stderr}` : "";
@@ -135,8 +136,13 @@ function prepareDevice() {
 }
 
 function releaseDevice() {
-  spawnSync(`adb forward --remove tcp:${DEVTOOLS_PORT}`, { shell: true });
-  spawnSync(`adb reverse --remove tcp:${E2E_API_PORT}`, { shell: true });
+  // adb 가 응답하지 않으면 제한 없이 기다려 기기 잡(45분)이 실패 대신 취소로 끝나요.
+  for (const command of [
+    `adb forward --remove tcp:${DEVTOOLS_PORT}`,
+    `adb reverse --remove tcp:${E2E_API_PORT}`,
+  ]) {
+    spawnSync(command, { shell: true, timeout: 15_000 });
+  }
 }
 
 // 기기 단계를 맨 앞에 둬요. 에뮬레이터를 먼저 띄워 두면 되고, 나머지는 기기 없이 돌아요.
@@ -145,7 +151,8 @@ const deviceStep = [
   () => {
     const cdp = prepareDevice();
     try {
-      run("npx playwright test --project=device", { env: { JARI_DEVICE_CDP: cdp } });
+      // 결과 출력 뒤에 프로세스가 멈춰도 잡 제한까지 가지 않게 해요. 통과한 기기 단계는 15분을 넘기지 않아요.
+      run("npx playwright test --project=device", { env: { JARI_DEVICE_CDP: cdp }, timeout: 25 * 60 * 1000 });
     } finally {
       releaseDevice();
     }

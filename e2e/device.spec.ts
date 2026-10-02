@@ -36,8 +36,13 @@ test.describe("Android 기기", () => {
     await page.locator(".bottom-nav [data-view='settings']").click();
     // 이동은 Capacitor 가 가로채 브라우저로 넘기니 WebView 에는 끝나는 이동이 없어요. 기다리지 않아요.
     await page.locator(".policy-links a[href='https://jari.thsvkd.dev/privacy']").click({ noWaitAfter: true });
-    await expect.poll(foregroundActivity, { timeout: 15_000 }).not.toContain("dev.thsvkd.jari/");
-    expect(foregroundActivity()).not.toBe("");
+    // 활동이 바뀌는 순간에는 topResumedActivity 가 없어요. 빈 결과는 패키지 이름을 담지 않아서
+    // 그대로 비교하면 다른 앱으로 연 것으로 보고, 다음 확인이 빈 활동에서 실패해요.
+    await expect.poll(() => {
+      const activity = foregroundActivity();
+      if (!activity.includes("topResumedActivity") || activity.includes("dev.thsvkd.jari/")) return "";
+      return activity;
+    }, { timeout: 15_000 }).not.toBe("");
     expect(new URL(page.url()).host).toBe("localhost");
 
     // 사용자처럼 뒤로가기로 앱에 돌아와요. 브라우저가 첫 실행 화면 등으로 뒤로가기를 먹으면 앱을 앞으로 불러와요.
