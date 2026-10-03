@@ -101,6 +101,10 @@ jobs:
           script: |
             adb shell input keyevent 82
             node scripts/verify.mjs --ci --device --only=에뮬레이터
+      # 에뮬레이터가 말없이 꺼지면 러너가 메모리가 모자라 끈 것인지 커널 기록으로 가려요.
+      - name: 러너 메모리 부족 기록
+        if: failure()
+        run: sudo dmesg | grep -iE "out of memory|oom-kill|killed process" | tail -n 20 || true
       - name: 기기 단계 결과
         if: failure()
         uses: actions/upload-artifact@v4

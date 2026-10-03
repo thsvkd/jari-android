@@ -10,7 +10,7 @@
 // 실제 코레일에는 닿지 않아요. 기기 단계는 에뮬레이터에 평소 앱(dev.thsvkd.jari, 디버그 빌드)을 그대로 깔고 앱 데이터를 비운 채 돌려요.
 // 그래서 실폰에서는 거부해요(폰의 실제 앱을 덮어쓰고 지워요). 정말 폰에서 돌릴 때만 JARI_ALLOW_PHYSICAL_DEVICE=1 을 줘요.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -101,6 +101,9 @@ function prepareDevice() {
   run("npm run build", { env: { VITE_API_BASE_URL: `http://127.0.0.1:${E2E_API_PORT}` } });
   run("npx cap sync android");
   run(`${process.platform === "win32" ? "gradlew.bat" : "./gradlew"} assembleDebug -PjariNoFirebase`, { cwd: join(ROOT, "android") });
+  // GitHub 러너는 메모리가 빠듯해요. 메모리가 모자라면 커널이 가장 큰 프로세스인 에뮬레이터를 말없이 꺼요. 테스트 내내 놀고 있는
+  // Gradle 데몬(-Xmx1536m)을 내려 그 몫을 에뮬레이터에 돌려요. 이 Mac 에서는 다음 실행이 데몬을 다시 쓰게 그대로 둬요.
+  if (CI) run("./gradlew --stop", { cwd: join(ROOT, "android") });
   const apk = join(ROOT, "android/app/build/outputs/apk/debug/app-debug.apk");
   try {
     adb(`install -r "${apk}"`);
@@ -135,6 +138,14 @@ function prepareDevice() {
   return `http://127.0.0.1:${DEVTOOLS_PORT}`;
 }
 
+// CI 기기 단계 동안 러너 메모리를 30초마다 한 줄씩 남겨요. 에뮬레이터가 말없이 꺼졌을 때 메모리 때문인지 로그로 가려요.
+function watchRunnerMemory() {
+  if (!CI || process.platform !== "linux") return () => undefined;
+  const line = "free -m | awk '/^Mem:/ {m = \"사용 \" $3 \"MB · 남음 \" $7 \"MB\"} /^Swap:/ {s = \" · 스왑 \" $3 \"MB\"} END {print \"[러너 메모리] \" m s}'";
+  const sampler = spawn("sh", ["-c", `while :; do ${line}; sleep 30; done`], { stdio: ["ignore", "inherit", "inherit"] });
+  return () => sampler.kill();
+}
+
 function releaseDevice() {
   // adb 가 응답하지 않으면 제한 없이 기다려 기기 잡(45분)이 실패 대신 취소로 끝나요.
   for (const command of [
@@ -150,10 +161,12 @@ const deviceStep = [
   "에뮬레이터 e2e (dev.thsvkd.jari)",
   () => {
     const cdp = prepareDevice();
+    const stopWatching = watchRunnerMemory();
     try {
       // 결과 출력 뒤에 프로세스가 멈춰도 잡 제한까지 가지 않게 해요. 통과한 기기 단계는 15분을 넘기지 않아요.
       run("npx playwright test --project=device", { env: { JARI_DEVICE_CDP: cdp }, timeout: 25 * 60 * 1000 });
     } finally {
+      stopWatching();
       releaseDevice();
     }
   },
