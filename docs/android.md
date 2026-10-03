@@ -8,6 +8,7 @@
 - [릴리스](#릴리스)
 - [휴대폰 알림 (Firebase)](#휴대폰-알림-firebase)
 - [앱 보안 설정](#앱-보안-설정)
+- [스토어 그림과 스크린숏](#스토어-그림과-스크린숏)
 - [패키지 이름 변경 이력](#패키지-이름-변경-이력)
 - [Windows에서 빌드하기](#windows에서-빌드하기)
 
@@ -105,6 +106,20 @@ scripts/doppler-store-android-keys.sh release-new                               
 - 릴리스 빌드는 평문 HTTP를 막습니다. 디버그 빌드에만 에뮬레이터 확인용으로 `localhost`·`10.0.2.2`를 허용하는 네트워크 정책이 있습니다.
 - 앱 세션은 `@capacitor/preferences`에 저장하지 않습니다. `SecureSessionPlugin`이 Android Keystore에서 만든 AES-GCM 키로 암호화해 IV와 암호문만 앱 전용 SharedPreferences에 둡니다.
 - 디버그 APK는 WebView 원격 디버깅이 켜져 있습니다. 서명한 릴리스 빌드에는 없습니다.
+
+## 스토어 그림과 스크린숏
+
+Play 스토어와 README에 쓰는 그림은 손으로 그리지 않고 저장소의 Playwright(Chromium)로 만듭니다. 화면이나 로고가 바뀌면 다시 돌려 커밋합니다.
+
+| 명령 | 만드는 것 |
+|---|---|
+| `node scripts/render-icons.mjs` | 앱 아이콘·런치 화면·웹 아이콘, `store/icon-512.png`, `store/feature-graphic.png` |
+| `node scripts/render-screenshots.mjs` | `store/screenshots/` 네 장(홈, 내 예약, 열차 목록, 좌석표). 1080×2160, 데모 모드 |
+
+- 스크린숏 스크립트는 데모 개발 서버를 잠깐 띄워 사용자처럼 눌러 가며 찍습니다. 서버나 코레일에는 닿지 않습니다.
+- 시계를 그날 오전 10:30(한국 시간)으로 고정해 찍은 시각이 화면에 남지 않게 합니다.
+- 글꼴은 그 PC의 한글 글꼴을 씁니다. Linux에서는 CI처럼 `fonts-noto-cjk`를 깔면 Android 기기와 같은 Noto Sans CJK로 나옵니다.
+- Play Console에 올리는 것은 사람이 합니다.
 
 ## 패키지 이름 변경 이력
 
