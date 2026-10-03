@@ -1,227 +1,138 @@
-# 자리났다 Android
+<div align="center">
 
-텔레그램 없이 사용하는 지인 초대형 기차 예약 앱과 전용 Python API 서버입니다.
-선택한 **상태 카드형** 검색 현황, 여정 조건, 검색·예약 관리, 즐겨찾기,
-철도 계정 및 알림 화면을 포함합니다. 결제는 앱이 대행하지 않습니다.
+<img src="store/icon-512.png" width="96" alt="자리났다 아이콘">
 
-## 저장소 범위와 현재 상태
+# 자리났다
 
-기존 `korail_KTX_macro_telegrambot`의 Android 전용 작업에서 앱과 백엔드를 분리했습니다.
-기존 봇과 작업 중인 백엔드는 이동하거나 삭제하지 않았습니다.
-`backend/`에는 전용 API·작업 프로세스·계정/알림 저장소와 필요한 공통 패키지가 포함됩니다.
-원래 저장소나 외부 로컬 경로를 참조하지 않습니다. 실사용에는 Redis와 배포된 HTTPS 주소가
-필요하며 API 타입은 `src/types.ts`, 요청 구현은 `src/api.ts`에 있습니다.
-기존 패키지명 `korail_bot`과 버전/잠금 파일은 호환성을 위해 보존했습니다.
-원저작자 및 fork의 MIT 저작권은 [LICENSE](LICENSE)에 보존합니다.
+**매진된 코레일 열차의 빈자리를 대신 지켜보다가,<br>자리가 나면 결제 전 예약까지 잡아 주는 Android 앱**
 
-- 모바일 테스트 101개, 일반/데모 빌드와 S26 Ultra 데모 화면 검증을 수행했습니다.
-- 실철도 예약·결제 및 푸시 수신의 종단 간 검증은 완료되지 않았습니다.
-- SRT는 지원하지 않습니다. 코레일 예약 대기는 일반실에만, 좌석 위치 지정 없이 신청합니다.
-- 배포 서명키와 Firebase 설정은 포함하지 않습니다. `-Release` 없이 실행하면 여전히 디버그 APK가 나옵니다.
-- 앱 이름을 바꾸면서 Android `applicationId`가 `com.jari.app`으로 바뀌었습니다.
-  기존 앱 위에 덮어쓰는 업데이트가 아니라 별도 앱으로 설치되고, 사용자는 다시 로그인해야 합니다.
-  즐겨찾기와 코레일 계정 연결은 서버에 있으므로 그대로 유지됩니다.
-  Firebase도 새 패키지명으로 Android 앱을 다시 등록해 `google-services.json`을 받아야 합니다.
-- 4.13.0부터 Google Play에 올리면서 `applicationId`가 `dev.thsvkd.jari`로 바뀌었습니다(`namespace`와
-  Java 패키지는 `com.jari.app` 그대로). 역시 별도 앱으로 설치됩니다. Play용 AAB는 `scripts/release-play.sh`,
-  사이드로드 APK는 `scripts/release-android.sh`가 만들며 둘은 서명이 달라 서로 업데이트되지 않습니다(docs/SPEC.md §11).
+**한국어** · [English](README.en.md)
 
-## 로컬 시작
+[![최신 릴리스](https://img.shields.io/github/v/release/thsvkd/jari-android)](https://github.com/thsvkd/jari-android/releases/latest)
+[![verify](https://github.com/thsvkd/jari-android/actions/workflows/verify.yml/badge.svg?branch=main)](https://github.com/thsvkd/jari-android/actions/workflows/verify.yml)
+[![라이선스: MIT](https://img.shields.io/github/license/thsvkd/jari-android)](LICENSE)
 
-Node.js 22.12 이상과 npm을 준비합니다. 저장소 루트에서:
+</div>
 
-```powershell
+<p align="center">
+  <img src="store/screenshots/1-home.png" width="180" alt="홈: 찾는 중인 자리 찾기 카드">
+  <img src="store/screenshots/3-trains.png" width="180" alt="열차 목록에서 열차 고르기">
+  <img src="store/screenshots/4-seatmap.png" width="180" alt="좌석표에서 원하는 좌석 범위 고르기">
+  <img src="store/screenshots/2-activity.png" width="180" alt="진행 중인 자리 찾기 자세히 보기">
+</p>
+
+## 자리났다는 무엇인가요?
+
+명절·주말 KTX가 매진이어도 취소표는 수시로 나옵니다. 자리났다는 그 빈자리를 사람 대신 지켜봅니다.
+
+- **걸어 두고 잊으세요.** 날짜·시간대·열차·좌석 조건을 정하면 서버가 앱을 닫아도 계속 빈자리를 확인합니다.
+- **원하는 자리만 잡습니다.** 열차, 일반실·특실, 호차, 창가·복도, 앞뒤 줄 제외까지 고를 수 있고 조건에 맞지 않는 자리는 잡지 않습니다.
+- **잡으면 바로 알려 줍니다.** 자리가 나면 결제 전 예약(홀드)까지 잡고 휴대폰 알림을 보냅니다. 결제는 코레일 앱에서 직접 합니다.
+
+```mermaid
+flowchart LR
+  app["자리났다 앱<br/>조건 걸기 · 알림 받기"] -- "HTTPS" --> server["자리났다 서버<br/>빈자리 확인 · 예약(홀드)"]
+  server -- "조회 · 예약" --> korail["코레일"]
+  server -. "휴대폰 알림" .-> app
+  app -. "결제는 직접" .-> korail
+```
+
+**쓰는 순서**: 새 여정 찾기 → 열차·좌석 고르기 → 조건 확인 → 빈자리 찾기 시작 → 알림 받기 → 코레일에서 결제
+
+## 빠른 시작
+
+하려는 일에 맞는 길 하나만 따라가면 됩니다.
+
+| 하려는 일 | 필요한 것 | 결과 |
+|---|---|---|
+| [1. 휴대폰에서 바로 쓰기](#1-휴대폰에서-바로-쓰기) | Android 7.0 이상 휴대폰, 초대 코드(없으면 체험하기) | 내 폰에서 빈자리 찾기 |
+| [2. 브라우저에서 데모 보기](#2-브라우저에서-데모-보기) | Node.js 22.12 이상 | 샘플 데이터로 모든 화면 둘러보기 |
+| [3. 내 서버 직접 운영하기](#3-내-서버-직접-운영하기) | Docker, HTTPS로 공개할 주소 | 지인과 함께 쓰는 나만의 서버 |
+
+### 1. 휴대폰에서 바로 쓰기
+
+1. [최신 릴리스](https://github.com/thsvkd/jari-android/releases/latest)에서 `jari-<버전>-debug.apk`를 받아 설치합니다. 설치할 때 ‘출처를 알 수 없는 앱 설치’를 허용해야 할 수 있습니다. Google Play 내부 테스터로 등록된 분은 Play 스토어에서 받습니다.
+2. 앱을 열고 **초대 회원 → 처음 가입**에서 운영자에게 받은 초대 코드로 가입합니다.
+   초대 코드가 없다면 **체험하기**를 누르세요. 샘플 데이터로 모든 화면을 둘러볼 수 있고 실제 예약은 되지 않습니다.
+3. **설정 → 코레일 계정**에서 코레일 계정을 연결하고, 홈의 **새 여정 찾기**로 조건을 겁니다.
+
+> [!NOTE]
+> 릴리스 APK는 운영자 서버에 연결됩니다. 직접 운영하는 서버에 붙이려면 [3번](#3-내-서버-직접-운영하기)을 따르세요.
+> Play에서 받은 앱과 릴리스 APK는 서명이 달라 서로 업데이트되지 않으니, 한 휴대폰에서는 한쪽만 씁니다.
+
+### 2. 브라우저에서 데모 보기
+
+서버도 코레일 계정도 필요 없습니다. 샘플 데이터로 실제와 같은 화면을 띄웁니다.
+
+```bash
+git clone https://github.com/thsvkd/jari-android.git
+cd jari-android
 npm ci
-npm test
 npm run dev -- --mode demo
 ```
 
-브라우저에서 `http://127.0.0.1:4173`을 엽니다. 데모는 샘플 데이터로만 동작합니다.
-실서버를 사용할 때는 `.env.example`을 `.env.local`로 복사해
-`VITE_API_BASE_URL`을 설정하고 `npm run build`로 빌드합니다.
-`VITE_` 설정은 앱에 포함되는 공개 값이므로 비밀값을 넣지 않습니다.
+브라우저에서 <http://127.0.0.1:4173>을 엽니다. 화면 맨 위에 ‘데모 모드’ 띠가 보이면 성공입니다. 개발자 도구의 기기 모드(휴대폰 화면 크기)로 보면 실제 앱과 비슷하게 보입니다.
 
-데모 APK:
+### 3. 내 서버 직접 운영하기
 
-```powershell
-npm run build:demo
-.\scripts\build-android.ps1 -SkipWebBuild
-```
+API 서버와 Redis를 Docker Compose로 띄우고, 그 서버에 연결되는 앱을 직접 빌드합니다.
 
-## 서버 실행
+**① 서버 키 준비** — 서버 암호화 키와 알림 설정 자리를 만듭니다.
 
-Windows에서는 아래 명령으로 로컬 키와 환경 파일을 준비합니다. 키는 출력하지 않고,
-기존 키가 있으면 보존합니다. `.secrets`와 `.env`는 Git에서 제외됩니다.
-Firebase 키가 없으면 빈 `backend/.secrets/firebase-admin.json`을 만들어 두어 compose가
-기동하되 푸시는 꺼집니다. 실제 서비스 계정 키로 이 파일을 덮어쓰면 푸시가 켜집니다.
+- Windows(PowerShell): `.\scripts\init-backend.ps1`
+- macOS·Linux: 아직 준비 스크립트가 없습니다. [서버 키 준비](docs/self-hosting.md#1-서버-키-준비)에서 키 파일 요건과 Docker 없이 바로 띄우는 방법을 확인하세요.
 
-```powershell
-.\scripts\init-backend.ps1
-docker compose up --build -d
-docker compose exec api python -m korail_bot.mobile invite --ttl-hours 24
-```
-
-Docker Desktop 또는 Docker Engine이 필요합니다. 이 스택은 **텔레그램 봇을 실행하지 않습니다.**
-Redis 포트는 외부로 공개하지 않고 API도 호스트의 `127.0.0.1:8081`에만 바인딩합니다.
-휴대폰에서 실사용하려면 이 주소 앞에 HTTPS 프록시를 구성하고, 루트 `.env.local`의
-`VITE_API_BASE_URL`을 해당 HTTPS 주소로 지정한 후 앱을 다시 빌드해야 합니다.
-초대 코드는 운영자가 안전하게 전달합니다. SQLite/Redis 볼륨과 암호화 키를 함께 백업하며,
-`docker compose down --volumes`는 데이터를 삭제하므로 사용하지 않습니다.
-
-Docker 없이 인증 API만 검증하려면 Python 3.13+와 uv를 설치하고:
-
-```powershell
-cd backend
-uv sync --frozen
-uv run --env-file .env --frozen python -m korail_bot.mobile serve --auth-only --host 127.0.0.1 --port 8081
-```
-
-`--auth-only`는 Redis/철도 연결 없이 실제 앱 인증 API만 실행합니다.
-전체 서버·푸시·보안 설정은 [backend/README.md](backend/README.md)를 참고하세요.
-서명키, API 도메인/TLS 인증서, 철도 계정, Firebase 자격증명은 사용자 환경에서 준비해야 합니다.
-외부 패키지는 `package-lock.json`과 `backend/uv.lock`에 고정되어 설치됩니다.
-
-### 서버 테스트
-
-```powershell
-cd backend
-uv run --frozen pytest tests/unit -q
-uv run --frozen ruff check src tests
-uv run --frozen ruff format --check src tests
-uv run --frozen python ../scripts/smoke-backend.py
-```
-
-현재 포함된 서버 테스트는 독립 앱 API·인증·런타임·예약·알림에 대한 회귀 테스트이며,
-원본 텔레그램 UI 전용 테스트는 이 저장소에 포함하지 않습니다.
-배포 스크립트는 아래 `scripts/test-deploy-backend.sh`로 따로 검증합니다.
-실제 예약/푸시 검증과 Docker 실행 검증은 별도이며, 미검증 항목을 완료로 취급하지 않습니다.
-
-### 원격 배포
-
-`scripts/deploy-backend.sh`는 SSH로 접근 가능한 아무 Docker 호스트에 `backend/`를
-배포합니다. 호스트별 정보는 하드코딩하지 않고 플래그 또는 환경 변수로 받습니다.
+**② 서버 실행과 관리자 계정**
 
 ```bash
-./scripts/deploy-backend.sh \
-  --host pi@example --root /srv/app \
-  --compose-file compose.yaml --compose-file compose.overlay.example.yaml \
-  --after "docker compose -f compose.overlay.example.yaml up -d proxy" \
-  --dry-run   # 실제 호스트 없이 계획만 출력. 실행 전 항상 먼저 확인합니다.
+docker compose up --build -d                     # API(127.0.0.1:8081)와 Redis
+curl http://127.0.0.1:8081/api/mobile/health     # {"ok":true,...} 이면 정상
+
+# 내 관리자 계정: 실행한 뒤 비밀번호(12자 이상)를 한 줄 입력하고 Enter
+docker compose exec -T api python -m korail_bot.mobile admin --username <아이디>
 ```
 
-환경 변수로도 동일하게 지정할 수 있습니다(`DEPLOY_HOST`, `DEPLOY_ROOT`,
-`DEPLOY_REF`, `DEPLOY_COMPOSE_FILES`(쉼표 구분), `DEPLOY_SERVICE`, `DEPLOY_WORKER_PATTERN`).
-게이트웨이·프록시 등록처럼 호스트별 후속 작업은 `--after "<원격 명령>"`으로 넘깁니다.
-공백이 든 값(`--after`, `--root` 등)도 원격에서 그대로 한 인자로 전달됩니다.
-`scripts/test-deploy-backend.sh`가 문법과 `--dry-run` 출력 계획을 회귀 검증합니다
-(가짜 `ssh`로 실제 접속이 일어나지 않는지도 확인).
+입력한 비밀번호가 화면에 보입니다. 숨겨서 입력하는 방법은 [관리자 계정과 초대 코드](docs/self-hosting.md#3-관리자-계정과-초대-코드)에 있습니다.
 
-## Android packaging details
+**③ 휴대폰 연결과 지인 초대**
 
-The release WebView only serves the Vite bundle copied from `dist`. It has no
-configured live-server URL, permits no arbitrary navigation, and uses HTTPS
-for the Capacitor origin. Android release builds therefore do not allow
-cleartext HTTP. A debug-only network policy permits `localhost` and `10.0.2.2`
-for emulator API verification; it is not included in release builds.
+- 휴대폰은 HTTPS 주소로만 서버에 연결합니다. 리버스 프록시로 서버를 공개하고 그 주소로 앱을 빌드합니다: [HTTPS로 공개하기](docs/self-hosting.md#4-https로-공개하기) → [앱을 내 서버에 연결하기](docs/self-hosting.md#5-앱을-내-서버에-연결하기)
+- 그 앱의 로그인 화면에서 **관리자**로 로그인하고 **설정 → 회원 관리**에서 지인에게 줄 초대 코드를 만듭니다. 서버에서 바로 만들려면 `docker compose exec api python -m korail_bot.mobile invite --ttl-hours 24`입니다.
 
-There is no separate e2e app. The device stage of `npm run verify` builds the
-normal app (`dev.thsvkd.jari`, `assembleDebug -PjariNoFirebase`) with
-`VITE_API_BASE_URL=http://127.0.0.1:18281`, installs it on an Android emulator,
-clears its data and reaches the local e2e server through `adb reverse`. It
-refuses a physical device unless `JARI_ALLOW_PHYSICAL_DEVICE=1` is set, because
-it overwrites and clears the installed app. `npm run verify` leaves that
-local-server bundle in `dist/`; rebuild the web bundle before building an app to
-install for real use.
+## 문서 안내
 
-## Prerequisites
+| 문서 | 이런 분께 | 내용 |
+|---|---|---|
+| [서버 운영 가이드](docs/self-hosting.md) | 서버를 직접 운영하는 분 | 서버 키, Docker 실행, 관리자·초대, HTTPS 공개, 내 서버용 앱, 원격 배포, 백업 |
+| [서버 설정 레퍼런스](backend/README.md) | 서버 설정을 바꾸는 분 | 환경 변수, CLI 명령, API 범위, 보안, 백그라운드 작업과 알림 |
+| [Android 빌드·배포](docs/android.md) | 앱을 빌드하거나 배포하는 분 | 준비물, APK·AAB 만들기, 서명키, 휴대폰 알림(Firebase), 패키지 이름 이력 |
+| [개발 가이드](docs/development.md) | 코드를 고치는 분 | 개발 환경, 테스트와 CI, 화면 검사 규칙, 브랜치·커밋 규칙 |
+| [제품 요구사항(PRD)](docs/PRD.md) | 기획 의도가 궁금한 분 | 무엇을, 누구를 위해, 왜 만드는지 |
+| [기술 명세(SPEC)](docs/SPEC.md) | 내부 구조가 궁금한 분 | 구성, API 계약, 상태 판정, 재시작 보존, 회원 탈퇴 |
+| [AGENTS.md](AGENTS.md) | AI 코딩 에이전트 | 이 저장소에서 지킬 작업 규칙 |
 
-- Node dependencies supplied by the frontend package owner, including the
-  Capacitor 7 packages listed below.
-- JDK 21 or later (the Capacitor Push Notifications Android module is compiled
-  for Java 21). The script checks the actual `java -version` output from
-  `JAVA_HOME`; an invalid or older explicit setting stops the build. When
-  `JAVA_HOME` is unset, it discovers a supported Temurin installation under
-  `%ProgramFiles%\Eclipse Adoptium`.
-- Android SDK Platform 35 and Build Tools 35.0.1. Set `ANDROID_HOME` when the
-  SDK is not installed in `%LOCALAPPDATA%\Android\Sdk`.
-
-From this directory, build with:
-
-```powershell
-.\scripts\build-android.ps1
-```
-
-The resulting debug artifact is
-`android/app/build/outputs/apk/debug/app-debug.apk`. To use an installed
-emulator, run `adb install -r` on that file only after `adb devices` identifies
-an emulator; this project never installs onto a physical device automatically.
-
-The script stops on a nonzero exit from Java validation, the web build,
-Capacitor sync, or Gradle. Failed web builds or syncs never reach Gradle or
-print the `APK:` success line. `-SkipWebBuild` intentionally reuses the existing
-web bundle; sync and Gradle failures are still checked. Explicit exit checks
-also work in Windows PowerShell 5.1; see Microsoft's
-[native command error handling reference](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_error_handling?view=powershell-7.6).
-
-### Release build
-
-`.\scripts\build-android.ps1 -Release` runs `assembleRelease` instead of
-`assembleDebug`. It needs a signing config that is never committed: either
-`android\keystore.properties` (`storeFile`/`storePassword`/`keyAlias`/`keyPassword`)
-or the `JARI_RELEASE_STORE_FILE`/`JARI_RELEASE_STORE_PASSWORD`/
-`JARI_RELEASE_KEY_ALIAS`/`JARI_RELEASE_KEY_PASSWORD` environment variables, all
-four. A relative `storeFile` path (in the properties file or
-`JARI_RELEASE_STORE_FILE`) resolves against `android/`, not the repository
-root; use an absolute path if that is not where the keystore lives. Without
-either signing source complete, the script stops with a clear error before
-invoking Gradle. Only publish the resulting release APK; the debug APK's
-`webContentsDebuggingEnabled` WebView remote-debugging is not present in a
-signed release build.
-
-### Script regression checks (no APK build)
-
-Run from the repository root using Windows PowerShell 5.1 or PowerShell 7:
-
-```powershell
-.\scripts\test-build-android.ps1
-# Optional: validate a real installed JDK while all build commands stay mocked.
-.\scripts\test-build-android.ps1 -RealJavaHome $env:JAVA_HOME
-```
-
-The standalone suite needs the Windows .NET Framework C# compiler (included
-with .NET Framework 4.x). It copies the build script into a temporary fixture,
-injects native executable failures, and checks exit status, command order,
-and success output. It covers npm/sync/Gradle/Java failures, unsupported and
-unreadable Java versions, JDK 21 and newer, SDK discovery, and `-SkipWebBuild`.
-It restores environment variables and removes its temporary files; it does
-not invoke the repository's real npm, Capacitor, or Gradle commands.
-
-## Required frontend dependencies
-
-Keep the Capacitor package versions on the same supported 7.x release:
+## 저장소 구조
 
 ```text
-dependencies: @capacitor/core, @capacitor/android, @capacitor/app,
-              @capacitor/push-notifications
-devDependencies: @capacitor/cli
+src/        앱 화면 (TypeScript + Vite, Capacitor WebView에서 실행)
+android/    Android 프로젝트 (Capacitor 7)
+backend/    API 서버 (Python 3.13, Flask) — 독립 패키지
+e2e/        Playwright e2e·화면 레이아웃 검사
+monitor/    외부 감시용 Cloudflare Worker
+scripts/    빌드·릴리스·배포·검증 스크립트
+store/      Play 스토어 아이콘·그림·스크린숏
+docs/       기획·명세·가이드 문서
 ```
 
-`@capacitor/preferences` must not store the app session: `SecureSessionPlugin`
-uses an AES-GCM key generated in Android Keystore and stores only its IV and
-ciphertext in private SharedPreferences.
+## 지원 범위와 한계
 
-## Push
+- **코레일 열차만** 지원합니다. SRT 계정은 쓰지 않으며, 수서 출발 고속열차도 코레일 계정으로 찾습니다.
+- **결제는 대행하지 않습니다.** 자리를 잡은 뒤 결제 기한 안에 코레일 앱에서 직접 결제합니다.
+- **초대제입니다.** 운영자가 발급한 초대 코드로만 가입합니다.
+- 코레일 예약 대기는 일반실에만, 좌석 위치 지정 없이 신청합니다.
+- Android 7.0(API 24) 이상에서 설치됩니다.
+- 자동 테스트는 실제 코레일에 닿지 않습니다. 코레일 라이브러리 클래스로 만든 가짜 코레일을 씁니다([개발 가이드](docs/development.md#테스트와-검증)).
 
-Do not add a Firebase configuration file or cloud credentials to this
-repository. Release builds take `google-services.json` from Doppler
-(`JARI_ANDROID_GOOGLE_SERVICES_B64`) only for the duration of the build; see
-docs/SPEC.md §11 for the whole push path. The client requests Android 13 notification permission and calls
-FCM registration only when the frontend passes `enablePushRegistration: true`
-and supplies `onPushToken`. Without a valid Firebase Android app configuration,
-the registration error is surfaced to the UI and no delivery is claimed. A
-future operator must provision Firebase outside this repository for the current
-`dev.thsvkd.jari` package name, place the appropriate non-secret runtime
-configuration through the approved Android release process, and configure the
-server's authenticated `/api/mobile/devices` endpoint before enabling that
-option. A `google-services.json` issued for the former package name no longer
-matches this build.
+## 출처와 라이선스
+
+GeunSam2(Gray)의 텔레그램 봇 `korail_KTX_macro_telegrambot`을 fork한 작업에서 Android 앱과 전용 API 서버를 분리한 저장소입니다. 이 저장소는 텔레그램 봇을 실행하지 않으며, 서버 패키지 이름 `korail_bot`은 호환성을 위해 그대로 둡니다. 원저작자와 fork의 MIT 저작권은 [LICENSE](LICENSE)에 남겨 둡니다.

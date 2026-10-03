@@ -1,9 +1,12 @@
-# 자리났다 독립 Python 백엔드
+# 자리났다 서버 설정 레퍼런스
 
-이 폴더는 자체 `pyproject.toml`, `uv.lock`, `src`, 앱 전용 테스트를 포함합니다.
+자리났다 앱의 API 서버(`python -m korail_bot.mobile`)입니다. 이 폴더는 자체 `pyproject.toml`, `uv.lock`, `src`, 앱 전용 테스트를 포함합니다.
 아래 CLI 명령은 모두 이 `backend/` 폴더에서 실행합니다.
 원본 봇과의 연관 설명은 공통 코드의 출처를 설명하며, 원래 저장소가 설치되어 있어야 한다는 뜻이 아닙니다.
-Docker 실행과 환경 파일 준비는 상위 [README](../README.md)를 따르세요.
+
+- 처음 띄우기, Docker 실행, 관리자·초대, HTTPS 공개, 배포·백업: [서버 운영 가이드](../docs/self-hosting.md)
+- 내부 구조와 API 계약: [기술 명세](../docs/SPEC.md)
+- 테스트와 개발용 스택: [개발 가이드](../docs/development.md)
 
 `python -m korail_bot.mobile`은 텔레그램 봇 토큰·폴링·공개 콜백 없이 실행됩니다.
 텔레그램 봇 진입점(`korail_bot.app`)은 이 저장소에 없습니다. 앱 서버는 **한 프로세스**로 실행합니다.
@@ -134,10 +137,14 @@ uv run --frozen ruff check src tests
 uv run --frozen ruff format --check src tests
 ```
 
-이 저장소의 테스트는 `tests/unit` 하나뿐이며 Docker 없이 실행됩니다. `pyproject.toml`의
-`testpaths`가 같은 경로를 가리키므로 인수 없는 `pytest`도 같은 142개를 수집합니다.
-보안 테스트는 실제 SQLite 트랜잭션과 fakeredis를 사용합니다. 철도와 프로세스 실행 경계만 대체하며
-실제 예약·외부 메시지·Firebase 발송은 수행하지 않습니다.
+테스트는 두 갈래이며 모두 Docker 없이 실행됩니다.
+
+- `tests/unit`: 유닛·모듈 테스트. `pyproject.toml`의 `testpaths`가 이 경로를 가리키므로 인수 없는 `pytest`는 이것만 수집합니다.
+  보안 테스트는 실제 SQLite 트랜잭션과 fakeredis를 사용합니다. 철도와 프로세스 실행 경계만 대체합니다.
+- `tests/e2e`: 통합 테스트(`uv run --frozen pytest tests/e2e -q`). 실제 서버와 예약 워커를 띄우고 코레일 호출만
+  `tests/e2e/fake_korail`이 시나리오대로 답합니다. 같은 스택(`tests/e2e/stack.py`)을 앱 e2e와 로컬 개발에도 씁니다.
+
+어느 쪽도 실제 예약·외부 메시지·Firebase 발송은 수행하지 않습니다.
 
 설계 근거: [OWASP 비밀번호 저장 지침](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html),
 [Flask 요청 크기와 보안](https://flask.palletsprojects.com/en/stable/web-security/),
