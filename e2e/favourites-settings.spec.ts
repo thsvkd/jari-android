@@ -32,6 +32,34 @@ test.describe("즐겨찾기", () => {
     await expect(card).toHaveCount(0);
   });
 
+  // "일반실·특실 지정"은 seat_option 이 "등급 상관없음"과 같은 1 이라, 서버가 seat_classes 까지 돌려줘야 그대로 열려요.
+  test("즐겨찾기를 누르면 저장한 좌석 등급으로 열차 목록을 열어요 @layout", async ({ signedIn: page }) => {
+    await searchTrains(page, { seatMode: "specific", seatClasses: ["general", "special"] });
+    await page.locator("[data-action='trains-next']").click();
+    await page.locator("#favourite-name").fill("두 등급 부산");
+    await page.locator("[data-action='save-favourite']").click();
+    await expect(page.locator(".toast")).toHaveText("즐겨찾기에 저장했어요.");
+
+    await page.locator(".bottom-nav [data-view='favourites']").click();
+    await page.locator(".favourite-row", { hasText: "두 등급 부산" }).locator("[data-use-favourite]").click();
+    await expect(page.locator(".action-sheet .sheet-note")).toContainText("일반실·특실");
+    await expectCleanLayout(page, "날짜 시트(좌석 등급 지정 즐겨찾기)");
+    const day = travelDay(3).iso;
+    const target = page.locator(`.action-sheet [data-dp-day='${day}']:not([disabled])`);
+    for (let month = 0; month < 13 && !(await target.isVisible()); month++) {
+      await page.locator(".action-sheet [data-dp='next']").click();
+    }
+    await target.click();
+    await page.locator("[data-action='sheet-confirm']").click();
+
+    await expect(page.locator(".screen-trains [data-train-toggle]").first()).toBeVisible();
+    // 매진 열차에 두 등급의 좌석 지정 버튼이 나란히 있어요. 등급 상관없음이면 일반실 하나뿐이에요.
+    const soldOut = page.locator("article.train-card", { has: page.locator("[data-train-toggle='00103']") });
+    await expect(soldOut.locator("[data-seat-class='general']")).toHaveCount(1);
+    await expect(soldOut.locator("[data-seat-class='special']")).toHaveCount(1);
+    await expect(page.locator("[data-immediate-any]")).toHaveCount(0);
+  });
+
   test("홈의 최근 구간에서 날짜 시트를 열고 달력으로 날짜를 골라요 @layout", async ({ signedIn: page }) => {
     // 홈의 바로가기 칩은 이 폰에서 조회한 구간이에요. 즐겨찾기는 칩이 아니라 아래 자주 가는 구간에만 있어요.
     await searchTrains(page);
