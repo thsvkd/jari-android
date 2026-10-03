@@ -101,8 +101,8 @@ function prepareDevice() {
   run("npm run build", { env: { VITE_API_BASE_URL: `http://127.0.0.1:${E2E_API_PORT}` } });
   run("npx cap sync android");
   run(`${process.platform === "win32" ? "gradlew.bat" : "./gradlew"} assembleDebug -PjariNoFirebase`, { cwd: join(ROOT, "android") });
-  // GitHub 러너는 메모리가 빠듯해요. 메모리가 모자라면 커널이 가장 큰 프로세스인 에뮬레이터를 말없이 꺼요. 테스트 내내 놀고 있는
-  // Gradle 데몬(-Xmx1536m)을 내려 그 몫을 에뮬레이터에 돌려요. 이 Mac 에서는 다음 실행이 데몬을 다시 쓰게 그대로 둬요.
+  // CI 에서는 테스트 내내 놀고 있을 Gradle 데몬(-Xmx1536m)을 내려 에뮬레이터 곁의 자원을 비워요. 이 Mac 에서는 다음 실행이 다시 써요.
+  // (에뮬레이터가 말없이 꺼진 일이 있어 넣었지만 러너 메모리는 넉넉했어요(16GB 중 10GB 남음). 원인으로 확인된 것은 아니에요.)
   if (CI) run("./gradlew --stop", { cwd: join(ROOT, "android") });
   const apk = join(ROOT, "android/app/build/outputs/apk/debug/app-debug.apk");
   try {
@@ -138,7 +138,7 @@ function prepareDevice() {
   return `http://127.0.0.1:${DEVTOOLS_PORT}`;
 }
 
-// CI 기기 단계 동안 러너 메모리를 30초마다 한 줄씩 남겨요. 에뮬레이터가 말없이 꺼졌을 때 메모리 때문인지 로그로 가려요.
+// CI 기기 단계 동안 러너 메모리를 30초마다 한 줄씩 남겨요. 에뮬레이터가 말없이 꺼지면 메모리 때문인지 로그로 가려요.
 function watchRunnerMemory() {
   if (!CI || process.platform !== "linux") return () => undefined;
   const line = "free -m | awk '/^Mem:/ {m = \"사용 \" $3 \"MB · 남음 \" $7 \"MB\"} /^Swap:/ {s = \" · 스왑 \" $3 \"MB\"} END {print \"[러너 메모리] \" m s}'";
