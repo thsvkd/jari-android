@@ -1,6 +1,6 @@
 """Data models for the application."""
 
-from korail_bot.models.favourite import FavouriteSearch
+from korail_bot.models.favourite import FavouriteSearch, seat_classes_of
 from korail_bot.models.reservation import (
     SEAT_COLUMNS,
     DeadSearch,
@@ -60,4 +60,5 @@ __all__ = [
     "UserSession",
     "parse_seat_label",
     "parse_seat_plan",
+    "seat_classes_of",
 ]

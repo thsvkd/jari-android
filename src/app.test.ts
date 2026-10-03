@@ -6,7 +6,7 @@ import { JariApp } from "./app";
 import { ApiError } from "./api";
 import { createDemoApi } from "./demo";
 import appPackage from "../package.json";
-import type { SeatInventory, SeatMapSeat, SeatTarget, StatusResult } from "./types";
+import type { Conditions, SeatClass, SeatInventory, SeatMapSeat, SeatTarget, StatusResult } from "./types";
 
 const mounted: JariApp[] = [];
 
@@ -1571,6 +1571,41 @@ it("searches a favourite's trip on the chosen date with no train picked (a real 
   expect(root.querySelector("[data-action='trains-next']")?.textContent).not.toContain("편 선택");
   expect(root.querySelectorAll(".train-card.selected")).toHaveLength(0);
   expect(root.querySelector(".toast")?.textContent).toBe("");
+});
+
+// 즐겨찾기는 좌석 등급도 담아요. 한 등급은 seat_option(2 일반실만·4 특실만)으로만 올 수 있고, 두 등급 지정은 seat_classes 로 와요.
+it.each<{ saved: Pick<Conditions, "seat_option" | "seat_classes">; label: string; classes: SeatClass[]; whole: SeatClass | "any" }>([
+  { saved: { seat_option: "2" }, label: "일반실", classes: ["general"], whole: "general" },
+  { saved: { seat_option: "4" }, label: "특실", classes: ["special"], whole: "special" },
+  { saved: { seat_option: "1", seat_classes: ["general", "special"] }, label: "일반실·특실", classes: ["general", "special"], whole: "any" },
+])("searches a favourite with its saved seat grade ($label)", async ({ saved, label, classes, whole }) => {
+  const demo = createDemoApi();
+  const state = await demo.bootstrap();
+  state.running = null;
+  state.favourites[0]!.conditions = { ...state.favourites[0]!.conditions, ...saved };
+  const trains = vi.fn(demo.trains);
+  const { app, root } = await mountLive({ bootstrap: async () => state, trains });
+
+  root.querySelector<HTMLButtonElement>("[data-use-favourite='demo-home']")!.click();
+  expect(root.querySelector(".action-sheet .sheet-note")?.textContent).toContain(`인원 1명 · ${label} · 14:00–18:00`);
+  root.querySelector<HTMLInputElement>("#sheet-date")!.value = "2026-10-03";
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector(".train-list")).not.toBeNull());
+  expect(trains.mock.calls[0]![0].conditions).toMatchObject({ seat_option: saved.seat_option, seat_classes: classes });
+  // 매진 열차(015)에는 저장한 등급의 좌석 지정 버튼만 있어요. 등급을 지정하지 않은 여정의 "바로 예약"·"좌석 지정" 한 칸이 아니에요.
+  const card = root.querySelector<HTMLElement>("article.train-card[data-train-card='015']")!;
+  expect([...card.querySelectorAll<HTMLElement>("[data-seat-class]")].map((node) => node.dataset.seatClass)).toEqual(classes);
+  // 카드를 눌러 열차째 고르면 저장한 등급으로 기다려요.
+  root.querySelector<HTMLButtonElement>("[data-train-toggle='015']")!.click();
+  expect(app).toMatchObject({ cancellationTargets: [{ trainNo: "015", seatClass: whole, targets: [] }] });
+});
+
+it("shows no seat grade on the date sheet of a favourite that takes any seat", async () => {
+  const { root } = await mountIdle();
+  root.querySelector<HTMLButtonElement>("[data-use-favourite='demo-home']")!.click();
+  expect(root.querySelector(".action-sheet .sheet-note")?.textContent).toContain("인원 1명 · 14:00–18:00");
+  expect(root.querySelector(".action-sheet .sheet-note")?.textContent).not.toMatch(/일반실|특실/);
 });
 
 it("keeps the date sheet dismissable without starting a search", async () => {

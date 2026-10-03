@@ -30,6 +30,7 @@ from korail_bot.models import (
     UserProgress,
     UserSession,
     parse_seat_plan,
+    seat_classes_of,
 )
 from korail_bot.services.mini_app_service import (
     ACTION,
@@ -282,6 +283,12 @@ class MiniAppGateway:
             "seat_preference": info.get("seatPreference", ""),
             "trains": list(info.get("selectedTrains") or []),
         }
+        # The cabins chosen on the journey form. Without them a favourite of
+        # "both cabins, I pick seats" reads back as "any seat" (seat_option 1),
+        # and a single cabin opens the train list with both cabins' buttons.
+        seat_classes = seat_classes_of(info.get("seatClasses"))
+        if seat_classes:
+            conditions["seat_classes"] = seat_classes
         try:
             plan = parse_seat_plan(info.get("seatPlan"))
         except SeatPlanError:

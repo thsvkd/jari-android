@@ -15,6 +15,17 @@ FAVOURITE_ID_BYTES = 4
 MAX_NAME_LENGTH = 40
 
 
+#: The cabins a favourite can name, in the order the app lists them.
+SEAT_CLASSES = ("general", "special")
+
+
+def seat_classes_of(raw: object) -> list[str]:
+    """The known cabins in raw, each once and in a fixed order; anything else is dropped."""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [seat_class for seat_class in SEAT_CLASSES if seat_class in raw]
+
+
 def new_favourite_id() -> str:
     """A fresh id for a favourite."""
     return secrets.token_hex(FAVOURITE_ID_BYTES)
@@ -52,6 +63,11 @@ class FavouriteSearch:
     # Which seats will do, as SeatPreference.encode wrote it. Defaulted so a
     # favourite saved before this existed reads back as asking for any seat.
     seat_preference: str = ""
+    # The cabins the app was told to pick seats in ("general", "special").
+    # special_option alone cannot say "both, and I will choose seats": that
+    # reads as GENERAL_FIRST, the same as not choosing at all. Defaulted so a
+    # favourite saved before this existed reads back as no cabin chosen.
+    seat_classes: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @classmethod
@@ -88,6 +104,7 @@ class FavouriteSearch:
             seat_strategy=info.get("seatStrategy", "consecutive"),
             seat_strategy_display=info.get("seatStrategyShow", ""),
             seat_preference=info.get("seatPreference", ""),
+            seat_classes=seat_classes_of(info.get("seatClasses")),
         )
 
     def as_train_info(self) -> dict:
@@ -110,6 +127,7 @@ class FavouriteSearch:
             "seatStrategy": self.seat_strategy,
             "seatStrategyShow": self.seat_strategy_display,
             "seatPreference": self.seat_preference,
+            "seatClasses": list(self.seat_classes),
         }
 
     @property

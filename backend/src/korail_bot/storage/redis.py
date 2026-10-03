@@ -21,6 +21,7 @@ from korail_bot.models import (
     TrainSearchParams,
     UserCredentials,
     UserSession,
+    seat_classes_of,
 )
 from korail_bot.storage.base import StorageInterface
 from korail_bot.utils.crypto import get_secret_box
@@ -498,6 +499,7 @@ class RedisStorage(StorageInterface):
                     "seat_strategy": favourite.seat_strategy,
                     "seat_strategy_display": favourite.seat_strategy_display,
                     "seat_preference": favourite.seat_preference,
+                    "seat_classes": favourite.seat_classes,
                     "created_at": favourite.created_at.isoformat(),
                 }
             ),
@@ -586,6 +588,7 @@ class RedisStorage(StorageInterface):
                 seat_strategy=stored.get("seat_strategy", "consecutive"),
                 seat_preference=stored.get("seat_preference", ""),
                 seat_strategy_display=stored.get("seat_strategy_display", ""),
+                seat_classes=seat_classes_of(stored.get("seat_classes")),
                 created_at=as_utc(datetime.fromisoformat(stored["created_at"])),
             )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:

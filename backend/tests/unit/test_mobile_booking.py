@@ -108,6 +108,25 @@ def test_real_gateway_delegates_booking_schedule_and_favourites(tmp_path, monkey
         == 404
     )
     assert http.delete("/api/mobile/favourites/" + fav_id, headers=headers).status_code == 200
+    # "Both cabins, I pick seats" is seat_option 1 - the same as no choice at
+    # all - so only seat_classes keeps it. A favourite must hand it back, and
+    # through the store, or the train list opens as if no cabin was chosen.
+    both = {**conditions, "seat_option": "1", "seat_classes": ["special", "general"]}
+    saved = http.post("/api/mobile/favourites", headers=headers, json={"conditions": both})
+    assert saved.status_code == 200, saved.json
+    assert saved.json["favourites"][0]["conditions"]["seat_classes"] == ["general", "special"]
+    assert saved.json["favourites"][0]["conditions"]["seat_option"] == "1"
+    listed = http.get("/api/mobile/favourites", headers=headers)
+    assert listed.json["favourites"][0]["conditions"]["seat_classes"] == ["general", "special"]
+    # A favourite saved without a cabin still reads back without one.
+    assert (
+        http.delete(
+            "/api/mobile/favourites/" + saved.json["favourites"][0]["id"], headers=headers
+        ).json["favourites"]
+        == []
+    )
+    saved = http.post("/api/mobile/favourites", headers=headers, json={"conditions": conditions})
+    assert "seat_classes" not in saved.json["favourites"][0]["conditions"]
     assert http.post("/api/mobile/logout", headers=headers, json={}).status_code == 200
     assert runtime.storage.get_scheduled_search(owner) is None
     assert runtime.storage.get_resume_credentials(owner) is None
@@ -178,6 +197,13 @@ def test_draft_carries_the_seat_plan_back_to_the_app():
     assert json.loads(submission.seat_plan_json)["trains"][0]["targets"][1]["rowPosition"] == 2
 
     assert "seat_plan" not in MiniAppGateway._conditions_of({"depDate": "20260913"})
+    # Cabins come back in a fixed order, unknown ones dropped, none when none were chosen.
+    assert MiniAppGateway._conditions_of(
+        {"depDate": "20260913", "seatClasses": ["special", "first", "special"]}
+    )["seat_classes"] == ["special"]
+    assert "seat_classes" not in MiniAppGateway._conditions_of(
+        {"depDate": "20260913", "seatClasses": []}
+    )
     # An unreadable plan costs the seats, never the rest of the draft.
     assert "seat_plan" not in MiniAppGateway._conditions_of(
         {"depDate": "20260913", "seatPlan": "{nonsense"}

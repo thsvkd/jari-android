@@ -225,6 +225,15 @@ function formatTimeWindow(conditions: Conditions): string {
   return `${clockFromCompact(conditions.dep_time)}–${conditions.max_dep_time === "2400" ? "마지막 열차" : clockFromCompact(conditions.max_dep_time)}`;
 }
 
+// 좌석 등급을 지정한 여정이면 "일반실"·"특실"·"일반실·특실", 상관없으면 빈 문자열이에요.
+function seatGradeLabel(draft: BookingDraft): string {
+  if (draft.seatGradeMode !== "specific") return "";
+  return (["general", "special"] as const)
+    .filter((seatClass) => draft.seatClasses?.includes(seatClass))
+    .map((seatClass) => (seatClass === "general" ? "일반실" : "특실"))
+    .join("·");
+}
+
 // Under a favourite's name: the route only when the name is not already the route, then the time window.
 function favouriteDetail(favourite: Favourite): string {
   return favourite.name === favourite.route ? favourite.window : `${favourite.route} · ${favourite.window}`;
@@ -1902,7 +1911,7 @@ export class JariApp {
       ?? this.state?.favourites.find((favourite) => favourite.id === key)?.conditions;
     if (!source) return;
     const wanted = source.trains?.map(String) ?? [];
-    const note = [`인원 ${source.passenger_count}명`, formatTimeWindow(source), wanted.length ? `고른 열차 ${wanted.length}편` : ""]
+    const note = [`인원 ${source.passenger_count}명`, seatGradeLabel(conditionsToDraft(source)), formatTimeWindow(source), wanted.length ? `고른 열차 ${wanted.length}편` : ""]
       .filter(Boolean).join(" · ");
     const today = isoDate(new Date());
     const tomorrow = isoDate(new Date(Date.now() + 86_400_000));
@@ -1928,8 +1937,11 @@ export class JariApp {
     }
     if (!picked) return;
     // Seats picked on a seat map belong to the day they were picked for; everything else about the trip carries over.
-    const conditions: Conditions = { ...source, dep_date: picked.replaceAll("-", ""), trains: undefined, seat_plan: undefined };
-    this.draft = conditionsToDraft(conditions);
+    const dated: Conditions = { ...source, dep_date: picked.replaceAll("-", ""), trains: undefined, seat_plan: undefined };
+    this.draft = conditionsToDraft(dated);
+    // 저장한 좌석 등급도 그대로예요. 즐겨찾기는 한 등급("일반실만")을 seat_option 으로만 적어 두기도 하는데,
+    // 열차 목록의 등급 버튼과 카드째 고른 열차의 등급은 seat_classes 를 읽어요. 여정 폼이 보내는 모양으로 채워 둬요.
+    const conditions: Conditions = this.draft.seatGradeMode === "specific" ? { ...dated, seat_classes: this.draft.seatClasses } : dated;
     this.conditions = conditions;
     this.cancellationTargets = [];
     this.selectedTrains = [];
