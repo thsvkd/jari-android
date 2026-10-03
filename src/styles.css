@@ -342,8 +342,10 @@ small { color: var(--muted); }
 .seat-class-picker { margin-top: 13px; }
 .seat-detail-note { margin-bottom: 0; }
 
-/* A sheet over the page keeps the page behind it from scrolling. */
-html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
+/* A sheet over the page keeps the page behind it from scrolling. Only the root: hidden on body too made body a scroll
+   container (the trap noted under the portrait .screen rule), so a sticky footer stuck to body's box, which is taller than
+   the viewport by the status-bar inset on a device, and dropped onto the bottom nav while a sheet was open. */
+html:has(.modal-backdrop) { overflow: hidden; }
 .modal-backdrop, .seat-dialog, .seat-map-live { overscroll-behavior: contain; }
 /* Sheets rise to just under the status bar so the seat map gets the room; the native app reports no inset, hence its own variable. */
 .modal-backdrop { --sheet-top: calc(var(--native-safe-top, env(safe-area-inset-top, 0px)) + 12px); position: fixed; inset: 0; z-index: 80; display: grid; align-items: end; justify-items: center; padding-top: var(--sheet-top); background: rgb(15 20 29 / 58%); backdrop-filter: blur(4px); }
@@ -487,8 +489,10 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 /* 다섯 줄 높이에 위아래 여백 두 줄씩: 첫·끝 시각도 가운데 띠까지 올 수 있어요. 띠는 휠 뒤에 깔린 ::before 예요. */
 .time-wheel { --time-row: 48px; position: relative; height: calc(var(--time-row) * 5); }
 .time-wheel::before { content: ""; position: absolute; inset-inline: 0; top: calc(var(--time-row) * 2); height: var(--time-row); border-radius: 14px; background: var(--accent-soft); pointer-events: none; }
+/* 위아래 두 줄은 판 색으로 덮어 흐리게 해요. mask-image 는 넘길 때마다 다시 합성해 에뮬레이터 GPU 에 무거워요. 덮개는 누르기를 막지 않아요. */
+.time-wheel::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to bottom, var(--bg), color-mix(in srgb, var(--bg) 55%, transparent) 22%, transparent 40%, transparent 60%, color-mix(in srgb, var(--bg) 55%, transparent) 78%, var(--bg)); pointer-events: none; }
 .time-wheel:has(.time-wheel-list:focus-visible)::before { outline: 3px solid color-mix(in srgb, var(--accent) 68%, transparent); outline-offset: 2px; }
-.time-wheel-list { position: relative; box-sizing: border-box; height: 100%; padding-block: calc(var(--time-row) * 2); overflow-y: auto; overscroll-behavior: contain; scroll-snap-type: y mandatory; scrollbar-width: none; outline: none; -webkit-mask-image: linear-gradient(to bottom, transparent, rgb(0 0 0 / 45%) 22%, #000 40%, #000 60%, rgb(0 0 0 / 45%) 78%, transparent); mask-image: linear-gradient(to bottom, transparent, rgb(0 0 0 / 45%) 22%, #000 40%, #000 60%, rgb(0 0 0 / 45%) 78%, transparent); }
+.time-wheel-list { position: relative; box-sizing: border-box; height: 100%; padding-block: calc(var(--time-row) * 2); overflow-y: auto; overscroll-behavior: contain; scroll-snap-type: y mandatory; scrollbar-width: none; outline: none; }
 .time-wheel-list::-webkit-scrollbar { display: none; }
 .time-option { display: grid; place-items: center; height: var(--time-row); scroll-snap-align: center; color: var(--muted); font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; user-select: none; -webkit-user-select: none; transition: color .12s ease; }
 .time-option.current { color: var(--accent-ink); font-size: 20px; font-weight: 800; }
