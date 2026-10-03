@@ -362,8 +362,8 @@ describe("concept C application shell", () => {
     root.querySelector<HTMLButtonElement>("[data-action='new-journey']")!.click();
 
     expect(root.querySelector<HTMLInputElement>("[name='dep_date']")!.value).toBe("2026-09-14");
-    expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value).toBe("10:40");
-    expect(root.querySelector<HTMLInputElement>("[name='max_dep_time']")!.value).toBe("12:40");
+    expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value).toBe("10:00");
+    expect(root.querySelector<HTMLInputElement>("[name='max_dep_time']")!.value).toBe("12:00");
     expect(root.querySelector(".stepper output")?.textContent).toBe("1명");
   });
 
@@ -706,28 +706,39 @@ describe("editable form rerender regressions", () => {
     expect(root.querySelector<HTMLInputElement>("#schedule-at")!.value).toBe("2026-09-20T13:00");
   });
 
-  it("picks journey times with the themed picker and keeps them through a rerender", async () => {
+  it("picks journey times on the hour wheel and keeps them through a rerender", async () => {
     // 밤 10시가 넘으면 기본값이 "마지막 열차까지"라 끝 시각이 꺼져요. 낮으로 고정해요.
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(2026, 8, 23, 10));
     const { app, root } = await mountLive();
     app.navigate("journey");
     const picker = (id: string) => root.querySelector<HTMLElement>(`[data-time-picker='${id}']`)!;
-    const slide = (id: string, part: "hour" | "minute", value: number) => {
-      const slider = picker(id).querySelector<HTMLInputElement>(`[data-tp-slider='${part}']`)!;
-      slider.value = String(value);
-      slider.dispatchEvent(new Event("input", { bubbles: true }));
+    // 휠을 손으로 넘겨 그 시각에 멈춰요(5시부터 한 줄 48px).
+    const flick = (id: string, hour: number) => {
+      const wheel = picker(id).querySelector<HTMLElement>("[data-tp-wheel]")!;
+      wheel.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      wheel.scrollTop = (hour - 5) * 48;
+      wheel.dispatchEvent(new Event("scroll"));
+      wheel.dispatchEvent(new Event("scrollend"));
     };
+    // 데모 서버의 반쯤 쓴 여정(07:00–12:00)이 채워져 있어요. 정시라 휠처럼 읽혀요.
+    expect(picker("dep-time").querySelector(".time-field")?.textContent).toContain("오전 7시");
     picker("max-dep-time").querySelector<HTMLButtonElement>("[data-tp='toggle']")!.click();
-    slide("max-dep-time", "hour", 18);
-    slide("max-dep-time", "minute", 35);
+    expect(picker("max-dep-time").querySelector("[data-tp-slider], input[type=range]")).toBeNull();
+    flick("max-dep-time", 18);
     picker("dep-time").querySelector<HTMLButtonElement>("[data-tp='toggle']")!.click();
-    slide("dep-time", "hour", 13);
+    flick("dep-time", 13);
     app.notify("background update");
-    expect(root.querySelector<HTMLInputElement>("[name='max_dep_time']")!.value).toBe("18:35");
-    expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value.slice(0, 3)).toBe("13:");
-    // 고르던 칸은 펼친 채로 다시 그려져요.
+    expect(root.querySelector<HTMLInputElement>("[name='max_dep_time']")!.value).toBe("18:00");
+    expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value).toBe("13:00");
+    // 고르던 칸은 펼친 채로, 휠은 고른 시각에 맞춰 다시 그려져요.
     expect(picker("dep-time").querySelector(".time-panel")).not.toBeNull();
+    expect(picker("dep-time").querySelector<HTMLElement>("[data-tp-wheel]")!.scrollTop).toBe(8 * 48);
+    // 한 줄을 누르면 그 시각으로 정하고 끝 시각 칸으로 넘어가요.
+    picker("dep-time").querySelector<HTMLElement>("[data-tp-hour='14']")!.click();
+    expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value).toBe("14:00");
+    expect(picker("dep-time").querySelector(".time-panel")).toBeNull();
+    expect(picker("max-dep-time").querySelector(".time-panel")).not.toBeNull();
     root.querySelector<HTMLInputElement>("[name='unlimited_time']")!.click();
     expect(picker("max-dep-time").querySelector<HTMLButtonElement>("[data-tp='toggle']")!.disabled).toBe(true);
     vi.useRealTimers();
@@ -745,16 +756,14 @@ describe("editable form rerender regressions", () => {
     root.querySelector<HTMLButtonElement>("[data-date-picker='schedule-date'] [data-dp='toggle']")!.click();
     root.querySelector<HTMLButtonElement>("[data-dp-day='2026-09-25']")!.click();
     root.querySelector<HTMLButtonElement>("[data-time-picker='schedule-time'] [data-tp='toggle']")!.click();
-    // 비어 있던 칸은 시 슬라이더를 누른 자리(0시)에서 떼면 정해지고, 분 슬라이더로 넘어가요.
-    const slider = (part: string) => root.querySelector<HTMLInputElement>(`[data-time-picker='schedule-time'] [data-tp-slider='${part}']`)!;
-    slider("hour").dispatchEvent(new Event("pointerdown", { bubbles: true }));
-    slider("hour").dispatchEvent(new Event("pointerup", { bubbles: true }));
-    slider("minute").value = "25";
-    slider("minute").dispatchEvent(new Event("input", { bubbles: true }));
-    expect(scheduleAt()).toBe("2026-09-25T00:25");
+    // 비어 있던 칸은 펼치기만 해서는 정해지지 않아요. 휠은 0시부터 24줄이고, 한 줄을 누르면 그 정시예요.
+    expect(root.querySelectorAll("[data-time-picker='schedule-time'] [data-tp-hour]")).toHaveLength(24);
+    expect(scheduleAt()).toBe("");
+    root.querySelector<HTMLElement>("[data-time-picker='schedule-time'] [data-tp-hour='0']")!.click();
+    expect(scheduleAt()).toBe("2026-09-25T00:00");
     app.notify("background update");
-    expect(scheduleAt()).toBe("2026-09-25T00:25");
-    expect(root.querySelector("[data-time-picker='schedule-time'] .time-field")?.textContent).toContain("오전 12:25");
+    expect(scheduleAt()).toBe("2026-09-25T00:00");
+    expect(root.querySelector("[data-time-picker='schedule-time'] .time-field")?.textContent).toContain("오전 12시");
     vi.useRealTimers();
   });
 });

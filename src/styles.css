@@ -476,38 +476,28 @@ html:has(.modal-backdrop), html:has(.modal-backdrop) body { overflow: hidden; }
 }
 @keyframes date-open { from { opacity: 0; transform: translateY(-6px); } }
 
-/* 시간 선택기: 날짜 칸과 같은 칸을 눌러 그 자리에 펼쳐요. 위에 고른 시각을 크게, 아래에 시·분 슬라이더(분은 5분 단위)를 둬요.
-   큰 시각의 시·분은 버튼이라 누르면 그 슬라이더로 돌아가요. 초점이 있는 줄을 옅게 칠해 지금 고르는 쪽을 보여요. */
+/* 시간 선택기: 날짜 칸과 같은 칸을 눌러 그 자리에 펼쳐요. 정시만 고르는 휠이에요. 위아래로 넘기면 가운데 띠에 든 시각이 값이 되고,
+   한 줄을 누르면 그 시각으로 정하고 다음 칸으로 넘어가요. 위아래 두 줄씩 흐리게 보여 넘길 수 있다는 것을 알려요. */
 .time-picker { display: grid; gap: 10px; color: var(--text); font-size: 15px; font-weight: 400; }
 .time-field b { font-variant-numeric: tabular-nums; }
 .time-field:disabled { color: var(--muted); }
-.time-panel { --time-rail: color-mix(in srgb, var(--muted) 28%, transparent); display: grid; gap: 4px; margin-inline: -10px; padding: 14px 10px 8px; border-radius: 18px; background: var(--bg); }
+/* 펼칠 때 판이 화면 안으로 들어오도록 스크롤해요. 아래 여백이 없으면 휠의 아래쪽 줄이 하단 메뉴 밑에 남아요. */
+.time-panel { display: grid; gap: 6px; margin-inline: -10px; padding: 14px 10px 10px; border-radius: 18px; background: var(--bg); scroll-margin-bottom: calc(var(--nav-height) + 12px); }
 .time-panel-cap { margin: 0; color: var(--muted); font-size: 13px; font-weight: 700; text-align: center; }
-.time-big { display: flex; justify-content: center; align-items: center; margin: 0 0 6px; font-size: 30px; font-weight: 800; letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
-.time-big button { min-width: 48px; min-height: 48px; padding: 0 6px; border-radius: 12px; background: transparent; font: inherit; letter-spacing: inherit; }
-.time-big button:not(:disabled):active { background: var(--accent-soft); }
-@media (hover: hover) { .time-big button:not(:disabled):hover { background: var(--accent-soft); } }
-.time-slider { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 8px; padding: 8px 12px 0; border-radius: 14px; transition: background-color .15s ease; }
-.time-slider > span { color: var(--muted); font-size: 14px; font-weight: 700; }
-.time-slider > b { justify-self: end; font-size: 15px; font-variant-numeric: tabular-nums; }
-.time-slider:focus-within { background: var(--accent-soft); }
-.time-slider:focus-within > span, .time-slider:focus-within > b { color: var(--accent-ink); }
-/* 기본 슬라이더를 앱 색으로. 손잡이는 28px 이지만 입력 칸 높이가 48px 이라 누를 곳이 넉넉해요.
-   채운 구간은 --fill 로 그려요(Firefox 는 ::-moz-range-progress). .field input 의 칸 모양은 걷어 내요. */
-.time-slider input[type="range"], .time-slider input[type="range"]:focus { grid-column: 1 / -1; width: 100%; min-height: 0; height: 48px; margin: 0; padding: 0; border: 0; border-radius: 0; outline: none; background: transparent; box-shadow: none; cursor: pointer; -webkit-appearance: none; appearance: none; }
-.time-slider input[type="range"]:disabled { opacity: .4; cursor: not-allowed; }
-.time-slider input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--accent-strong) var(--fill), var(--time-rail) var(--fill)); }
-.time-slider input[type="range"]::-webkit-slider-thumb { width: 28px; height: 28px; margin-top: -11px; border: 3px solid var(--accent-strong); border-radius: 50%; background: var(--surface); box-shadow: 0 2px 8px rgb(0 0 0 / 18%); -webkit-appearance: none; appearance: none; }
-.time-slider input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent); }
-.time-slider input[type="range"]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--time-rail); }
-.time-slider input[type="range"]::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--accent-strong); }
-.time-slider input[type="range"]::-moz-range-thumb { box-sizing: border-box; width: 28px; height: 28px; border: 3px solid var(--accent-strong); border-radius: 50%; background: var(--surface); }
-.time-slider input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent); }
+/* 다섯 줄 높이에 위아래 여백 두 줄씩: 첫·끝 시각도 가운데 띠까지 올 수 있어요. 띠는 휠 뒤에 깔린 ::before 예요. */
+.time-wheel { --time-row: 48px; position: relative; height: calc(var(--time-row) * 5); }
+.time-wheel::before { content: ""; position: absolute; inset-inline: 0; top: calc(var(--time-row) * 2); height: var(--time-row); border-radius: 14px; background: var(--accent-soft); pointer-events: none; }
+.time-wheel:has(.time-wheel-list:focus-visible)::before { outline: 3px solid color-mix(in srgb, var(--accent) 68%, transparent); outline-offset: 2px; }
+.time-wheel-list { position: relative; box-sizing: border-box; height: 100%; padding-block: calc(var(--time-row) * 2); overflow-y: auto; overscroll-behavior: contain; scroll-snap-type: y mandatory; scrollbar-width: none; outline: none; -webkit-mask-image: linear-gradient(to bottom, transparent, rgb(0 0 0 / 45%) 22%, #000 40%, #000 60%, rgb(0 0 0 / 45%) 78%, transparent); mask-image: linear-gradient(to bottom, transparent, rgb(0 0 0 / 45%) 22%, #000 40%, #000 60%, rgb(0 0 0 / 45%) 78%, transparent); }
+.time-wheel-list::-webkit-scrollbar { display: none; }
+.time-option { display: grid; place-items: center; height: var(--time-row); scroll-snap-align: center; color: var(--muted); font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; user-select: none; -webkit-user-select: none; transition: color .12s ease; }
+.time-option.current { color: var(--accent-ink); font-size: 20px; font-weight: 800; }
+@media (hover: hover) { .time-option:not(.current):hover { color: var(--text); } }
 @media (prefers-reduced-motion: no-preference) {
   .time-panel.entering { animation: date-open .22s cubic-bezier(.2, 0, 0, 1) both; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .time-slider { transition: none; }
+  .time-option { transition: none; }
 }
 /* 나란한 두 시간 칸: 이름·칸은 제자리에 두고, 펼친 판만 두 칸 아래에 카드 폭으로 깔려요. */
 .time-range { row-gap: 8px; margin-top: var(--field-gap); }

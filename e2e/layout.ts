@@ -174,9 +174,16 @@ export async function bottomClearance(page: Page): Promise<string[]> {
       const gap = nav.top - sticky.bottom;
       if (Math.abs(gap - want) > 1) problems.push(`붙박이 버튼과 하단 메뉴 사이 ${Math.round(gap)}px (규칙 ${want}px)`);
     }
+    // 안쪽 스크롤 상자(시간 휠)에 넘겨 두어 잘려 보이지 않는 줄은 화면 끝을 늘리지 않아요. 그 상자 자신의 칸만 재요.
+    const insideScroller = (node: Element) => {
+      for (let parent = node.parentElement; parent && parent.tagName !== "MAIN"; parent = parent.parentElement) {
+        if (["auto", "scroll", "hidden", "clip"].includes(getComputedStyle(parent).overflowY)) return true;
+      }
+      return false;
+    };
     const items = [...document.querySelectorAll("main *")].filter((node) => {
       const box = node.getBoundingClientRect();
-      return box.height > 0 && getComputedStyle(node).position !== "sticky";
+      return box.height > 0 && getComputedStyle(node).position !== "sticky" && !insideScroller(node);
     });
     const last = Math.max(...items.map((node) => node.getBoundingClientRect().bottom));
     if (!nav || last <= nav.top + 0.5) return problems;

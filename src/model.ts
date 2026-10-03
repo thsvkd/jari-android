@@ -238,11 +238,11 @@ export function conditionsToDraft(conditions?: Conditions | null): BookingDraft 
     String(now.getMonth() + 1).padStart(2, "0"),
     String(now.getDate()).padStart(2, "0"),
   ].join("-");
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const roundedStartMinutes = Math.min(23 * 60 + 59, Math.ceil(currentMinutes / 5) * 5);
+  // 시간 선택기는 정시만 골라요. 시작은 지금 시각의 정시로 내려요: 올리면 그 사이에 떠나는 열차를 빠뜨려요.
+  const roundedStartMinutes = now.getHours() * 60;
   const suggestedEndMinutes = roundedStartMinutes + 120;
   const defaultUnlimitedTime = suggestedEndMinutes >= 24 * 60;
-  const defaultEndMinutes = Math.min(23 * 60 + 59, suggestedEndMinutes);
+  const defaultEndMinutes = Math.min(23 * 60, suggestedEndMinutes);
   const formatMinutes = (minutes: number) =>
     `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
   const compactDate = conditions?.dep_date ?? "";

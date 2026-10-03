@@ -11,16 +11,26 @@ import {
 } from "./model";
 
 describe("booking payload", () => {
-  it("defaults a new journey to today, the next five minutes, and a two-hour window", () => {
+  it("defaults a new journey to today, this hour on the hour, and a two-hour window", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 8, 14, 7, 52));
 
     const draft = conditionsToDraft(null);
 
     expect(draft.depDate).toBe("2026-09-14");
-    expect(draft.depTime).toBe("07:55");
-    expect(draft.maxDepTime).toBe("09:55");
+    // 시간 선택기는 정시만 골라요. 7:52 에 07:55 같은 값을 두면 휠로 되돌릴 수 없고, 08:00 이면 7:55 열차를 빠뜨려요.
+    expect(draft.depTime).toBe("07:00");
+    expect(draft.maxDepTime).toBe("09:00");
     expect(draft.unlimitedTime).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("searches to the last train when two hours from this hour runs past midnight", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 14, 21, 59));
+    expect(conditionsToDraft(null)).toMatchObject({ depTime: "21:00", maxDepTime: "23:00", unlimitedTime: false });
+    vi.setSystemTime(new Date(2026, 8, 14, 22, 0));
+    expect(conditionsToDraft(null)).toMatchObject({ depTime: "22:00", maxDepTime: "23:00", unlimitedTime: true });
     vi.useRealTimers();
   });
 
