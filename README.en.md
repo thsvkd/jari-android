@@ -101,6 +101,19 @@ The password is visible while you type. A hidden-input variant is in [Admin acco
 - Phones connect to the server over HTTPS only. Put a reverse proxy in front of the server and build the app with that address: [Publish over HTTPS](docs/self-hosting.md#4-https로-공개하기) → [Connect the app to your server](docs/self-hosting.md#5-앱을-내-서버에-연결하기) (Korean)
 - In that app, log in as **관리자** (Admin) and create invite codes for friends under **설정 → 회원 관리** (Settings → Members). To create one on the server instead: `docker compose exec api python -m korail_bot.mobile invite --ttl-hours 24`.
 
+## Connect an AI agent
+
+You can let an AI agent such as Claude Code or claude.ai find trains and book seats for you. The server needs `MOBILE_PUBLIC_URL` set ([self-hosting guide](docs/self-hosting.md#에이전트-연결), Korean).
+
+1. In the app, open **설정 → 에이전트 연결** (Settings → Agent connections) and copy the address (`https://<server>/api/mobile/mcp`).
+2. Give that address to your agent.
+   - Claude Code: `claude mcp add -s user --transport http jari https://<server>/api/mobile/mcp` (`-s user` makes it available in every project)
+   - claude.ai: Settings → Connectors → Add custom connector
+3. Start the connection from the agent. In Claude Code, open `/mcp`, pick jari and authenticate; in claude.ai, press Connect on the connector.
+4. When the browser shows an 8-character code, enter it on the same screen in the app and tap **연결하기** (Connect).
+
+A new connection may only look things up (trains, seat maps, status). To let it watch for cancellations and book seats too, turn on **예약까지 맡기기** (Allow booking) in the connection list after connecting. Agents such as Claude Code ask you before they start a watch or book or cancel a seat. Some agents may not ask, so turn on Allow booking only when you need it. In unattended runs such as `claude -p`, the watch, booking and cancel tools cannot be used (lookups still work). You always pay yourself. You can disconnect an agent from the app at any time.
+
 ## Documentation
 
 The detailed docs are written in Korean.

@@ -15,6 +15,8 @@ export interface Scenario {
   /** 시나리오를 바꾼 뒤 처음 몇 번의 로그인에 코레일이 답하지 않는지(HTTP 503) */
   login_unreachable?: number;
   search?: "seats" | "sold_out" | "unavailable";
+  /** 열차 목록(열차 조회·find_trains) 결과. sold_out 은 열차는 있고 모두 매진, unavailable 은 코레일 503 이에요. */
+  list?: "trains" | "sold_out" | "unavailable";
   seat_after_polls?: number;
   outcome?: "OUTSTANDING" | "PAID" | "RELEASED" | "UNKNOWN";
   deadline_minutes?: number;

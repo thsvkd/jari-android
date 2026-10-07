@@ -99,6 +99,19 @@ docker compose exec -T api python -m korail_bot.mobile admin --username <아이�
 - 휴대폰은 HTTPS 주소로만 서버에 연결합니다. 리버스 프록시로 서버를 공개하고 그 주소로 앱을 빌드합니다: [HTTPS로 공개하기](docs/self-hosting.md#4-https로-공개하기) → [앱을 내 서버에 연결하기](docs/self-hosting.md#5-앱을-내-서버에-연결하기)
 - 그 앱의 로그인 화면에서 **관리자**로 로그인하고 **설정 → 회원 관리**에서 지인에게 줄 초대 코드를 만듭니다. 서버에서 바로 만들려면 `docker compose exec api python -m korail_bot.mobile invite --ttl-hours 24`입니다.
 
+## AI 에이전트에 연결하기
+
+Claude Code, claude.ai 같은 AI 에이전트에게 열차 찾기와 예약을 맡길 수 있습니다. 서버에 `MOBILE_PUBLIC_URL`이 설정되어 있어야 합니다([서버 운영 가이드](docs/self-hosting.md#에이전트-연결)).
+
+1. 앱의 **설정 → 에이전트 연결**에서 주소(`https://<서버>/api/mobile/mcp`)를 복사합니다.
+2. 에이전트에 그 주소를 넣습니다.
+   - Claude Code: `claude mcp add -s user --transport http jari https://<서버>/api/mobile/mcp` (`-s user` 라 어느 프로젝트에서나 쓰여요)
+   - claude.ai: 설정 → 커넥터 → 커스텀 커넥터 추가
+3. 에이전트에서 연결을 시작합니다. Claude Code 는 `/mcp` 에서 jari 를 골라 인증하고, claude.ai 는 커넥터의 연결을 누릅니다.
+4. 브라우저에 8자리 코드가 나오면 앱의 같은 화면에 입력하고 **연결하기**를 누릅니다.
+
+새 연결은 조회(열차·좌석표·상태)만 맡깁니다. 취소표 감시와 좌석 예약까지 맡기려면 연결한 뒤 목록에서 **예약까지 맡기기**를 켭니다. Claude Code 같은 에이전트는 감시·예약·취소 전에 먼저 물어봅니다. 에이전트에 따라 묻지 않을 수도 있으니, 예약까지 맡기기는 필요할 때만 켜 주세요. `claude -p` 처럼 묻지 않고 자동으로 실행할 때는 감시·예약·취소 도구를 쓸 수 없습니다(조회는 됩니다). 결제는 언제나 직접 합니다. 연결은 앱에서 바로 끊을 수 있습니다.
+
 ## 문서 안내
 
 | 문서 | 이런 분께 | 내용 |
@@ -108,7 +121,7 @@ docker compose exec -T api python -m korail_bot.mobile admin --username <아이�
 | [Android 빌드·배포](docs/android.md) | 앱을 빌드하거나 배포하는 분 | 준비물, APK·AAB 만들기, 서명키, 휴대폰 알림(Firebase), 패키지 이름 이력 |
 | [개발 가이드](docs/development.md) | 코드를 고치는 분 | 개발 환경, 테스트와 CI, 화면 검사 규칙, 브랜치·커밋 규칙 |
 | [제품 요구사항(PRD)](docs/PRD.md) | 기획 의도가 궁금한 분 | 무엇을, 누구를 위해, 왜 만드는지 |
-| [기술 명세(SPEC)](docs/SPEC.md) | 내부 구조가 궁금한 분 | 구성, API 계약, 상태 판정, 재시작 보존, 회원 탈퇴 |
+| [기술 명세(SPEC)](docs/SPEC.md) | 내부 구조가 궁금한 분 | 구성, API 계약, 상태 판정, 재시작 보존, 회원 탈퇴, 에이전트 연결 |
 | [AGENTS.md](AGENTS.md) | AI 코딩 에이전트 | 이 저장소에서 지킬 작업 규칙 |
 
 ## 저장소 구조

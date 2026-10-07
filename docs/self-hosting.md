@@ -116,6 +116,16 @@ api.example.com {
 - Android 앱의 출처(Origin)는 `https://localhost`이고 서버 기본값(`MOBILE_ORIGINS`)에 이미 들어 있습니다. 다른 웹 출처에서 부를 때만 더합니다.
 - 같은 호스트의 `/privacy`(개인정보처리방침)와 `/delete-account`(계정 삭제 안내)도 서버가 제공합니다. 페이지에 보일 문의 주소는 `compose.yaml`의 `MOBILE_PRIVACY_CONTACT`입니다. **내 서버라면 내 주소로 바꿉니다.**
 
+### 에이전트 연결
+
+AI 에이전트(MCP 클라이언트)가 이 서버에 연결하게 하려면 `MOBILE_PUBLIC_URL`에 바깥에서 보이는 HTTPS 주소를 경로 없이 적습니다(예: `MOBILE_PUBLIC_URL=https://api.example.com`). `compose.yaml`은 셸이나 `.env`의 값을 그대로 넘기고, 비워 두면 이 기능 전체가 꺼집니다(앱의 설정에도 보이지 않습니다). 로컬 시험용으로만 `http://127.0.0.1:<포트>`·`http://localhost:<포트>`를 받습니다.
+
+에이전트는 `/api/mobile` 밖의 루트 경로도 부릅니다. 프록시가 `/.well-known/*`와 `/oauth/*`도 API로 넘기는지 확인합니다. 위의 Caddy 예시처럼 호스트 전체를 넘기면 그대로 됩니다.
+
+```bash
+curl https://api.example.com/.well-known/oauth-authorization-server   # 200 과 JSON 이면 정상
+```
+
 ## 5. 앱을 내 서버에 연결하기
 
 API 주소는 앱을 빌드할 때 웹 번들에 들어갑니다(`VITE_API_BASE_URL`). 공개 값이니 비밀값을 넣지 않습니다.

@@ -121,6 +121,7 @@ describe("capability truth", () => {
       notificationSettings: false,
       push: false,
       lastChecked: false,
+      agents: false,
     });
   });
 });

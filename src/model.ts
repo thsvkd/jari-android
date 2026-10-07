@@ -88,6 +88,7 @@ export function normalizeCapabilities(raw: Partial<Capabilities> | null | undefi
     notificationSettings: raw?.notificationSettings === true,
     push: raw?.push === true,
     lastChecked: raw?.lastChecked === true,
+    agents: raw?.agents === true,
   };
 }
 

@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 import redis
 from korail2 import TrainType
 from korail2.korail2 import Reservation, Train
+from korail_mobile_api import KorailSeatAssignment
 from korail_mobile_api.errors import KorailTransportError
 from korail_mobile_api.models import (
     PhysicalSeat,
@@ -93,6 +94,9 @@ DEFAULT_SCENARIO = {
     "login_unreachable": 0,
     # 예약 워커의 조회 결과: seats(몇 번 헛돈 뒤 빈자리) | sold_out(계속 매진) | unavailable(조회 실패)
     "search": "seats",
+    # 열차 목록(앱의 열차 조회·에이전트의 find_trains) 결과: trains(시간표대로) | sold_out(모든 열차 매진)
+    # | unavailable(코레일이 답하지 않음, HTTP 503). 조회 실패와 매진을 따로 재현하려고 둬요.
+    "list": "trains",
     "seat_after_polls": 2,
     # 결제 확인이 돌려줄 답: OUTSTANDING | PAID | RELEASED | UNKNOWN
     "outcome": "OUTSTANDING",
@@ -201,7 +205,17 @@ class FakeKorail:
         train_type,
         passenger_count,
     ) -> list:
-        _log("list_trains", dep_date=dep_date, src=src_locate, dst=dst_locate)
+        mode = scenario()["list"]
+        _log("list_trains", dep_date=dep_date, src=src_locate, dst=dst_locate, mode=mode)
+        if mode == "unavailable":
+            # 실제 클라이언트가 5xx 를 받았을 때 올리는 그 예외예요.
+            raise KorailTransportError(
+                "KORAIL HTTP 503 for POST /classes/com.korail.mobile.seatMovie.ScheduleView"
+            )
+        rows = _schedule(dep_date, dep_time)
+        if mode == "sold_out":
+            # 코레일 코드 그대로: 13 매진. 열차는 있고 좌석만 없어요.
+            rows = [dict(row, general="13", special="13") for row in rows]
         return [
             TrainSummary(
                 train_no=row["no"],
@@ -220,7 +234,7 @@ class FakeKorail:
                 special_availability_name="예약가능" if row["special"] == "11" else "매진",
                 wait_reservation_flag=" 9" if row["wait"] == 9 else "-1",
             )
-            for row in _schedule(dep_date, dep_time)
+            for row in rows
             # 실제 search_waitlist_trains 와 같은 거르기: KTX 계열만, 마감 시각은 미만.
             if (train_type != TrainType.KTX or row["group"] == "KTX")
             and (max_dep_time == "2400" or int(row["dep"][:4]) < int(max_dep_time))
@@ -341,6 +355,23 @@ class FakeKorail:
         )
 
     def reserve_designated(self, train, inventory, targets, *, passenger_count, seat_class):
+        # 실제 KorailService.reserve_designated 와 같은 검사(같은 예외·문구)예요. 팔린 좌석이나
+        # 좌석표와 다른 표시로는 잡히지 않아야, 에이전트가 고른 좌석을 그대로 믿지 않는지 드러나요.
+        if passenger_count < 1 or len(targets) != passenger_count:
+            raise ValueError("선택한 좌석 수와 승객 수가 같아야 합니다.")
+        if inventory.car_no is None or any(target.car_no != inventory.car_no for target in targets):
+            raise ValueError("한 번의 지정 예약에서는 같은 호차의 좌석만 선택할 수 있습니다.")
+        physical_by_number = {seat.seat_no: seat for seat in inventory.seats}
+        for target in targets:
+            physical = physical_by_number.get(target.seat_no)
+            if physical is None or physical.sale_possible != "Y":
+                _log("reserve_refused", reason="not_for_sale", seat=target.label)
+                raise ValueError("선택한 좌석 중 현재 판매 가능한 좌석이 없습니다.")
+            if physical.specification != target.label:
+                _log("reserve_refused", reason="label", seat=target.label)
+                raise ValueError("좌석 정보가 바뀌었습니다. 좌석표를 다시 불러와 주세요.")
+            # 실제 예약 요청이 쓰는 라이브러리 변환도 거쳐요. 좌석표 필드가 틀리면 여기서 드러나요.
+            KorailSeatAssignment.from_inventory(inventory, physical)
         limit_date, limit_time = _deadline()
         pnr = _next_id("E2E")
         _log(

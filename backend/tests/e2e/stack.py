@@ -112,6 +112,8 @@ class Stack:
             "MOBILE_REDIS_URL": self.redis_url,
             "MOBILE_DATA_DIR": str(self.data),
             "MOBILE_ORIGINS": ",".join(["https://localhost", *args.origin]),
+            # 에이전트 연결(OAuth·MCP)을 켜요. 로컬 http 라 쿠키는 __Host- 없이 나가요.
+            "MOBILE_PUBLIC_URL": self.api,
         }
         self.python, extra = interpreter()
         self.env.update(extra)

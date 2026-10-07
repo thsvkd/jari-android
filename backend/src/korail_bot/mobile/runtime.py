@@ -171,6 +171,7 @@ class MobileRuntime:
             booking_available=self.storage is not None,
             health=self.health,
             privacy_contact=config.privacy_contact,
+            public_url=config.public_url,
         )
 
     def health(self):

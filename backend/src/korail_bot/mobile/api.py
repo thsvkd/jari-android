@@ -7,6 +7,7 @@ from functools import wraps
 from flask import Flask, Response, g, jsonify, request
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 
+from korail_bot.mobile import mcp, oauth
 from korail_bot.mobile.config import MAX_REQUEST_BYTES
 from korail_bot.mobile.identity import LAST_ADMIN_MESSAGE, AuthError, timestamp
 from korail_bot.mobile.pages import delete_account_page, privacy_page
@@ -31,6 +32,8 @@ def _log_field(value):
 
 # Public pages for Google Play: any browser, no session, cacheable.
 PUBLIC_PAGES = {"/privacy": privacy_page, "/delete-account": delete_account_page}
+# Called by browsers and agents from anywhere, and answering in OAuth's own error shape.
+OAUTH_PREFIXES = ("/oauth/", "/.well-known/")
 
 
 def erase_account(identity, gateway, notifications, user):
@@ -49,7 +52,8 @@ def erase_account(identity, gateway, notifications, user):
         user["id"],
         user["username"],
         rate_limit_keys=[
-            f"{kind}:{user['id']}" for kind in ("api", "rail", "diag", "account-delete")
+            f"{kind}:{user['id']}"
+            for kind in ("api", "rail", "diag", "account-delete", "agent-code")
         ],
     )
     if notifications:
@@ -67,6 +71,7 @@ def create_app(
     booking_available=True,
     health=None,
     privacy_contact=None,
+    public_url=None,
 ):
     app = Flask(__name__)
     # This is what bounds the total size of a seat plan: one seat target is
@@ -76,6 +81,8 @@ def create_app(
     # The runtime is single-process; serialize each user's service mutations
     # so two simultaneous taps cannot launch competing search subprocesses.
     locks = [threading.RLock() for _ in range(128)]
+    # Agent connections exist only where agents can reach this API from outside.
+    agents = public_url and oauth.install(app, identity, public_url)
 
     @app.errorhandler(AuthError)
     @app.errorhandler(MiniAppError)
@@ -91,23 +98,41 @@ def create_app(
 
     @app.errorhandler(RequestEntityTooLarge)
     def too_large(exc):
+        if request.path.startswith(OAUTH_PREFIXES):
+            return jsonify(error="invalid_request"), 413
+        if request.path == mcp.PATH:
+            error = {"code": -32600, "message": "Request too large"}
+            return jsonify(jsonrpc="2.0", id=None, error=error), 413
         # Only a seat selection can realistically reach the body limit, and
         # "요청 내용을 확인해 주세요" leaves the user nothing to act on.
         return jsonify(error="좌석 범위가 너무 커요. 선택한 좌석을 줄여 주세요."), 413
 
     @app.errorhandler(HTTPException)
     def http_error(exc):
+        if request.path.startswith(OAUTH_PREFIXES):
+            return jsonify(error="invalid_request"), exc.code
+        if request.path == mcp.PATH:
+            response = jsonify(jsonrpc="2.0", id=None, error={"code": -32600, "message": exc.name})
+            response.status_code = exc.code
+            if exc.code == 405:
+                response.headers["Allow"] = "POST"
+            return response
         return jsonify(error="요청 내용을 확인해 주세요."), exc.code
 
     @app.errorhandler(Exception)
     def internal_error(exc):
         # Upstream exception strings can contain railway credentials.
         app.logger.error("Mobile request failed (%s)", type(exc).__name__)
+        if request.path.startswith(OAUTH_PREFIXES):
+            return jsonify(error="server_error"), 500
+        if request.path == mcp.PATH:
+            error = {"code": -32603, "message": "Internal error"}
+            return jsonify(jsonrpc="2.0", id=None, error=error), 500
         return jsonify(error="처리 중 문제가 생겼어요. 잠시 후 다시 시도해 주세요."), 500
 
     @app.before_request
     def validate_request():
-        if request.path in PUBLIC_PAGES:
+        if request.path in PUBLIC_PAGES or request.path.startswith(OAUTH_PREFIXES):
             return
         origin = request.headers.get("Origin")
         if origin and origin not in origins:
@@ -290,7 +315,10 @@ def create_app(
             # sent, and showing "방금 확인" for a search nobody was performing
             # is the one thing worse than admitting the state is unknown.
             "lastChecked": True,
+            "agents": bool(agents),
         }
+        if agents:
+            result["agents"] = {"mcpUrl": agents.resource}
         result["notifications"] = {
             "pushAvailable": bool(notifications and notifications.push_available)
         }
@@ -440,5 +468,57 @@ def create_app(
         else:
             notifications.remove_device(g.user["storage_id"], token)
         return jsonify(ok=True, pushAvailable=True)
+
+    if not agents:
+        return app
+    mcp.install(app, identity, gateway, agents, locks)
+
+    def agent_code_budget():
+        # Lookups, approvals and denials alike: a wrong guess spends the same as a right one.
+        limited("agent-code:" + g.user["id"], 10, 300)
+
+    @app.post(PREFIX + "/agents/requests/lookup")
+    @authenticated
+    def agent_lookup():
+        agent_code_budget()
+        found = agents.lookup(g.user["id"], g.payload.get("code"), oauth.client_country())
+        if found is None:
+            raise AuthError("코드를 다시 확인해 주세요.", 404)
+        return jsonify(found)
+
+    @app.post(PREFIX + "/agents/requests/approve")
+    @app.post(PREFIX + "/agents/requests/deny")
+    @authenticated
+    def agent_decide():
+        agent_code_budget()
+        approve = request.path.endswith("/approve")
+        # A new connection only reads: booking is turned on later, from the list. An
+        # older app that still sends the switch is refused rather than half obeyed.
+        if approve and "allowBooking" in g.payload:
+            raise AuthError("앱을 업데이트한 뒤 다시 연결해 주세요.", 400)
+        scope = oauth.READ if approve else None
+        request_id = g.payload.get("requestId")
+        if not isinstance(request_id, str) or not agents.decide(g.user["id"], request_id, scope):
+            raise AuthError("코드를 다시 확인해 주세요.", 404)
+        return jsonify(approved=approve)
+
+    @app.get(PREFIX + "/agents")
+    @authenticated
+    def agent_list():
+        return jsonify(agents=agents.connections(g.user["id"]))
+
+    @app.route(PREFIX + "/agents/<grant_id>", methods=["POST", "DELETE"])
+    @authenticated
+    def agent_change(grant_id):
+        if request.method == "DELETE":
+            if not agents.disconnect(g.user["id"], grant_id):
+                raise AuthError("연결을 찾지 못했어요. 목록을 새로 불러와 주세요.", 404)
+            return jsonify(disconnected=True)
+        allow = g.payload.get("allowBooking")
+        if not isinstance(allow, bool):
+            raise AuthError("예약까지 맡길지 다시 골라 주세요.", 400)
+        if not agents.set_booking(g.user["id"], grant_id, allow):
+            raise AuthError("연결을 찾지 못했어요. 목록을 새로 불러와 주세요.", 404)
+        return jsonify(id=grant_id, allowBooking=allow)
 
     return app

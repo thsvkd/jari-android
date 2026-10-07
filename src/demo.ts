@@ -1,5 +1,7 @@
+import { ApiError } from "./api";
 import { normalizeCapabilities } from "./model";
 import type {
+  AgentConnection,
   AuthResult,
   BootstrapState,
   Conditions,
@@ -78,6 +80,9 @@ const demoSeats: SeatMapSeat[] = Array.from({ length: 16 }, (_, index) => {
   };
 });
 
+/** 체험 모드에서 받는 에이전트 연결 코드. 화면의 입력칸 도움말에 보여요. */
+export const DEMO_AGENT_CODE = "WXYZ-2345";
+
 const demoInventory = (): SeatInventory => ({
   carNo: 3,
   layoutType: 2,
@@ -112,6 +117,11 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     { id: "demo-event-2", text: "⚠️ 코레일 조회가 잠시 막혔어요\n서울 → 부산 · 07:00~12:00\n\n잠시 뒤 자동으로 다시 찾아요.", createdAt: ago(95), kind: "error" },
     { id: "demo-event-1", text: "데모 화면이에요. 실제로 열차를 조회하거나 예약하지 않아요.", createdAt: ago(60 * 26), kind: "search" },
   ];
+
+  let agents: AgentConnection[] = [
+    { id: "demo-claude", name: "Claude", host: "claude.ai", local: false, allowBooking: false, createdAt: ago(60 * 24 * 3), lastUsedAt: ago(40) },
+  ];
+  const agentNotFound = () => new ApiError("코드를 다시 확인해 주세요.", 404);
 
   const asSearch = (conditions: Conditions, trains: string[]): RunningSearch => ({
     depDate: conditions.dep_date,
@@ -176,7 +186,9 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
       favourites: true,
       notificationSettings: true,
       lastChecked: true,
+      agents: true,
     }),
+    agents: { mcpUrl: "https://jari.example/api/mobile/mcp" },
     pushAvailable: false,
     notifications: { pushAvailable: false },
     demo: true,
@@ -279,5 +291,32 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     registerDevice: async () => ({ ok: false, pushAvailable: false }),
     deleteDevice: async () => ({ ok: true, pushAvailable: false }),
     status: async () => ({ running, scheduled, pending }),
+    agentLookup: async (code) => {
+      if (code.replace(/[-\s]/g, "").toUpperCase() !== DEMO_AGENT_CODE.replace("-", "")) throw agentNotFound();
+      return {
+        requestId: "demo-request",
+        client: { name: "Claude Code", host: "localhost", local: true },
+        requestedAt: ago(1),
+        expiresAt: new Date(clock().getTime() + 540_000).toISOString(),
+      };
+    },
+    agentApprove: async (requestId) => {
+      if (requestId !== "demo-request") throw agentNotFound();
+      agents = [
+        { id: `demo-agent-${agents.length + 1}`, name: "Claude Code", host: "localhost", local: true, allowBooking: false, createdAt: clock().toISOString(), lastUsedAt: null },
+        ...agents,
+      ];
+      return { approved: true };
+    },
+    agentDeny: async () => ({ approved: false }),
+    agents: async () => ({ agents: agents.map((agent) => ({ ...agent })) }),
+    agentSetBooking: async (id, allowBooking) => {
+      agents = agents.map((agent) => (agent.id === id ? { ...agent, allowBooking } : agent));
+      return { id, allowBooking };
+    },
+    agentDisconnect: async (id) => {
+      agents = agents.filter((agent) => agent.id !== id);
+      return { disconnected: true };
+    },
   };
 }

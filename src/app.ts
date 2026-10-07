@@ -1,5 +1,5 @@
 import { ApiError } from "./api";
-import { createDemoApi } from "./demo";
+import { createDemoApi, DEMO_AGENT_CODE } from "./demo";
 import { badge, button, chip as chipButton, choice, dialog as overlay, emptyMark, emptyState, linkButton, listRow, notice, stepper, type Tone } from "./ui/components";
 import { esc as escapeHtml } from "./ui/html";
 import { DatePicker, departureRange, localIso } from "./date-picker";
@@ -30,6 +30,8 @@ import {
   type SeatFilter,
 } from "./seat-map";
 import type {
+  AgentConnection,
+  AgentRequest,
   BootstrapState,
   CancellationWaitPlan,
   Conditions,
@@ -59,7 +61,8 @@ export type AppView =
   | "favourites"
   | "notifications"
   | "settings"
-  | "rail-account";
+  | "rail-account"
+  | "agents";
 
 interface AppOptions {
   demoMode: boolean;
@@ -100,6 +103,7 @@ interface SheetState {
   title: string;
   body: string;
   content: string;
+  cancelLabel: string;
   confirmLabel: string;
   danger: boolean;
   resolve: (value: string | null) => void;
@@ -196,6 +200,27 @@ function splitNotice(text: string, fallbackTitle: string): { title: string; deta
 // 찾기 상태 배지 색. 정상은 기본 파랑, 문제는 주황, 아직 모르는 상태는 회색이에요.
 const RADAR_TONE: Partial<Record<RadarKind, Tone>> = { error: "warning", stale: "warning", offline: "warning", idle: "muted", "running-unverified": "muted" };
 
+/** 연결을 요청한 곳. 루프백 주소는 사용자의 컴퓨터일 수도, 코드를 알려 준 다른 사람의 컴퓨터일 수도 있어서 "이 컴퓨터"라고 하지 않아요. */
+function agentHost(client: { host: string; local: boolean }): string {
+  return client.local ? "컴퓨터에서 실행한 프로그램(localhost)" : client.host;
+}
+
+function bookingSwitch(on: boolean, attrs: Record<string, string>): string {
+  const data = Object.entries(attrs).map(([key, value]) => ` ${key}="${escapeHtml(value)}"`).join("");
+  return `<button type="button" class="switch-row" role="switch" aria-checked="${on}"${data}><span><b>예약까지 맡기기</b><small>켜면 취소표 감시와 좌석 예약을 맡겨요. 결제는 직접 해요.</small></span><i aria-hidden="true"></i></button>`;
+}
+
+const AGENT_CONNECTED = "연결했어요. 예약까지 맡기려면 아래 목록에서 켜 주세요.";
+
+/** 나라 코드(JP)를 한국어 이름(일본)으로. 이름을 모르면 코드 그대로예요. */
+function countryName(code: string): string {
+  try {
+    return new Intl.DisplayNames("ko", { type: "region" }).of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
+
 function formatStamp(value: string | null | undefined): string {
   if (!value) return "시각 정보 없음";
   const date = new Date(value);
@@ -268,6 +293,14 @@ export class JariApp {
   private cancellationTargets: CancellationWaitPlan["trains"] = [];
   private notifications: NotificationItem[] = [];
   private notificationsLoaded = false;
+  /** 에이전트 연결 목록. null 은 아직 불러오지 않았다는 뜻이에요. */
+  private agentConnections: AgentConnection[] | null = null;
+  /** 승인한 뒤 브라우저 쪽이 토큰을 받아 연결이 목록에 나타나기를 기다리는 중(2초마다 다시 읽어요). */
+  private agentWait: { timer: number } | null = null;
+  /** 2분을 기다려도 새 연결이 나타나지 않았어요. 다음 승인이나 화면을 다시 열 때까지 알려요. */
+  private agentWaitFailed = false;
+  /** 목록을 읽지 못했어요. "불러오고 있어요"에 머물지 않게 따로 알려요. */
+  private agentsLoadFailed = false;
   private authGate: "choose" | "admin" | "guest" = "choose";
   private authMode: "login" | "register" = "login";
   private invitePreview = "";
@@ -384,6 +417,11 @@ export class JariApp {
     // Leave nobody awaiting a sheet that the reset just removed from the screen.
     this.sheet?.resolve(null);
     this.sheet = null;
+    // 다음 계정의 화면에 앞 계정의 연결이 한순간도 보이지 않게요.
+    this.stopAgentWait();
+    this.agentConnections = null;
+    this.agentWaitFailed = false;
+    this.agentsLoadFailed = false;
     this.inviteLoading = false;
     this.notifySaveVersion += 1;
     this.cancellationTargets = [];
@@ -428,6 +466,7 @@ export class JariApp {
     for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"]) this.root.removeEventListener(type, this.onToastPointer as EventListener);
     this.datePicker.dispose();
     this.timePicker.dispose();
+    this.stopAgentWait();
     window.removeEventListener("keydown", this.onKeyDown);
     document.removeEventListener("visibilitychange", this.onVisibilityChange);
     window.removeEventListener("online", this.resumeConnection);
@@ -447,6 +486,8 @@ export class JariApp {
     const screen = this.root.querySelector<HTMLElement>(".screen");
     if (screen) screen.scrollTop = 0;
     if (next === "notifications") void this.loadNotifications();
+    if (next === "agents") void this.loadAgents();
+    else this.stopAgentWait();
   }
 
   back(): boolean {
@@ -586,6 +627,11 @@ export class JariApp {
     const fields = Array.from(this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select"))
       .filter((field) => !field.closest("#conditions-form"))
       .map((field) => ({ id: field.id, name: field.name, form: field.form?.id, value: field.value, checked: field instanceof HTMLInputElement && field.checked }));
+    // The agent list can arrive while the code is being typed; keep typing where it was.
+    // Only that field: refocusing a date or time field would reopen its picker.
+    const typing = document.activeElement instanceof HTMLInputElement && document.activeElement.id === "agent-code"
+      ? { start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd }
+      : null;
     const restoreFields = () => {
       for (const field of this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")) {
         const old = fields.find((item) => item.id === field.id && item.name === field.name && item.form === field.form?.id);
@@ -593,6 +639,10 @@ export class JariApp {
         field.value = old.value;
         if (field instanceof HTMLInputElement) field.checked = old.checked;
       }
+      const code = typing && this.root.querySelector<HTMLInputElement>("#agent-code");
+      if (!code) return;
+      code.focus();
+      code.setSelectionRange(typing.start, typing.end);
     };
     if (document.documentElement.dataset.theme !== this.theme) void this.options.onTheme?.(this.theme);
     document.documentElement.dataset.theme = this.theme;
@@ -646,6 +696,8 @@ export class JariApp {
         return this.renderSettings();
       case "rail-account":
         return this.renderRailAccount();
+      case "agents":
+        return this.renderAgents();
       default:
         return this.renderHome();
     }
@@ -992,16 +1044,17 @@ export class JariApp {
       <h2 id="action-sheet-title">${escapeHtml(sheet.title)}</h2>
       ${sheet.body ? `<p>${escapeHtml(sheet.body)}</p>` : ""}
       ${sheet.content}
-      <div class="action-sheet-actions">${button({ variant: "ghost", action: "sheet-cancel", label: "취소" })}${button({ variant: sheet.danger ? "danger" : "primary", action: "sheet-confirm", label: sheet.confirmLabel })}</div>` });
+      <div class="action-sheet-actions">${button({ variant: "ghost", action: "sheet-cancel", label: sheet.cancelLabel })}${button({ variant: sheet.danger ? "danger" : "primary", action: "sheet-confirm", label: sheet.confirmLabel })}</div>` });
   }
 
-  private openSheet(options: { title: string; body?: string; content?: string; confirmLabel: string; danger?: boolean }): Promise<string | null> {
+  private openSheet(options: { title: string; body?: string; content?: string; cancelLabel?: string; confirmLabel: string; danger?: boolean }): Promise<string | null> {
     this.closeSheet(null);
     return new Promise((resolve) => {
       this.sheet = {
         title: options.title,
         body: options.body ?? "",
         content: options.content ?? "",
+        cancelLabel: options.cancelLabel ?? "취소",
         confirmLabel: options.confirmLabel,
         danger: options.danger === true,
         resolve,
@@ -1067,7 +1120,7 @@ export class JariApp {
     const pairs = `<div class="seat-pair-row" role="group" aria-label="창가·복도">${chip("pair:window", "창가", allOn(sets.window))}${sets.aisle.length ? chip("pair:aisle", "복도", allOn(sets.aisle)) : ""}</div>`;
     // 가족석 제외는 자리를 고르는 칩이 아니라 켜고 끄는 조건이라 조건 칸 밖의 스위치예요.
     const familyToggle = seats.some((seat) => seat.familyLabel)
-      ? `<button type="button" class="seat-family-toggle" role="switch" aria-checked="${filter.excludeFamily}" data-seat-filter="family:exclude" ${locked ? "disabled" : ""}><span><b>가족석 제외</b><small>마주 보는 4인 동반석은 고르지 않아요</small></span><i aria-hidden="true"></i></button>`
+      ? `<button type="button" class="switch-row" role="switch" aria-checked="${filter.excludeFamily}" data-seat-filter="family:exclude" ${locked ? "disabled" : ""}><span><b>가족석 제외</b><small>마주 보는 4인 동반석은 고르지 않아요</small></span><i aria-hidden="true"></i></button>`
       : "";
     return `<div class="seat-filter"><div class="seat-pick-row">${letters}${pairs}</div><div class="seat-filter-row seat-steppers">${stepper("trim", "좌석 앞뒤 제외", trimLabel, filter.trimRows <= 0, filter.trimRows >= maxTrimRows(seats))}${carStepper}</div></div>${familyToggle}`;
   }
@@ -1580,6 +1633,7 @@ export class JariApp {
     const notifyAvailable = state.capabilities.notificationSettings;
     return `<div class="settings-layout"><aside class="settings-profile"><section class="profile-card"><span class="profile-avatar">${escapeHtml((state.user?.username || "나").slice(0, 1))}</span><div><b>${escapeHtml(state.user?.username || "여행자")}</b><small>${state.user?.role === "admin" ? "관리자 계정" : "초대로 가입한 계정"}</small></div></section></aside>
       <div class="settings-groups"><section class="settings-section"><p class="eyebrow">철도 계정</p>${listRow({ view: "rail-account", title: "코레일 계정", hint: state.rail.registered ? "연결됨 · 모든 고속열차 예약 준비 완료" : "연결되지 않음", value: `${state.rail.registered ? "관리" : "연결"} →` })}${listRow({ title: "수서 출발 고속열차", hint: "별도 SRT 계정 없이 코레일 계정으로 이용해요", trailing: badge({ tone: "success", className: "integrated-badge", label: "통합됨" }) })}</section>
+      ${state.capabilities.agents ? `<section class="settings-section"><p class="eyebrow">AI 에이전트</p>${listRow({ view: "agents", title: "에이전트 연결", hint: "AI 에이전트가 열차를 찾고 예약하게 해요", value: "관리 →" })}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">알림</p>${listRow({ title: "찾기 상황 알림", hint: notifyAvailable ? "찾는 중 진행 상황을 알려드리는 간격" : "현재 서버에서는 알림 간격을 바꿀 수 없어요", trailing: stepper({ small: true, label: "찾기 상황 알림 간격", value: notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가", decrease: "notify-minus", increase: "notify-plus", disabled: !notifyAvailable, atMin: state.notifyMinutes <= NOTIFY_STEPS[0]!, atMax: state.notifyMinutes >= NOTIFY_STEPS[NOTIFY_STEPS.length - 1]! }) })}${listRow({ action: "request-push", disabled: !pushAvailable, title: "휴대폰 알림", hint: pushAvailable ? "Android 알림 권한 열기" : "휴대폰 알림 서비스가 아직 준비되지 않았어요", value: pushAvailable ? "설정" : "이용 불가" })}</section>
       ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p>${badge({ className: "admin-only-badge", label: "관리자 전용" })}</div><p class="settings-section-copy">회원 가입 권한은 관리자만 발급할 수 있어요.</p>${listRow({ action: "create-invite", disabled: this.inviteLoading, title: "회원 초대 코드", hint: "관리자만 만들 수 있는 일회용 가입 코드예요", trailing: this.inviteLoading ? '<em><span class="inline-spinner" aria-hidden="true"></span><span class="sr-only">만드는 중</span></em>' : undefined, value: "만들기 →" })}${this.invitePreview ? `<div class="invite-card"><p>코드는 이 화면을 닫으면 다시 볼 수 없어요. 가입할 분에게 바로 전달해 주세요. 띄어쓰기나 대소문자는 상관없어요.</p><code>${escapeHtml(this.invitePreview)}</code><div class="invite-actions">${button({ action: "copy-invite", label: "복사" })}${button({ variant: "ghost", action: "dismiss-invite", label: "닫기" })}</div></div>` : ""}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">앱</p>${listRow({ action: "theme", title: "화면 테마", hint: "시스템과 별도로 바꿀 수 있어요", value: this.theme === "dark" ? "다크" : "라이트" })}${listRow({ title: "앱 버전", hint: `서버 ${state.version}`, value: `v${appPackage.version}` })}</section>
@@ -1595,6 +1649,48 @@ export class JariApp {
     return `${this.renderSubhead("코레일 계정", registered ? "연결된 계정 관리" : "예약을 위한 계정 연결")}
       ${notice({ tone: "calm", title: "로그인 정보는 서버에서만 사용해요.", text: "앱에는 코레일 비밀번호를 저장하지 않으며, 서버 응답에도 비밀번호를 담지 않아요." })}
       ${registered ? `<section class="card"><div class="account-state"><span>✓</span><div><b>코레일 계정 연결됨</b><small>열차 조회와 예약을 시작할 수 있어요.</small></div></div>${button({ variant: "ghost-danger", action: "rail-logout", label: "코레일 계정 연결 해제" })}</section>` : `<form id="rail-form" class="form-stack"><label class="field"><span>휴대전화 번호 또는 회원번호</span><input name="username" inputmode="tel" maxlength="20" autocomplete="username" aria-describedby="rail-login-hint" required><small id="rail-login-hint">회원번호는 숫자 8자리 또는 10자리예요.</small></label><label class="field"><span>코레일 비밀번호</span><input name="password" type="password" maxlength="128" autocomplete="current-password" required></label>${this.state!.capabilities.korail ? "" : '<p class="availability center">예약 서버가 연결되지 않아 코레일 계정을 확인할 수 없어요.</p>'}${this.renderError()}${button({ type: "submit", label: "계정 확인하고 연결", disabled: !this.state!.capabilities.korail })}</form>`}`;
+  }
+
+  private renderAgents(): string {
+    const url = this.state?.agents?.mcpUrl ?? "";
+    const connections = this.agentConnections;
+    // 같은 이름·돌아갈 곳의 연결이 여럿이면 가장 최근 것을 표시해요. 다시 인가한 에이전트를 가려내라고요.
+    const groups = new Map<string, AgentConnection[]>();
+    for (const agent of connections ?? []) {
+      const key = `${agent.name}
+${agentHost(agent)}`;
+      groups.set(key, [...(groups.get(key) ?? []), agent]);
+    }
+    const repeated = new Set(
+      [...groups.values()]
+        .filter((group) => group.length > 1)
+        .map((group) => group.reduce((latest, agent) => (agent.createdAt > latest.createdAt ? agent : latest)).id),
+    );
+    const list = connections === null
+      ? `<p class="availability center">${this.agentsLoadFailed ? "연결 목록을 불러오지 못했어요. 화면을 다시 열어 주세요." : "연결 목록을 불러오고 있어요."}</p>`
+      : connections.length
+        ? connections.map((agent) => this.renderAgentRow(agent, repeated.has(agent.id))).join("")
+        : emptyState({ compact: true, text: "아직 연결한 에이전트가 없어요." });
+    const status = this.agentWait
+      ? '<p class="agent-waiting" role="status"><span class="inline-spinner" aria-hidden="true"></span>브라우저에서 연결을 마치는 중이에요</p>'
+      : this.agentWaitFailed
+        ? '<p class="agent-waiting failed" role="alert">연결이 끝나지 않았어요. 에이전트에서 연결을 다시 시작해 주세요.</p>'
+        : "";
+    const howto = `<code class="agent-url">${escapeHtml(url)}</code>${button({ variant: "secondary", action: "copy-agent-url", label: "주소 복사" })}
+        <div class="agent-howto"><p><b>Claude Code</b> 터미널에서 이 명령을 실행한 뒤, Claude Code 에서 /mcp 를 열어 jari 를 고르고 인증을 시작해 주세요.</p><code class="agent-url">claude mcp add -s user --transport http jari ${escapeHtml(url)}</code>${button({ variant: "ghost", action: "copy-agent-command", label: "명령 복사" })}<p><b>claude.ai</b> 설정 → 커넥터 → 커스텀 커넥터 추가에서 위 주소를 넣고 연결을 눌러 주세요.</p><p>연결을 시작하면 브라우저에 8자리 코드가 나와요. 그 코드를 아래에 넣어 주세요. Claude Code 같은 에이전트는 감시·예약·취소 전에 먼저 물어봐요. 에이전트에 따라 묻지 않을 수도 있으니, 예약까지 맡기기는 필요할 때만 켜 주세요.</p></div>`;
+    const listSection = `<section class="settings-section agent-list"><p class="eyebrow">연결한 에이전트</p>${status}${list}</section>`;
+    // 이미 연결이 있으면 자주 쓰는 코드 입력과 목록을 먼저, 연결 방법은 접어 둬요.
+    const connected = Boolean(connections?.length);
+    const card = connected
+      ? `<details class="card agent-connect"><summary>에이전트에 이 주소를 넣어 주세요</summary>${howto}</details>`
+      : `<section class="card agent-connect"><h2>에이전트에 이 주소를 넣어 주세요</h2>${howto}</section>`;
+    const form = `<form id="agent-code-form" class="card form-stack"><label class="field"><span>브라우저에 나온 8자리 코드</span><input id="agent-code" name="agent_code" maxlength="9" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" aria-describedby="agent-code-hint" required><small id="agent-code-hint">${this.demo ? `체험 모드에서는 ${DEMO_AGENT_CODE} 를 넣어 보세요.` : "에이전트가 연 브라우저에 나온 코드예요. 직접 연 브라우저의 코드만 넣어 주세요."}</small></label>${this.renderError()}${button({ type: "submit", label: "확인" })}</form>`;
+    return `${this.renderSubhead("AI 에이전트", "에이전트 연결")}
+      ${connected ? `${form}${listSection}${card}` : `${card}${form}${listSection}`}`;
+  }
+
+  private renderAgentRow(agent: AgentConnection, newest: boolean): string {
+    return `<article class="card agent-row"><div class="agent-row-head"><b>${escapeHtml(agent.name)}${newest ? ` ${badge({ tone: "success", label: "가장 최근" })}` : ""}</b><small>${escapeHtml(agentHost(agent))}</small></div><p class="agent-row-meta">${escapeHtml(formatStamp(agent.createdAt))} 연결 · 마지막 사용 ${escapeHtml(agent.lastUsedAt ? formatStamp(agent.lastUsedAt) : "아직 없음")}</p>${bookingSwitch(agent.allowBooking, { "data-agent-booking": agent.id })}${button({ variant: "ghost-danger", label: "연결 끊기", attrs: { "data-agent-disconnect": agent.id } })}</article>`;
   }
 
   private renderAuth(): string {
@@ -2094,6 +2190,155 @@ export class JariApp {
     }
   }
 
+  private async loadAgents(): Promise<void> {
+    if (!this.state?.capabilities.agents) return;
+    // Not run(), for the same reason as notifications: a busy app would leave the list "loading".
+    const generation = this.generation;
+    this.agentWaitFailed = false;
+    try {
+      const result = await this.api.agents();
+      if (generation !== this.generation) return;
+      this.agentConnections = result.agents;
+      this.agentsLoadFailed = false;
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.handleError(error);
+      this.agentsLoadFailed = true;
+      // handleError stays silent for a stale token; the list must still leave "loading".
+      if (generation === this.generation && !this.error) this.error = "연결 목록을 불러오지 못했어요.";
+    }
+    this.render();
+  }
+
+  /** 승인 뒤 2초마다 목록을 다시 읽어 새 연결이 보이면 멈춰요. 2분이 지나거나 화면을 떠나도 멈춰요. */
+  private waitForAgent(known: Set<string>): void {
+    this.stopAgentWait();
+    const generation = this.generation;
+    const until = Date.now() + 120_000;
+    // An interval, not a chain of timeouts: the next read is due on time even while one is slow.
+    const tick = async () => {
+      if (!this.agentWait || generation !== this.generation || this.view !== "agents") {
+        this.stopAgentWait();
+        return;
+      }
+      if (Date.now() >= until) {
+        this.stopAgentWait();
+        this.agentWaitFailed = true;
+        this.render();
+        return;
+      }
+      try {
+        const result = await this.api.agents();
+        if (!this.agentWait || generation !== this.generation) return;
+        this.agentConnections = result.agents;
+        if (result.agents.some((agent) => !known.has(agent.id))) {
+          this.stopAgentWait();
+          this.showToast(AGENT_CONNECTED);
+        }
+      } catch {
+        // 한 번 못 읽은 것은 다음 차례에 다시 읽어요.
+      }
+      if (this.view === "agents") this.render();
+    };
+    this.agentWait = { timer: window.setInterval(() => void tick(), 2_000) };
+  }
+
+  private stopAgentWait(): void {
+    if (this.agentWait) window.clearInterval(this.agentWait.timer);
+    this.agentWait = null;
+  }
+
+  private async submitAgentCode(form: HTMLFormElement): Promise<void> {
+    const code = String(new FormData(form).get("agent_code") || "");
+    let found = null as AgentRequest | null;
+    await this.run(async (isCurrent) => {
+      const result = await this.api.agentLookup(code);
+      if (isCurrent()) found = result;
+    });
+    if (found) await this.decideAgent(found);
+  }
+
+  /** 코드로 찾은 요청을 보여 주고 사용자가 연결하거나 거절해요. 시트를 그냥 닫아도 거절이에요. */
+  private async decideAgent(found: AgentRequest): Promise<void> {
+    const minutes = Math.max(0, Math.round((Date.now() - new Date(found.requestedAt).getTime()) / 60_000));
+    // 이름과 돌아갈 곳은 에이전트가 스스로 밝힌 값이라 확인된 사실처럼 쓰지 않아요.
+    const facts = [
+      `에이전트가 밝힌 이름: ${found.client.name}`,
+      `돌아갈 곳: ${agentHost(found.client)}`,
+      `요청 시각: ${minutes ? `${minutes}분 전 요청` : "방금 요청"}`,
+      ...(found.requestCountry ? [`요청한 브라우저 위치: ${countryName(found.requestCountry)}`] : []),
+      "허용할 일: 열차·좌석·상태 조회",
+    ];
+    const elsewhere = found.countryMismatch
+      ? '<p class="agent-warning strong" role="alert">코드를 요청한 브라우저가 지금 휴대폰과 다른 나라에 있어요. 직접 요청한 게 아니라면 거절해 주세요.</p>'
+      : "";
+    // 승인 전 목록: 교환이 승인 직후 끝나도 새 연결로 알아봐요.
+    const known = new Set((this.agentConnections ?? []).map((agent) => agent.id));
+    const generation = this.generation;
+    const approved = (await this.openSheet({
+      title: "에이전트가 자리났다에 연결하려고 해요",
+      content: `<ul class="agent-request">${facts.map((fact) => `<li>${escapeHtml(fact)}</li>`).join("")}</ul>${elsewhere}<p class="agent-warning">직접 연 브라우저에 나온 코드만 입력해 주세요. 다른 사람이 알려 준 코드라면 거절해 주세요.</p><p>예약까지 맡기려면 연결한 뒤 목록에서 켜 주세요.</p>`,
+      cancelLabel: "거절",
+      confirmLabel: "연결하기",
+    })) !== null;
+    // 로그아웃 같은 세션 리셋이 시트를 닫은 것이면 거절로 보내지 않아요.
+    if (generation !== this.generation) return;
+    this.agentWaitFailed = false;
+    await this.run(async (isCurrent) => {
+      if (approved) await this.api.agentApprove(found.requestId);
+      else await this.api.agentDeny(found.requestId);
+      const result = await this.api.agents();
+      if (!isCurrent()) return;
+      this.agentConnections = result.agents;
+      const input = this.root.querySelector<HTMLInputElement>("#agent-code");
+      if (input) input.value = "";
+      if (!approved) {
+        this.showToast("연결을 거절했어요");
+      } else if (result.agents.some((agent) => !known.has(agent.id))) {
+        this.showToast(AGENT_CONNECTED);
+      } else {
+        this.showToast("승인했어요. 브라우저로 돌아가 연결을 마쳐 주세요.");
+        this.waitForAgent(known);
+      }
+    });
+  }
+
+  private async setAgentBooking(id: string): Promise<void> {
+    const agent = this.agentConnections?.find((item) => item.id === id);
+    if (!agent) return;
+    await this.run(async (isCurrent) => {
+      const result = await this.api.agentSetBooking(id, !agent.allowBooking);
+      if (!isCurrent()) return;
+      agent.allowBooking = result.allowBooking;
+      this.showToast(result.allowBooking ? "예약까지 맡겼어요." : "이제 조회만 맡겨요.");
+    });
+  }
+
+  private async disconnectAgent(id: string): Promise<void> {
+    const agent = this.agentConnections?.find((item) => item.id === id);
+    if (!agent) return;
+    const confirmed = await this.confirmSheet({
+      title: "이 에이전트와 연결을 끊을까요?",
+      body: `${agent.name} · ${agentHost(agent)}. 다시 쓰려면 처음부터 연결해야 해요.`,
+      confirmLabel: "연결 끊기",
+      danger: true,
+    });
+    if (!confirmed) return;
+    await this.run(async (isCurrent) => {
+      await this.api.agentDisconnect(id);
+      if (!isCurrent()) return;
+      this.agentConnections = this.agentConnections?.filter((item) => item.id !== id) ?? null;
+      this.showToast("연결을 끊었어요.");
+    });
+  }
+
+  private copyText(text: string, done: string, failed = "이 기기에서는 복사할 수 없어요. 직접 옮겨 적어 주세요."): void {
+    void navigator.clipboard?.writeText(text).then(
+      () => this.showToast(done),
+      () => this.showToast(failed),
+    );
+  }
+
   private async loadNotifications(): Promise<void> {
     if (!this.state?.capabilities.durableNotifications) return;
     // Not run(): it drops the request while the app is busy, which would read as "no notifications".
@@ -2319,6 +2564,14 @@ export class JariApp {
       }
       return;
     }
+    if (button.dataset.agentBooking) {
+      void this.setAgentBooking(button.dataset.agentBooking);
+      return;
+    }
+    if (button.dataset.agentDisconnect) {
+      void this.disconnectAgent(button.dataset.agentDisconnect);
+      return;
+    }
     const deleteId = button.dataset.deleteFavourite;
     if (deleteId) {
       void this.deleteFavourite(deleteId);
@@ -2448,10 +2701,7 @@ export class JariApp {
         break;
       case "copy-invite":
         if (this.invitePreview) {
-          void navigator.clipboard?.writeText(this.invitePreview).then(
-            () => this.showToast("초대 코드를 복사했어요."),
-            () => this.showToast("이 기기에서는 복사할 수 없어요. 코드를 직접 전달해 주세요."),
-          );
+          this.copyText(this.invitePreview, "초대 코드를 복사했어요.", "이 기기에서는 복사할 수 없어요. 코드를 직접 전달해 주세요.");
         }
         break;
       case "dismiss-invite":
@@ -2460,6 +2710,12 @@ export class JariApp {
         break;
       case "rail-logout":
         void this.railLogout();
+        break;
+      case "copy-agent-url":
+        this.copyText(this.state?.agents?.mcpUrl ?? "", "주소를 복사했어요.");
+        break;
+      case "copy-agent-command":
+        this.copyText(`claude mcp add -s user --transport http jari ${this.state?.agents?.mcpUrl ?? ""}`, "명령을 복사했어요.");
         break;
       case "sheet-cancel":
         this.closeSheet(null);
@@ -2510,6 +2766,12 @@ export class JariApp {
 
   private onChange(event: Event): void {
     const target = event.target as HTMLInputElement;
+    if (target.id === "agent-code") {
+      // ABCD-EFGH: 대문자로 바꾸고 네 글자 뒤에 하이픈을 넣어요. 서버도 대소문자·하이픈을 무시해요.
+      const letters = target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+      target.value = letters.length > 4 ? `${letters.slice(0, 4)}-${letters.slice(4)}` : letters;
+      return;
+    }
     if (target.id === "sheet-date") {
       this.syncSheetDateChips();
       return;
@@ -2541,6 +2803,8 @@ export class JariApp {
       void this.submitAuth(form);
     } else if (form.id === "rail-form") {
       void this.submitRail(form);
+    } else if (form.id === "agent-code-form") {
+      void this.submitAgentCode(form);
     }
   }
 

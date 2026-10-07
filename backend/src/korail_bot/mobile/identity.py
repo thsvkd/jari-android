@@ -71,6 +71,35 @@ class IdentityStore:
                 CREATE TABLE IF NOT EXISTS rate_limits (
                     key TEXT PRIMARY KEY, expires REAL NOT NULL, count INTEGER NOT NULL
                 );
+                -- Agent connections (oauth.py). Secrets are kept as digests only, and deleting
+                -- a user cascades to its connections, their tokens and the requests it held.
+                CREATE TABLE IF NOT EXISTS oauth_clients (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris TEXT NOT NULL,
+                    created REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS oauth_grants (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL, scope TEXT NOT NULL,
+                    created REAL NOT NULL, last_used REAL, expires REAL NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS oauth_requests (
+                    id TEXT PRIMARY KEY, user_code_hash TEXT UNIQUE NOT NULL,
+                    browser_hash TEXT NOT NULL, client_id TEXT NOT NULL,
+                    redirect_uri TEXT NOT NULL, code_challenge TEXT NOT NULL, state TEXT, country TEXT,
+                    created REAL NOT NULL, expires REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+                    grant_id TEXT, code_hash TEXT UNIQUE, code_expires REAL,
+                    delivered INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS oauth_tokens (
+                    hash TEXT PRIMARY KEY,
+                    grant_id TEXT NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL, resource TEXT NOT NULL, expires REAL NOT NULL,
+                    rotated INTEGER NOT NULL DEFAULT 0
+                );
             """)
             columns = {row[1] for row in db.execute("PRAGMA table_info(users)")}
             if "role" not in columns:

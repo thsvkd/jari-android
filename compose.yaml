@@ -10,6 +10,8 @@ services:
       MOBILE_ORIGINS: https://localhost,capacitor://localhost
       # /privacy·/delete-account 에 개인정보 문의·웹 탈퇴 요청 주소로 보여요.
       MOBILE_PRIVACY_CONTACT: thsxogud1123@gmail.com
+      # 에이전트(MCP)가 바깥에서 부르는 주소(경로 없이). 비우면 에이전트 연결이 꺼져요.
+      MOBILE_PUBLIC_URL: ${MOBILE_PUBLIC_URL:-}
     secrets:
       - mobile_secret
       - firebase_admin

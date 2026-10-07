@@ -20,6 +20,9 @@ class MobileConfig:
     # Shown on the public privacy and account-deletion pages. Unset, they point
     # to the in-app deletion and the person who sent the invitation instead.
     privacy_contact: str | None = None
+    # Where agents reach this API from outside (MOBILE_PUBLIC_URL). Unset,
+    # agent connections (OAuth and MCP) are switched off entirely.
+    public_url: str | None = None
 
     @classmethod
     def from_env(cls, *, auth_only=False):
@@ -65,4 +68,22 @@ class MobileConfig:
             fcm,
             origins,
             os.environ.get("MOBILE_PRIVACY_CONTACT", "").strip() or None,
+            public_url(os.environ.get("MOBILE_PUBLIC_URL", "")),
         )
+
+
+def public_url(raw):
+    """The issuer agents see: https, or plain http to this machine for local tests."""
+    raw = raw.strip().rstrip("/")
+    if not raw:
+        return None
+    parts = urlsplit(raw)
+    local = parts.scheme == "http" and parts.hostname in {"127.0.0.1", "localhost"}
+    # The OAuth metadata lives at the root, so a path would put it out of reach.
+    if (
+        (parts.scheme != "https" and not local)
+        or not parts.hostname
+        or any((parts.path, parts.query, parts.fragment, parts.username))
+    ):
+        raise ValueError("MOBILE_PUBLIC_URL must be an https origin such as https://jari.example")
+    return raw

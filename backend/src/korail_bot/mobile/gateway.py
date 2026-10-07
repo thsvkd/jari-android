@@ -152,6 +152,21 @@ class MobileGateway(MiniAppGateway):
         }
 
     @serialized_operation
+    def listed_trains(self, chat_id, payload):
+        """
+        The train numbers list_trains last offered for this trip (date and route),
+        or [] if the last list was for another trip or there is none. Agents check
+        their picks against it; the app picks from the list itself.
+        """
+        submission = self._submission(payload)
+        session = self.storage.get_user_session(chat_id)
+        info = session.train_info if session else {}
+        trip = (submission.dep_date, submission.src_station, submission.dst_station)
+        if (info.get("depDate"), info.get("srcLocate"), info.get("dstLocate")) != trip:
+            return []
+        return [str(option.get("no")) for option in info.get("trainOptions") or []]
+
+    @serialized_operation
     def seat_cars(self, chat_id, train_key, seat_class, passenger_count):
         train = self._seat_train(chat_id, train_key)
         count = self._passenger_count(passenger_count)

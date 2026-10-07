@@ -181,9 +181,10 @@ export async function bottomClearance(page: Page): Promise<string[]> {
       }
       return false;
     };
+    // 접힌 <details> 의 내용은 화면에 그려지지 않지만 Chromium 은 상자 크기를 그대로 돌려줘요. checkVisibility 로 걸러요.
     const items = [...document.querySelectorAll("main *")].filter((node) => {
       const box = node.getBoundingClientRect();
-      return box.height > 0 && getComputedStyle(node).position !== "sticky" && !insideScroller(node);
+      return box.height > 0 && node.checkVisibility() && getComputedStyle(node).position !== "sticky" && !insideScroller(node);
     });
     const last = Math.max(...items.map((node) => node.getBoundingClientRect().bottom));
     if (!nav || last <= nav.top + 0.5) return problems;
