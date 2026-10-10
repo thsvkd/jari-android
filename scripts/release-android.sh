@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 릴리스 APK 를 이 PC(macOS·Linux) 하나에서 만들어요. Windows 를 거치지 않아요.
+# 릴리스 APK 를 이 PC(macOS·Linux, Windows 는 Git Bash) 하나에서 만들어요.
+# Windows 에서는 ANDROID_HOME 을 슬래시 경로(C:/Users/<나>/AppData/Local/Android/Sdk)로 주세요. bash 와 Gradle 이 함께 읽어요.
 #
 #   scripts/release-android.sh                       # debug 키로 서명(기본)
 #   JARI_SIGNING_KEY=release scripts/release-android.sh
@@ -48,8 +49,10 @@ export PATH="${JAVA_HOME:-/nonexistent}/bin:$PATH"
 
 [[ -n "${ANDROID_HOME:-}" && -d "$ANDROID_HOME" ]] || fail "ANDROID_HOME 이 없어요."
 java -version 2>&1 | grep -Eq 'version "(2[1-9]|[3-9][0-9])' || fail "JDK 21 이상이 필요해요(JAVA_HOME=${JAVA_HOME:-없음})."
-APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
-[[ -x "$APKSIGNER" ]] || fail "apksigner 를 찾지 못했어요($ANDROID_HOME/build-tools)."
+# Windows 의 build-tools 에는 apksigner.bat 만 있어요. 한쪽 이름이 없으면 ls 가 2 로 끝나 pipefail 에 걸리니 무시해요.
+APKSIGNER="$({ ls -d "$ANDROID_HOME"/build-tools/*/apksigner "$ANDROID_HOME"/build-tools/*/apksigner.bat 2>/dev/null || true; } | sort -V | tail -1)"
+# Git Bash 는 .bat 을 실행 파일(-x)로 보지 않아요. 있는지만 봐요.
+[[ -n "$APKSIGNER" && -f "$APKSIGNER" ]] || fail "apksigner 를 찾지 못했어요($ANDROID_HOME/build-tools)."
 
 # --- 서명키: Doppler 에서 꺼내 임시 파일로 복원해요. 끝나면(실패해도) 지워요.
 KEYSTORE=""
