@@ -74,8 +74,20 @@ jobs:
             sleep 5
           done
           SH
+          cat > "$RUNNER_TEMP/probe.sh" <<'SH'
+          adb shell input keyevent 82
+          nohup sh "$RUNNER_TEMP/watch.sh" > /dev/null 2>&1 &
+          fail() { timeout 60 adb devices -l > test-results/adb-devices.txt 2>&1; exit 1; }
+          case "$PROBE_TESTS" in
+            yes) node scripts/verify.mjs --ci --device --only=에뮬레이터 || fail ;;
+            layout) JARI_PLAYWRIGHT_ARGS="layout.spec --repeat-each=6" node scripts/verify.mjs --ci --device --only=에뮬레이터 || fail ;;
+            *) sleep 1500 ;;
+          esac
+          SH
       - name: 에뮬레이터
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          PROBE_TESTS: ${{ matrix.tests }}
         with:
           api-level: 36
           arch: x86_64
@@ -85,14 +97,7 @@ jobs:
           cores: ${{ matrix.cores }}
           disable-animations: true
           emulator-options: ${{ matrix.options }}
-          script: |
-            adb shell input keyevent 82
-            nohup sh "$RUNNER_TEMP/watch.sh" > /dev/null 2>&1 &
-            case "${{ matrix.tests }}" in
-              yes) node scripts/verify.mjs --ci --device --only=에뮬레이터 || { timeout 60 adb devices -l > test-results/adb-devices.txt 2>&1; exit 1; } ;;
-              layout) JARI_PLAYWRIGHT_ARGS="layout.spec --repeat-each=6" node scripts/verify.mjs --ci --device --only=에뮬레이터 || { timeout 60 adb devices -l > test-results/adb-devices.txt 2>&1; exit 1; } ;;
-              *) sleep 1500 ;;
-            esac
+          script: sh "$RUNNER_TEMP/probe.sh"
       - name: 요약
         if: always()
         run: |
