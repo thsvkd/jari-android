@@ -54,7 +54,7 @@ npx cap sync android
 1. 버전을 올립니다: `package.json`(+`package-lock.json`), `backend/pyproject.toml`(+`backend/uv.lock`), `android/app/build.gradle`의 `versionCode`·`versionName`, 서버 릴리스 노트 `backend/src/korail_bot/release_notes.py`.
 2. 작업 브랜치를 푸시해 GitHub Actions(`checks`·`device`)가 통과하면 같은 커밋을 `main`에 fast-forward로 올립니다(→ [개발 가이드](development.md#브랜치와-커밋)).
 3. 태그를 붙일 커밋을 체크아웃하고 바뀐 파일이 없는 상태에서 `npm run verify`(에뮬레이터 기기 단계 포함)를 통과시킵니다. 통과 기록이 없으면 `.githooks/pre-push`가 `v*` 태그 푸시를 막습니다.
-4. 아래 스크립트로 APK·AAB를 만들고, 태그를 푸시한 뒤 `gh release create --verify-tag`로 APK를 올립니다. AAB는 사람이 Play Console에 올립니다.
+4. 아래 스크립트로 APK·AAB를 만들고, 태그를 푸시한 뒤 `gh release create --verify-tag`로 APK를 올립니다. AAB는 [Play Console 업로드](#play-console-업로드) 절차로 올립니다.
 
 ### 사이드로드 APK
 
@@ -80,6 +80,17 @@ scripts/release-play.sh   # → dist-release/jari-<버전>-play.aab
 ```
 
 업로드 키(Doppler `JARI_ANDROID_RELEASE_*`)로 서명한 `bundleRelease` AAB를 만듭니다. 릴리스 빌드라 WebView 디버깅이 꺼집니다. Firebase 설정(`JARI_ANDROID_GOOGLE_SERVICES_B64`)이 없으면 알림이 꺼진 앱이 되므로 멈춥니다. 끝에 서명·인증서 지문, versionCode/Name, 매니페스트(디버그 불가, 광고 ID 권한 없음, targetSdk), 광고·분석 의존성이 없는지, 웹 번들의 API 주소를 확인하고 모두 통과해야 최종 파일 이름으로 옮깁니다.
+
+### Play Console 업로드
+
+AAB를 만든 뒤 내부 테스트에 올리는 일은, **Aside 브라우저가 있으면 그 브라우저로 자율 시도**하고 없거나 막히면 사람이 합니다. Aside는 사용자가 로그인해 둔 브라우저라서 Play Console 로그인을 따로 다루지 않습니다.
+
+1. 올릴 파일을 확인합니다: `dist-release/jari-<버전>-play.aab`(`release-play.sh`가 모든 점검을 통과한 것만 이 이름으로 남깁니다). versionCode가 Play에 올라간 마지막 값보다 커야 합니다.
+2. Aside로 Play Console을 열고 앱(`dev.thsvkd.jari`) → 테스트 및 출시 → 테스트 → 내부 테스트 → 새 버전 만들기로 갑니다. 화면 이름은 Google이 바꿀 수 있으니 눈으로 보고 맞는 곳을 찾습니다.
+3. AAB를 올리고, 출시 노트에 `backend/src/korail_bot/release_notes.py`의 해당 버전 `headline`을 한국어로 붙입니다.
+4. 저장 → 검토 → 내부 테스트로 출시를 누릅니다. 올린 뒤 버전 목록에서 versionCode와 상태(출시됨·검토 중)를 읽어 보고에 적습니다.
+5. 다음에서는 멈추고 사람에게 넘깁니다: 로그인·2단계 인증·결제·약관이나 정책 선언을 새로 요구할 때, 앱 서명이나 패키지 이름이 다르다고 할 때, 낯선 경고가 뜰 때, 화면이 위 절차와 크게 다를 때. 결과를 만든 척하지 않고 어디서 멈췄는지 그대로 적습니다.
+6. 내부 테스트 이외의 트랙(비공개·공개·프로덕션)에는 올리지 않습니다.
 
 ### 서명키
 
@@ -119,7 +130,7 @@ Play 스토어와 README에 쓰는 그림은 손으로 그리지 않고 저장�
 - 스크린숏 스크립트는 데모 개발 서버를 잠깐 띄워 사용자처럼 눌러 가며 찍습니다. 서버나 코레일에는 닿지 않습니다.
 - 시계를 그날 오전 10:30(한국 시간)으로 고정해 찍은 시각이 화면에 남지 않게 합니다.
 - 글꼴은 그 PC의 한글 글꼴을 씁니다. Linux에서는 CI처럼 `fonts-noto-cjk`를 깔면 Android 기기와 같은 Noto Sans CJK로 나옵니다.
-- Play Console에 올리는 것은 사람이 합니다.
+- Play Console 업로드는 [아래 절차](#play-console-업로드)를 따릅니다.
 
 ## 패키지 이름 변경 이력
 
