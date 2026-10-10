@@ -351,7 +351,7 @@ def test_the_teardown_fits_the_margin_and_the_rest_the_stop_grace_period(tmp_pat
         redis_client=client,
     )
     rest = (len(runtime.services) + 2) * runtime.JOIN_WAIT + runtime.RELEASE_WAIT
-    compose = (pathlib.Path(__file__).parents[3] / "compose.yaml").read_text()
+    compose = (pathlib.Path(__file__).parents[3] / "compose.yaml").read_text(encoding="utf-8")
     grace = int(re.search(r"stop_grace_period: (\d+)s", compose).group(1))
     assert rest < grace
     # Everything at its worst overruns it (see RELEASE_WAIT): the lease is
