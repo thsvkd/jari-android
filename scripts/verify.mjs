@@ -165,7 +165,7 @@ const deviceStep = [
     const stopWatching = watchRunnerMemory();
     try {
       // 결과 출력 뒤에 프로세스가 멈춰도 잡 제한까지 가지 않게 해요. 통과한 기기 단계는 15분을 넘기지 않아요.
-      run("npx playwright test --project=device", { env: { JARI_DEVICE_CDP: cdp }, timeout: 25 * 60 * 1000 });
+      run(`npx playwright test --project=device ${process.env.JARI_PLAYWRIGHT_ARGS ?? ""}`, { env: { JARI_DEVICE_CDP: cdp }, timeout: 25 * 60 * 1000 });
     } finally {
       stopWatching();
       releaseDevice();

@@ -1,0 +1,108 @@
+# 실험용(ci/emulator-probe 브랜치에서만): 기기 단계에서 에뮬레이터가 15~16분쯤 말없이 사라지는 원인을 가려요.
+# 변형마다 2번씩 돌려 어느 설정에서 사라지는지 봐요. main 에는 올리지 않아요.
+name: emulator-probe
+
+on:
+  push:
+    branches: ["ci/emulator-probe"]
+
+env:
+  TZ: Asia/Seoul
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2]
+        variant: [base, swangle, guest, bigram, idle, layout]
+        include:
+          - { variant: base, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
+          - { variant: swangle, options: "-no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
+          - { variant: guest, options: "-no-window -gpu guest -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
+          - { variant: bigram, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "4096M", cores: 4, tests: "yes" }
+          # 사라진 지점으로 보이는 layout.spec(시간 휠 화면)만 반복해, 시간이 아니라 이 화면이 원인인지 봐요.
+          - { variant: layout, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "layout" }
+          # 테스트 없이 가만히 두어, 시간만으로 사라지는지 봐요.
+          - { variant: idle, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "no" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: KVM(에뮬레이터 하드웨어 가속)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: 의존성
+        if: matrix.tests != 'no'
+        run: |
+          npm ci
+          npx playwright install chromium
+          cd backend && uv sync --frozen
+      # 에뮬레이터가 사라지는 순간을 5초 간격으로 잡아, 그때의 커널·프로세스 기록을 남겨요.
+      - name: 관찰 스크립트
+        run: |
+          mkdir -p test-results
+          cat > "$RUNNER_TEMP/watch.sh" <<'SH'
+          start=$(date +%s)
+          while true; do
+            state=$(timeout 10 adb get-state 2>&1 | tr -d '\r')
+            now=$(( $(date +%s) - start ))
+            echo "$(date -u +%H:%M:%S) +${now}s state=$state" >> test-results/watch.txt
+            if [ "$state" != "device" ] && [ "$now" -gt 120 ]; then
+              echo "=== 사라짐 +${now}s ===" >> test-results/watch.txt
+              ps aux | grep -iE "qemu|emulator|adb" | grep -v grep >> test-results/watch.txt 2>&1
+              sudo dmesg | tail -n 150 > test-results/dmesg-tail.txt 2>&1
+              sudo dmesg | grep -iE "segfault|general protection|trap|killed process|oom|qemu|emulator|swiftshader|vulkan" > test-results/dmesg-grep.txt 2>&1
+              ls -la /tmp/android-runner > test-results/crash-dir.txt 2>&1
+              cp -r /tmp/android-runner test-results/android-runner 2>/dev/null
+              free -m > test-results/free.txt 2>&1
+              break
+            fi
+            sleep 5
+          done
+          SH
+      - name: 에뮬레이터
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          profile: pixel_7
+          ram-size: ${{ matrix.ram }}
+          cores: ${{ matrix.cores }}
+          disable-animations: true
+          emulator-options: ${{ matrix.options }}
+          script: |
+            adb shell input keyevent 82
+            nohup sh "$RUNNER_TEMP/watch.sh" > /dev/null 2>&1 &
+            case "${{ matrix.tests }}" in
+              yes) node scripts/verify.mjs --ci --device --only=에뮬레이터 || { timeout 60 adb devices -l > test-results/adb-devices.txt 2>&1; exit 1; } ;;
+              layout) JARI_PLAYWRIGHT_ARGS="layout.spec --repeat-each=6" node scripts/verify.mjs --ci --device --only=에뮬레이터 || { timeout 60 adb devices -l > test-results/adb-devices.txt 2>&1; exit 1; } ;;
+              *) sleep 1500 ;;
+            esac
+      - name: 요약
+        if: always()
+        run: |
+          echo "variant=${{ matrix.variant }} run=${{ matrix.run }}"
+          tail -n 5 test-results/watch.txt 2>/dev/null || true
+          grep -A3 "사라짐" test-results/watch.txt 2>/dev/null || echo "끝까지 살아 있었어요"
+      - name: 결과
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-${{ matrix.variant }}-${{ matrix.run }}
+          path: test-results/
+          retention-days: 7
