@@ -50,6 +50,9 @@ async function expectOnlyResumedNotice(page: Page): Promise<void> {
 }
 
 test.describe("서버를 재시작해도 찾기가 이어져요", () => {
+  // Windows 의 SIGTERM 은 정리 없이 프로세스를 끝내서 운영의 재시작(정리하며 내림)을 흉내 내지 못하고,
+  // 실패하면 스택까지 내려 뒤 테스트가 모두 깨져요. 운영과 같은 리눅스에서 도는 CI(main 필수 검사)가 확인해요.
+  test.skip(process.platform === "win32", "Windows 에서는 정리하며 내리는 재시작을 흉내 낼 수 없어요(CI 리눅스가 확인).");
   // 재시작(옛 서버 정리 + 새 서버 시작) 한 번에 몇 초가 들어요.
   test.describe.configure({ timeout: 120_000 });
 
