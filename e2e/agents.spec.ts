@@ -486,11 +486,12 @@ test.describe("에이전트 연결", () => {
     await openAgents(page);
     await enterCode(page, pending.code);
     await approveAndExchange(page, user, pending, requestId);
-    // §13 U2: 같은 이름의 연결을 구분하도록 연결한 날짜와 시:분(한국 시간)을 보여요.
-    // 앱의 formatStamp 와 같은 형식(ko-KR, 12시간제 "오후 03:04"). 시간대는 폰 프로젝트의 Asia/Seoul 로 고정해,
-    // 테스트를 돌리는 PC 의 시간대·시각(오전/오후)과 상관없이 같은 값을 만들어요.
+    // §13 U2: 같은 이름의 연결을 구분하도록 연결한 날짜와 시:분을 보여요.
+    // 앱의 formatStamp 와 같은 형식(ko-KR, 12시간제 "오후 03:04")이고, 앱처럼 기기(페이지)의 시간대를 써요.
+    // 헤드리스는 timezoneId 가 Asia/Seoul, 기기는 그 기기의 시간대예요. 테스트를 돌리는 PC 의 시간대와는 상관없어요.
+    const pageZone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
     const hhmm = new Intl.DateTimeFormat("ko-KR", {
-      timeZone: "Asia/Seoul",
+      timeZone: pageZone,
       month: "long",
       day: "numeric",
       hour: "2-digit",
