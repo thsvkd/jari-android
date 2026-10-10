@@ -111,10 +111,27 @@ async function approveAndExchange(page: Page, user: User, pending: PendingReques
   // 승인만으로는 목록에 늘지 않아요(§11 L4). 앞서 연결한 것은 그대로예요.
   expect(await connections(user)).toHaveLength(before);
   await finishInBrowser(pending, requestId);
-  await page.clock.runFor(2_500);
-  await expect(page.getByText(FINISHING)).toHaveCount(0);
+  await advanceUntil(page, async () => (await page.getByText(FINISHING).count()) === 0);
   await expect(page.locator(".toast")).toHaveText(CONNECTED);
   expect(await connections(user)).toHaveLength(before + 1);
+}
+
+/**
+ * 가상 시계를 2초씩 돌리며 조건이 맞을 때까지 기다려요. 앱의 목록 다시 읽기는 응답이 와야 다음 차례가
+ * 이어지는데, 느린 기기에서는 응답이 가상 시계보다 늦어요. 한 번에 크게 돌리면 그 사이 타이머가 울리지 않아요.
+ * 20초 동안 0.5초마다 돌리므로 가상 시계는 많아야 80초쯤 가요(2분 한도 아래).
+ */
+async function advanceUntil(page: Page, check: () => Promise<boolean> | boolean): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        if (await check()) return true;
+        await page.clock.runFor(2_000);
+        return check();
+      },
+      { intervals: [500], timeout: 20_000 },
+    )
+    .toBe(true);
 }
 
 /** 보이게 될 때까지 기다린 뒤 화면에서의 위쪽 좌표. 다시 그려지는 중이면 null 이 나와서 기다려요. */
@@ -319,15 +336,23 @@ test.describe("에이전트 연결", () => {
     page.on("request", (request) => {
       if (new URL(request.url()).pathname === "/api/mobile/agents") reads += 1;
     });
-    await page.clock.runFor(6_500);
-    expect(reads).toBeGreaterThanOrEqual(2);
+    // 2초마다 다시 읽어요. 한 번 돌릴 때마다 요청이 실제로 나갔는지 확인하고 다음으로 가요(느린 기기에서도).
+    for (let round = 0; round < 2; round++) {
+      const before = reads;
+      await page.clock.runFor(2_000);
+      await expect.poll(() => reads).toBeGreaterThan(before);
+    }
+    // 한도는 Date.now 기준이에요. 2분을 넘긴 뒤에도 다음 차례가 울릴 때까지 조금씩 돌려요.
     await page.clock.runFor(120_000);
+    await advanceUntil(page, () => page.getByText(STALLED).isVisible());
     await expect(page.getByText(FINISHING)).toHaveCount(0);
     // §15 N2: 2분 안에 연결이 나타나지 않으면 다시 시작하라고 알려요.
     await expect(page.getByText(STALLED)).toBeVisible();
     await expectCleanLayout(page, "에이전트 연결(연결이 끝나지 않음)");
     const afterLimit = reads;
     await page.clock.runFor(10_000);
+    // 울렸다면 나갔을 요청이 실제로 도착할 시간을 줘요.
+    await page.waitForTimeout(1_000);
     expect(reads).toBe(afterLimit);
     expect(await connections(user)).toEqual([]);
     // 화면에 다시 들어오면 사라져요.
@@ -440,6 +465,7 @@ test.describe("에이전트 연결", () => {
       if (new URL(request.url()).pathname === "/api/mobile/agents") reads += 1;
     });
     await page.clock.runFor(10_000);
+    await page.waitForTimeout(1_000);
     expect(reads).toBe(0);
   });
 
