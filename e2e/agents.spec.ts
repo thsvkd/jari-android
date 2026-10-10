@@ -349,6 +349,18 @@ test.describe("에이전트 연결", () => {
     // §15 N2: 2분 안에 연결이 나타나지 않으면 다시 시작하라고 알려요.
     await expect(page.getByText(STALLED)).toBeVisible();
     await expectCleanLayout(page, "에이전트 연결(연결이 끝나지 않음)");
+    // 가짜 시계로 2분을 한꺼번에 돌리면 한도 전에 나간 요청이 수십 개라, 느린 기기에서는 그 일부가 한도 뒤에 도착해요.
+    // 새로 나가는 요청이 아니라 이미 나간 요청이므로, 도착이 멈출 때까지 기다린 뒤에 센다.
+    let settled = -1;
+    await expect
+      .poll(async () => {
+        const seen = reads;
+        await page.waitForTimeout(1_000);
+        const quiet = reads === seen && seen === settled;
+        settled = seen;
+        return quiet;
+      }, { timeout: 30_000 })
+      .toBe(true);
     const afterLimit = reads;
     await page.clock.runFor(10_000);
     // 울렸다면 나갔을 요청이 실제로 도착할 시간을 줘요.
