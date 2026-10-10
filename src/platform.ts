@@ -18,6 +18,8 @@ export interface PlatformInitializeOptions {
   onPushToken?: (token: string) => Promise<void>;
   /** Surface an unavailable Firebase/permission state without pretending push works. */
   onPushError?: (message: string) => void;
+  /** A push arrived while the app was open. */
+  onPushReceived?: () => void;
   /** Push registration is opt-in and does nothing unless this is explicitly true. */
   enablePushRegistration?: boolean;
 }
@@ -195,9 +197,12 @@ export async function initializePlatform(
       finishRegistration(false);
     },
   );
+  // 앱이 열려 있으면 휴대폰은 알림을 띄우지 않으니, 도착했다는 사실만 앱에 알려 새 알림을 바로 확인하게 해요.
+  const received = await PushNotifications.addListener("pushNotificationReceived", () => options.onPushReceived?.());
   removePushListeners = [
     () => registered.remove(),
     () => registrationError.remove(),
+    () => received.remove(),
   ];
 
   try {

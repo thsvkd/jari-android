@@ -47,7 +47,7 @@ describe("concept C application shell", () => {
     expect(root.querySelector(".screen-home")).not.toBeNull();
   });
 
-  it.each(["running", "scheduled"])("prioritizes payment without borrowing the %s journey", async (other) => {
+  it.each(["running", "scheduled"])("shows the %s journey beside the payment card instead of hiding it", async (other) => {
     const demo = createDemoApi();
     const state = await demo.bootstrap();
     state.running!.srcLocate = "광명";
@@ -57,11 +57,67 @@ describe("concept C application shell", () => {
     }
     state.pending = [{ reservationId: "TEST", trainInfo: "KTX 015 서울 → 부산", expiresAt: null, seatNumber: null }];
     const { root } = await mountLive({ bootstrap: async () => state });
-    // The payment card is the status now; a second "found a seat" card only repeated it.
-    expect(root.querySelector("[data-search-status]")).toBeNull();
-    const payment = root.querySelector(".payment-card")?.textContent;
-    expect(payment).toContain("KTX 015 서울 → 부산");
-    expect(payment).not.toContain("광명");
+    const payment = root.querySelector(".payment-card");
+    const status = root.querySelector("[data-search-status]");
+    expect(payment?.textContent).toContain("KTX 015 서울 → 부산");
+    // 결제 카드는 예약만 말하고, 찾는 중인 구간은 자기 카드에 따로 있어요. 결제가 더 급하니 위에 와요.
+    expect(payment?.textContent).not.toContain("광명");
+    expect(status?.textContent).toContain("광명");
+    expect(payment!.compareDocumentPosition(status!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("names the watched trains on the home card, falling back to the number only when nothing else is known", async () => {
+    const state = await createDemoApi().bootstrap();
+    state.running!.selectedTrains = ["101", "103", "105"];
+    state.running!.seatPlan = {
+      trains: [
+        { trainNo: "101", label: "07:00→09:40 KTX", seatClass: "any", targets: [] },
+        { trainNo: "103", label: "103", seatClass: "any", targets: [] },
+        { trainNo: "105", label: "09:00→11:40 KTX", seatClass: "any", targets: [] },
+      ],
+    };
+    const { root } = await mountLive({ bootstrap: async () => state });
+    const trains = root.querySelector("[data-search-status] .watched-trains")?.textContent;
+    expect(trains).toBe("07:00→09:40 KTX · 열차 103 외 1편");
+  });
+
+  it("does not announce notifications that arrived while the app was closed", async () => {
+    window.localStorage.clear();
+    vi.useFakeTimers();
+    const seen = { id: "n1", text: "본 소식", createdAt: "2026-09-12T00:00:00Z", kind: "search" };
+    const missed = { id: "n2", text: "\n닫혀 있을 때 온 소식", createdAt: "2026-09-12T00:01:00Z", kind: "error" };
+    window.localStorage.setItem(`jari.notice-seen.${(await createDemoApi().bootstrap()).user?.id ?? ""}`, "n1");
+    const { root } = await mountLive({ notifications: async () => ({ items: [missed, seen], pushAvailable: false }) });
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(root.querySelector(".notice-dot")).not.toBeNull();
+    expect(root.querySelector(".toast")?.textContent?.trim() ?? "").toBe("");
+  });
+
+  it("names the watched trains by their times when no seat plan was chosen", async () => {
+    const state = await createDemoApi().bootstrap();
+    state.running!.seatPlan = null;
+    state.running!.selectedTrains = ["00101", "00103"];
+    state.running!.trainLabels = { "00101": "07:00→09:41 KTX" };
+    const { root } = await mountLive({ bootstrap: async () => state });
+    expect(root.querySelector("[data-search-status] .watched-trains")?.textContent).toBe("07:00→09:41 KTX · 열차 00103");
+  });
+
+  it("tells the user, while the app is open, that a new notification arrived", async () => {
+    window.localStorage.clear();
+    vi.useFakeTimers();
+    const first = { id: "n1", text: "예전 소식", createdAt: "2026-09-12T00:00:00Z", kind: "search" };
+    const arrived = { id: "n2", text: "🎉 취소표 1/1석을 잡았어요\n\nKTX 015", createdAt: "2026-09-12T00:01:00Z", kind: "reservation" };
+    let items = [first];
+    const { root } = await mountLive({ notifications: async () => ({ items, pushAvailable: false }) });
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(root.querySelector(".notice-dot")).toBeNull();
+    items = [arrived, first];
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(root.querySelector(".notice-dot")).not.toBeNull();
+    expect(root.querySelector(".toast")?.textContent).toContain("취소표 1/1석을 잡았어요");
+    root.querySelector<HTMLButtonElement>(".notification-button")?.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(root.querySelector(".notice-dot")).toBeNull();
   });
 
   it("groups route, window and details navigation in the chosen status card", async () => {
