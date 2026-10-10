@@ -166,8 +166,17 @@ async function enterCode(page: Page, code: string): Promise<void> {
 
 test.describe("에이전트 연결", () => {
   test("설정에서 연결 화면을 열면 넣을 주소와 복사 버튼이 있어요 @layout", async ({ signedIn: page }) => {
-    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     await openAgents(page);
+    // 기기 WebView(connectOverCDP)에서는 권한을 줄 수 없어요(grantPermissions 미지원). 클립보드 쓰기를 감싸
+    // 앱이 복사한 값을 기록해요. 모든 프로젝트에서 같은 방식이에요.
+    await page.evaluate(() => {
+      const copied: string[] = [];
+      (window as unknown as { __copied: string[] }).__copied = copied;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (text: string) => void copied.push(text) },
+      });
+    });
     await expect(page.getByText(MCP_URL, { exact: false }).first()).toBeVisible();
     // §13 U10: 주소를 넣은 뒤 에이전트에서 연결을 시작해야 코드가 나와요(Claude Code 는 /mcp).
     // MCP 주소(…/api/mobile/mcp)가 아니라 명령으로서의 /mcp 예요.
@@ -175,7 +184,9 @@ test.describe("에이전트 연결", () => {
     await expectCleanLayout(page, "에이전트 연결");
 
     await page.getByRole("button", { name: /복사/ }).first().click();
-    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(MCP_URL);
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __copied: string[] }).__copied.at(-1)))
+      .toBe(MCP_URL);
 
     // 펼침 안의 Claude Code 명령과 claude.ai 안내.
     const more = page.locator("details summary").first();
@@ -505,10 +516,23 @@ test.describe("에이전트 연결 목록의 기준", () => {
     const pending = await pendingRequest("Claude");
     const requestId = await requestIdOf(user, pending.code);
     // 앱이 승인 응답을 받기 전에 브라우저 쪽 교환을 끝내요. 승인 뒤 목록에는 이미 새 연결이 있어요.
+    // 기기 WebView 에서는 route.fetch 가 동작하지 않아요(Storage.getCookies 미지원). 승인은 테스트가 같은 사용자로
+    // 직접 보내고, 브라우저 쪽 교환까지 마친 뒤 그 응답을 앱에 돌려줘요.
     await page.route(`${API}/api/mobile/agents/requests/approve`, async (route) => {
-      const response = await route.fetch();
+      const approved = await fetch(`${API}/api/mobile/agents/requests/approve`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId }),
+      });
+      const body = await approved.text();
       await finishInBrowser(pending, requestId);
-      await route.fulfill({ response });
+      const origin = route.request().headers()["origin"];
+      await route.fulfill({
+        status: approved.status,
+        contentType: "application/json",
+        body,
+        headers: origin ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" } : {},
+      });
     });
     await openAgents(page);
     await enterCode(page, pending.code);
