@@ -16,17 +16,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        run: [1, 2]
-        variant: [base, swangle, guest, bigram, idle, layout]
+        # 2차: 가장 빨리 죽이는 layout.spec 반복을 swangle_indirect 와 RAM·코어 상향에서 돌려요. 대조로 현재 설정도 같이 돌려요.
         include:
-          - { variant: base, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
-          - { variant: swangle, options: "-no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
-          - { variant: guest, options: "-no-window -gpu guest -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
-          - { variant: bigram, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "4096M", cores: 4, tests: "yes" }
-          # 사라진 지점으로 보이는 layout.spec(시간 휠 화면)만 반복해, 시간이 아니라 이 화면이 원인인지 봐요.
-          - { variant: layout, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "layout" }
-          # 테스트 없이 가만히 두어, 시간만으로 사라지는지 봐요.
-          - { variant: idle, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "no" }
+          - { variant: layout-base, run: 1, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "layout" }
+          - { variant: layout-base, run: 2, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "layout" }
+          - { variant: layout-swangle, run: 1, options: "-no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "layout" }
+          - { variant: layout-swangle, run: 2, options: "-no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "layout" }
+          - { variant: layout-swangle, run: 3, options: "-no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "layout" }
+          - { variant: layout-bigram, run: 1, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "4096M", cores: 4, tests: "layout" }
+          - { variant: layout-bigram, run: 2, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "4096M", cores: 4, tests: "layout" }
+          - { variant: layout-bigram, run: 3, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "4096M", cores: 4, tests: "layout" }
+          - { variant: full-swangle, run: 3, options: "-no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
