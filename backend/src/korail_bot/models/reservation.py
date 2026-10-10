@@ -182,6 +182,9 @@ class TrainSearchParams:
     # Structured physical-seat candidates for the mobile cancellation wait.
     # Empty keeps every search written before the seat-map flow compatible.
     seat_plan_json: str = ""
+    # How people read each watched train ("07:00→09:40 KTX"), by train number. Taken from the
+    # train list when the search starts: that list expires within minutes, the search does not.
+    train_labels: dict[str, str] = field(default_factory=dict)
 
     def watches_specific_trains(self) -> bool:
         """Whether the search is narrowed to a chosen set of trains."""

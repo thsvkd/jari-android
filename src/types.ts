@@ -88,6 +88,8 @@ export interface SearchDescription {
   seatStrategy: string;
   seatPreference: string;
   selectedTrains: string[];
+  /** 열차 번호별 "07:00→09:40 KTX". 검색을 시작할 때 서버가 적어 둬요. 옛 서버에는 없어요. */
+  trainLabels?: Record<string, string>;
 }
 
 // The seats the running worker is polling for, grouped per car; empty targets mean the whole train was chosen.

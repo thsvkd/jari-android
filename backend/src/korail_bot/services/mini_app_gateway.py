@@ -639,11 +639,17 @@ class MiniAppGateway:
                 "이미 검색 중이에요. 먼저 검색을 중지한 뒤 새로 시작해 주세요.", status=409
             )
 
-        selected = list(session.train_info.get("selectedTrains") or [])
+        previous = session.train_info
+        selected = list(previous.get("selectedTrains") or [])
         session.reset()
         session.in_progress = True
         session.train_info = submission.as_train_info()
         session.train_info["selectedTrains"] = selected
+        # The list the trains were picked from, so the search can keep their departure times. Only
+        # for the same trip: another date or route has other trains under the same numbers.
+        trip = ("depDate", "srcLocate", "dstLocate")
+        if all(previous.get(key) == session.train_info.get(key) for key in trip):
+            session.train_info["trainOptions"] = previous.get("trainOptions") or []
         session.last_action = UserProgress.SEAT_STRATEGY_INPUT_SUCCESS
 
         self._log_in(chat_id, session)
@@ -846,7 +852,9 @@ class MiniAppGateway:
             trains.append(
                 {
                     "trainNo": train.train_no,
-                    "label": labels.get(train.train_no) or train.train_no,
+                    "label": params.train_labels.get(train.train_no)
+                    or labels.get(train.train_no)
+                    or train.train_no,
                     "seatClass": train.seat_class,
                     "targets": groups,
                 }
@@ -890,6 +898,7 @@ class MiniAppGateway:
             "seatStrategy": params.seat_strategy,
             "seatPreference": params.seats_wanted.describe(),
             "selectedTrains": list(params.train_numbers),
+            "trainLabels": dict(params.train_labels),
         }
 
     def _pending(self, chat_id: int) -> list[dict]:

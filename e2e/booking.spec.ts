@@ -1,5 +1,5 @@
 import { expect, nextPoll, test } from "./fixtures";
-import { keepOnlyTrains, searchTrains, startSearching, trainLine, waitForPaymentCard } from "./flows";
+import { keepOnlyTrains, pickDate, pickTime, searchTrains, startSearching, trainLine, travelDay, waitForPaymentCard } from "./flows";
 import { expectCleanLayout } from "./layout";
 
 // 코레일만 가짜예요. 로그인·조회·예약 워커·결제 감시·알림은 운영 코드가 그대로 돌아요.
@@ -112,6 +112,45 @@ test.describe("빈자리를 찾아 예약하기", () => {
 
     await expect(page.locator(".payment-card")).toHaveCount(0);
     await expect(page.locator(".toast")).toHaveText("예약을 취소했어요.");
+    expect((await control.korailLog()).filter((call) => call.event === "cancel")).toHaveLength(1);
+  });
+
+  test("좌석을 잡은 뒤 다른 열차를 감시해도 홈에 둘 다 보이고, 예약 취소도 돼요 @layout", async ({ signedIn: page, control }) => {
+    await searchTrains(page);
+    await keepOnlyTrains(page, ["00101"]);
+    await startSearching(page);
+    await waitForPaymentCard(page);
+
+    await control.scenario({ search: "sold_out" });
+    await page.locator(".screen-home [data-action='new-journey']").click();
+    await expect(page.locator(".screen-journey")).toBeVisible();
+    await pickDate(page, travelDay(3).iso);
+    await pickTime(page, "dep_time", "07:00");
+    await page.locator("[name=unlimited_time]").check();
+    await page.getByRole("button", { name: /열차 조회하기/ }).click();
+    await expect(page.locator(".screen-trains [data-train-toggle]").first()).toBeVisible();
+    await keepOnlyTrains(page, ["00103"]);
+    await startSearching(page);
+    await expect(page.locator(".screen-home")).toBeVisible();
+
+    const status = page.locator("[data-search-status]");
+    for (let attempt = 0; attempt < 10 && (await status.count()) === 0; attempt++) {
+      await page.waitForTimeout(1_000);
+      await nextPoll(page);
+    }
+    // 결제 카드는 예약을, 찾는 중 카드는 지켜보는 열차를 말해요. 한쪽이 다른 쪽을 가리면 안 돼요.
+    await expect(page.locator(".screen-home .payment-card")).toContainText(trainLine());
+    await expect(status).toContainText("찾는 중");
+    await expect(status.locator(".watched-trains")).toContainText(/\d{2}:\d{2}→\d{2}:\d{2}/);
+    await expectCleanLayout(page, "결제 대기 + 다른 열차 감시 홈");
+
+    await page.locator(".bottom-nav [data-view='activity']").click();
+    await page.locator("[data-action='cancel-pending']").click();
+    await page.locator("[data-action='sheet-confirm']").click();
+
+    await expect(page.locator(".toast")).toHaveText("예약을 취소했어요.");
+    await expect(page.locator(".payment-card")).toHaveCount(0);
+    await expect(page.locator("[data-action='cancel-search']")).toBeVisible();
     expect((await control.korailLog()).filter((call) => call.event === "cancel")).toHaveLength(1);
   });
 

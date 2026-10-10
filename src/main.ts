@@ -53,6 +53,7 @@ async function launch(): Promise<void> {
           app?.notify("이 휴대폰에서 알림을 받을 수 있어요.");
         },
         onPushError: (message) => app?.notify(message),
+        onPushReceived: () => app?.refreshAlerts(),
         enablePushRegistration,
       });
     };

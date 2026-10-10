@@ -293,6 +293,9 @@ export class JariApp {
   private cancellationTargets: CancellationWaitPlan["trains"] = [];
   private notifications: NotificationItem[] = [];
   private notificationsLoaded = false;
+  // 마지막으로 본 알림 id. ""는 본 알림이 없다는 뜻이고, undefined는 아직 기준을 잡지 않았다는 뜻이에요.
+  private noticeSeen: string | undefined = undefined;
+  private unreadNotices = 0;
   /** 에이전트 연결 목록. null 은 아직 불러오지 않았다는 뜻이에요. */
   private agentConnections: AgentConnection[] | null = null;
   /** 승인한 뒤 브라우저 쪽이 토큰을 받아 연결이 목록에 나타나기를 기다리는 중(2초마다 다시 읽어요). */
@@ -427,6 +430,8 @@ export class JariApp {
     this.cancellationTargets = [];
     this.notifications = [];
     this.notificationsLoaded = false;
+    this.noticeSeen = undefined;
+    this.unreadNotices = 0;
     this.authGate = "choose";
     this.authMode = "login";
     this.invitePreview = "";
@@ -502,6 +507,11 @@ export class JariApp {
     const screen = this.root.querySelector<HTMLElement>(".screen");
     if (screen) screen.scrollTop = 0;
     return true;
+  }
+
+  /** 푸시가 도착했을 때: 다음 확인을 기다리지 않고 지금 상태와 새 알림을 봐요. */
+  refreshAlerts(): void {
+    void this.pollStatus(true);
   }
 
   notify(message: string): void {
@@ -586,6 +596,7 @@ export class JariApp {
       this.connection = "online";
       this.pollMisses = 0;
       if (this.view === "home" || this.view === "activity") this.render();
+      void this.checkNotices();
     } catch (error) {
       if (generation !== this.generation || seq !== this.pollSeq || (error instanceof ApiError && error.kind === "stale")) return;
       if (error instanceof ApiError && error.kind === "auth") {
@@ -659,7 +670,7 @@ export class JariApp {
         ${this.connection === "offline" ? '<aside class="offline-banner" aria-label="연결 상태">오프라인 · 마지막으로 받은 상태를 보여드려요</aside>' : ""}
         <header class="topbar">
           <button class="brand" data-view="home" aria-label="자리났다 홈"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><rect x="5" y="7" width="9" height="14" rx="3"></rect><rect x="18" y="7" width="9" height="14" rx="3"></rect><path d="M7 25h18"></path></svg></span><span><b>자리났다</b><small>내 여행의 빈자리</small></span></button>
-          <button class="header-action notification-button" data-view="notifications" type="button" aria-label="알림 열기" title="알림"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg></button>
+          <button class="header-action notification-button" data-view="notifications" type="button" aria-label="${this.unreadNotices ? `새 알림 ${this.unreadNotices}개 열기` : "알림 열기"}" title="알림"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg>${this.unreadNotices ? '<i class="notice-dot" aria-hidden="true"></i>' : ""}</button>
         </header>
         <main class="screen screen-${this.view}">${content}</main>
         ${this.renderNavigation()}
@@ -710,7 +721,8 @@ export class JariApp {
       connection: this.connection,
     });
     const paymentFirst = state.pending.length > 0;
-    const journey = paymentFirst ? null : state.running ?? state.scheduled?.search ?? null;
+    // 결제할 예약이 있어도 다른 자리 찾기가 돌고 있으면 둘 다 보여요. 예약만 그리면 찾는 중인 것이 사라진 것처럼 보여요.
+    const journey = state.running ?? state.scheduled?.search ?? null;
     const route = journey
       ? `<div class="route-title"><strong>${escapeHtml(journey.srcLocate)}</strong><span>→</span><strong>${escapeHtml(journey.dstLocate)}</strong></div>
          <p class="route-meta">${escapeHtml(formatWindow(journey))}</p>`
@@ -721,8 +733,8 @@ export class JariApp {
       : radar;
     // 찾는 중인 검색은 배지·구간·조건 한 줄이면 충분해요. 설명과 마지막 조회 시각은 검색 상세의 몫이에요.
     const busy = Boolean(state.running || state.scheduled || state.pending.length);
-    // 결제할 예약이 있으면 결제 카드가 곧 상태예요. 연결이 끊겼을 때만 그 사실을 따로 알려요.
-    const statusCard = paymentFirst && this.connection === "online"
+    // 결제할 예약만 있으면 결제 카드가 곧 상태예요. 연결이 끊겼을 때만 그 사실을 따로 알려요.
+    const statusCard = paymentFirst && this.connection === "online" && !journey
       ? ""
       : status.kind === "idle"
       ? this.renderIdleCard()
@@ -733,15 +745,14 @@ export class JariApp {
         ${route}
         ${journey ? `<p class="search-conditions">${escapeHtml(journey.trainTypeShow)} · ${escapeHtml(seatLabels[journey.specialInfoShow] ?? journey.specialInfoShow)} · ${journey.passengerCount}명</p>` : ""}
         ${["scheduled", "error", "stale", "offline"].includes(status.kind) ? `<p class="search-status-description">${escapeHtml(status.description)}</p>` : ""}
-        ${!paymentFirst && state.running && radar.lastCheckedLabel ? `<p class="search-last-check">마지막 조회 ${escapeHtml(radar.lastCheckedLabel)}</p>` : ""}
-        ${busy ? `${button({ variant: "secondary", view: "activity", content: `${paymentFirst ? "예약 확인하기" : "자세히 보기"}<span>→</span>` })}` : ""}
+        ${state.running && radar.lastCheckedLabel ? `<p class="search-last-check">마지막 조회 ${escapeHtml(radar.lastCheckedLabel)}</p>` : ""}
+        ${busy ? `${button({ variant: "secondary", view: "activity", content: `자세히 보기<span>→</span>` })}` : ""}
       </section>`;
     // 바로가기는 대기 여부와 상관없이 맨 위 한 자리에만 둬요. 대기 카드는 그 아래에서 조용히 비어 있어요.
     const chips = this.homeChips();
     return `<div class="home-layout"><div class="home-primary">
       ${chips.length ? `<section class="chip-shelf">${this.renderChipShelf(chips)}</section>` : ""}
-      ${statusCard}
-      ${this.renderPendingCard(true)}
+      ${paymentFirst ? `${this.renderPendingCard(true)}${statusCard}` : statusCard}
       ${state.scheduled ? this.renderScheduledCard() : ""}
       ${button({ roomy: true, action: "new-journey", disabled: !state.capabilities.korail, content: `<span>${state.capabilities.korail ? "새 여정 찾기" : "예약 서버에 연결해 주세요"}</span><b>＋</b>` })}
       </div><aside class="home-secondary">
@@ -776,8 +787,26 @@ export class JariApp {
       ${badge({ element: "p", className: "idle-badge", dot: true, label: `찾는 중${since ? ` · ${since}` : ""}` })}
       <div class="route-title"><strong>${escapeHtml(journey.srcLocate)}</strong><span>→</span><strong>${escapeHtml(journey.dstLocate)}</strong></div>
       <p class="route-meta">${escapeHtml(formatWindow(journey))} · ${journey.passengerCount}명</p>
+      ${this.renderWatchedTrains(journey)}
       <div class="card-action-row split">${button({ variant: "text", view: "activity", label: "자세히 보기 →" })}${button({ variant: "text-danger", action: "stop-search", label: "그만 찾기" })}</div>
     </section>`;
+  }
+
+  /** 출발·도착 시각이 붙은 이름이 있으면 그것을, 없으면 번호를 말해요. */
+  private trainName(journey: SearchDescription, no: string): string {
+    return journey.trainLabels?.[no] ?? `열차 ${no}`;
+  }
+
+  /** 어느 열차를 지켜보는지 한 줄로. 좌석표에서 고른 열차는 출발·도착 시각이 붙은 이름으로, 시간대 전체면 그렇다고 말해요. */
+  private renderWatchedTrains(journey: SearchDescription): string {
+    const planned = (journey as RunningSearch).seatPlan?.trains ?? [];
+    const names = planned.length
+      ? planned.map((train) => (train.label === train.trainNo ? this.trainName(journey, train.trainNo) : train.label))
+      : journey.selectedTrains.map((no) => this.trainName(journey, no));
+    const unique = [...new Set(names)];
+    if (!unique.length) return '<p class="route-meta watched-trains">시간대 안의 열차 전체</p>';
+    const more = unique.length > 2 ? ` 외 ${unique.length - 2}편` : "";
+    return `<p class="route-meta watched-trains">${escapeHtml(`${unique.slice(0, 2).join(" · ")}${more}`)}</p>`;
   }
 
   // 제목 바로 밑의 바로가기 줄: 최근 검색과 즐겨찾기.
@@ -827,7 +856,7 @@ export class JariApp {
 
   private renderScheduledCard(): string {
     const scheduled = this.state!.scheduled!;
-    return `<section class="card scheduled-card">${badge({ element: "div", shape: "tag", dot: true, className: "card-label", label: "예약된 자리 찾기" })}<div class="route-line"><strong>${escapeHtml(scheduled.search.srcLocate)} → ${escapeHtml(scheduled.search.dstLocate)}</strong><span>${escapeHtml(formatStamp(scheduled.startAt))} 시작</span></div>${button({ variant: "text-danger", action: "cancel-search", label: "예약 취소" })}</section>`;
+    return `<section class="card scheduled-card">${badge({ element: "div", shape: "tag", dot: true, className: "card-label", label: "예약된 자리 찾기" })}<div class="route-line"><strong>${escapeHtml(scheduled.search.srcLocate)} → ${escapeHtml(scheduled.search.dstLocate)}</strong><span>${escapeHtml(formatStamp(scheduled.startAt))} 시작</span></div>${this.renderWatchedTrains(scheduled.search)}${button({ variant: "text-danger", action: "cancel-search", label: "예약 취소" })}</section>`;
   }
 
   private renderJourney(): string {
@@ -1788,7 +1817,7 @@ ${agentHost(agent)}`;
           const label = train.label === train.trainNo ? `열차 ${train.trainNo}` : train.label;
           return `<li><b>${escapeHtml(label)}</b><span>${escapeHtml(cabin + seats)}</span></li>`;
         })
-      : running.selectedTrains.map((no) => `<li><b>${escapeHtml(no)}</b><span>좌석 무관</span></li>`);
+      : running.selectedTrains.map((no) => `<li><b>${escapeHtml(running.trainLabels?.[no] ?? `열차 ${no}`)}</b><span>좌석 무관</span></li>`);
     const trainCount = planned.length || running.selectedTrains.length;
     // The server already words the preference ("창측 3–10번"); only the demo's raw "A,D:3-10" still needs describing.
     const rawPreference = running.seatPreference ?? "";
@@ -2339,6 +2368,66 @@ ${agentHost(agent)}`;
     );
   }
 
+  private noticeSeenKey(): string {
+    return `jari.notice-seen.${this.state?.user?.id ?? ""}`;
+  }
+
+  private markNoticesSeen(items: NotificationItem[]): void {
+    this.noticeSeen = items[0]?.id ?? "";
+    this.unreadNotices = 0;
+    try {
+      window.localStorage.setItem(this.noticeSeenKey(), this.noticeSeen);
+    } catch {
+      /* 저장할 수 없어도 이번 실행 동안은 기억해요. */
+    }
+  }
+
+  /**
+   * 앱이 열려 있는 동안에는 휴대폰이 알림을 띄우지 않아요. 상태 확인과 함께 새 알림이 왔는지 보고,
+   * 있으면 안내 문구를 잠깐 띄우고 종 모양에 표시를 남겨요. 처음 확인할 때는 지난 알림을 새 알림으로 치지 않아요.
+   */
+  private async checkNotices(): Promise<void> {
+    if (!this.state?.capabilities.durableNotifications) return;
+    const generation = this.generation;
+    try {
+      const { items } = await this.api.notifications();
+      if (generation !== this.generation) return;
+      if (this.view === "notifications") {
+        const changed = items[0]?.id !== this.notifications[0]?.id;
+        this.notifications = items;
+        this.notificationsLoaded = true;
+        this.markNoticesSeen(items);
+        if (changed) this.render();
+        return;
+      }
+      // 앱을 켜고 처음 보는 알림 목록은 점만 정하고 안내 문구는 띄우지 않아요. 닫혀 있던 동안 온 소식을 방금 온 것처럼 알리면 안 돼요.
+      const firstLook = this.noticeSeen === undefined;
+      if (firstLook) {
+        let stored: string | null = null;
+        try {
+          stored = window.localStorage.getItem(this.noticeSeenKey());
+        } catch {
+          /* 읽을 수 없으면 지금까지의 알림을 본 것으로 쳐요. */
+        }
+        // 저장된 기준이 목록(최근 100건)에서 밀려났으면 어디까지 봤는지 알 수 없으니 지금 것을 기준으로 삼아요.
+        this.noticeSeen = stored !== null && items.some((item) => item.id === stored) ? stored : items[0]?.id ?? "";
+      }
+      const seenAt = this.noticeSeen ? items.findIndex((item) => item.id === this.noticeSeen) : -1;
+      const fresh = seenAt < 0 ? items : items.slice(0, seenAt);
+      if (fresh.length === this.unreadNotices) return;
+      const arrived = fresh.length > this.unreadNotices;
+      this.unreadNotices = fresh.length;
+      const newest = fresh[0];
+      if (arrived && !firstLook && newest) {
+        const kind = NOTICE_KINDS[newest.kind] ?? NOTICE_KINDS.search!;
+        this.showToast(splitNotice(newest.text.trim(), kind.title).title || kind.title);
+      }
+      this.render();
+    } catch {
+      /* 알림 확인이 실패해도 상태 화면은 그대로 둬요. 알림 화면에서 다시 불러와요. */
+    }
+  }
+
   private async loadNotifications(): Promise<void> {
     if (!this.state?.capabilities.durableNotifications) return;
     // Not run(): it drops the request while the app is busy, which would read as "no notifications".
@@ -2348,6 +2437,7 @@ ${agentHost(agent)}`;
       if (generation !== this.generation) return;
       this.notifications = result.items;
       this.notificationsLoaded = true;
+      this.markNoticesSeen(result.items);
       this.state!.pushAvailable = result.pushAvailable;
     } catch (error) {
       if (generation !== this.generation) return;

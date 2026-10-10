@@ -2062,7 +2062,20 @@ class ConversationHandler:
             train_numbers=list(info.get("selectedTrains") or []),
             seat_preference=info.get("seatPreference", ""),
             seat_plan_json=info.get("seatPlan", ""),
+            train_labels=self._selected_train_labels(info),
         )
+
+    @staticmethod
+    def _selected_train_labels(info: dict) -> dict[str, str]:
+        """The picker's reading label for each chosen train, kept with the search it belongs to."""
+        chosen = {str(no) for no in info.get("selectedTrains") or []}
+        return {
+            str(option.get("no", "")): str(option.get("label") or "")
+            for option in info.get("trainOptions") or []
+            if isinstance(option, dict)
+            and str(option.get("no", "")) in chosen
+            and option.get("label")
+        }
 
     def _handle_final_confirmation(self, chat_id: int, text: str, session: UserSession) -> None:
         """Handle final confirmation before starting reservation."""

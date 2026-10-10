@@ -336,10 +336,31 @@ class PendingPaymentService:
         the search taking another - and the user would be told their booking
         was cancelled while new reservations appeared in their name. Stopping
         the search is what /cancel is for, and it has to come first.
+
+        A search that merely exists does not count. One ends the moment it
+        holds all its seats, so a search running beside an unpaid seat is the
+        watch of another trip, and refusing to give the seat back for it left
+        the user unable to cancel as soon as they watched another train.
         """
-        return (
-            self.storage.get_current_seat_index(chat_id) is not None
-            or self.storage.get_running_reservation(chat_id) is not None
+        if self.storage.get_current_seat_index(chat_id) is not None:
+            return True
+        running = self.storage.get_running_reservation(chat_id)
+        multi = self.storage.get_multi_reservation_status(chat_id)
+        if running is None or multi is None:
+            return False
+        if multi.get_pending_count() + multi.get_paid_count() >= multi.total_seats:
+            return False
+        # Same test the search itself uses to adopt a leftover party record: the party's trains
+        # have to be ones this search is watching, on its day. A record from another trip is not.
+        params = running.search_params
+        return any(
+            item.dep_date in ("", params.dep_date)
+            and (
+                not item.train_no
+                or not params.train_numbers
+                or item.train_no in params.train_numbers
+            )
+            for item in multi.reservations
         )
 
     def _multi_status(self, chat_id: int) -> MultiReservationStatus | None:

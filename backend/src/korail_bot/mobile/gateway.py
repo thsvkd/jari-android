@@ -656,6 +656,9 @@ class MobileGateway(MiniAppGateway):
     @serialized_operation
     def cancel_search(self, chat_id):
         result = super().cancel_search(chat_id)
+        # A stopped sequential run leaves its seat counter for two hours, and that counter alone
+        # makes the unpaid seat it took impossible to give back.
+        self.storage.set_current_seat_index(chat_id, None)
         if result["unscheduled"]:
             self.storage.delete_resume_credentials(chat_id)
             self.storage.delete_app_session_start(chat_id)
