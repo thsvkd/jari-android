@@ -4,6 +4,10 @@ import { keepOnlyTrains, searchTrains, waitForPaymentCard } from "./flows";
 
 // 사용자가 거치는 모든 화면·상태에서 레이아웃 규칙을 재요. phone-dark 프로젝트가 같은 검사를 어두운 테마로 한 번 더 해요.
 
+// 기기 에뮬레이터(소프트웨어 GPU)는 시간 휠을 넘기는 장면에서 말없이 죽는 일이 잦아요(호스트 쪽 렌더러 결함, 프로세스가 통째로 사라져 뒤 테스트가 전부 연쇄 실패해요).
+// 그래서 기기 단계의 필수 묶음에서는 휠 장면을 빼고, 헤드리스 세 프로젝트가 계속 재요. 기기에서 휠도 보려면 JARI_DEVICE_WHEEL=1(야간·릴리스 때의 전체 실행)을 줘요.
+const wheelHere = (project: string) => project !== "device" || process.env.JARI_DEVICE_WHEEL === "1";
+
 test.describe("레이아웃 @layout", () => {
   test("로그인 전 화면", async ({ app: page }) => {
     await openApp(page);
@@ -32,12 +36,13 @@ test.describe("레이아웃 @layout", () => {
     await expectCleanLayout(page, "알림");
   });
 
-  test("새 여정 → 열차 → 좌석표 → 조건 확인", async ({ signedIn: page }) => {
+  test("새 여정의 시간 휠", async ({ signedIn: page }, testInfo) => {
+    test.skip(!wheelHere(testInfo.project.name), "기기 에뮬레이터에서는 야간·릴리스 전체 실행에서만 재요");
     await page.locator(".screen-home [data-action='new-journey']").click();
     await expectCleanLayout(page, "새 여정");
+    // 원래 순서 그대로, 달력이 펼쳐진 채로 시간 칸을 열어요.
     await page.locator("[data-dp='toggle']").click();
     await expect(page.locator("[data-dp-day]").first()).toBeVisible();
-    await expectCleanLayout(page, "새 여정(달력 펼침)");
     const timeField = (name: string) => page.locator("[data-time-picker]", { has: page.locator(`[name=${name}]`) });
     // 손가락처럼 휠 위에서 위아래로 넘겨요. 멈추면 가운데 띠에 든 정시가 값이 되고, 칸은 열린 채예요.
     const flick = async (name: string, rows: number) => {
@@ -80,6 +85,14 @@ test.describe("레이아웃 @layout", () => {
       await expect(page.locator("[name=max_dep_time]")).toHaveValue("18:00");
       await expect(timeField("max_dep_time").locator(".time-panel")).toHaveCount(0);
     }
+  });
+
+  test("새 여정 → 열차 → 좌석표 → 조건 확인", async ({ signedIn: page }) => {
+    await page.locator(".screen-home [data-action='new-journey']").click();
+    await expectCleanLayout(page, "새 여정");
+    await page.locator("[data-dp='toggle']").click();
+    await expect(page.locator("[data-dp-day]").first()).toBeVisible();
+    await expectCleanLayout(page, "새 여정(달력 펼침)");
     await page.locator(".bottom-nav [data-view='home']").click();
     await searchTrains(page, { seatMode: "specific", seatClasses: ["general", "special"] });
     await expectCleanLayout(page, "열차 목록(좌석 지정)");
@@ -167,15 +180,17 @@ test.describe("레이아웃 @layout", () => {
     await expectCleanLayout(page, "좌석 범위(조건 선택)");
   });
 
-  test("찾는 중·결제 대기", async ({ signedIn: page }) => {
+  test("찾는 중·결제 대기", async ({ signedIn: page }, testInfo) => {
     await searchTrains(page);
     await keepOnlyTrains(page, ["00101"]);
     await page.locator("[data-action='trains-next']").click();
     await expectCleanLayout(page, "조건 확인");
     await page.locator("[data-action='schedule-toggle']").click();
-    await page.locator("[data-time-picker='schedule-time'] [data-tp='toggle']").click();
-    await expect(page.locator(".time-panel [data-tp-wheel]")).toBeVisible();
-    await expectCleanLayout(page, "조건 확인(찾기 시작 시각 펼침)");
+    if (wheelHere(testInfo.project.name)) {
+      await page.locator("[data-time-picker='schedule-time'] [data-tp='toggle']").click();
+      await expect(page.locator(".time-panel [data-tp-wheel]")).toBeVisible();
+      await expectCleanLayout(page, "조건 확인(찾기 시작 시각 펼침)");
+    }
     await page.locator("[data-date-picker='schedule-date'] [data-dp='toggle']").click();
     await expect(page.locator(".schedule-panel [data-dp-day]").first()).toBeVisible();
     await expectCleanLayout(page, "조건 확인(찾기 시작 날짜 펼침)");
