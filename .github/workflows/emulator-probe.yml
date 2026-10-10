@@ -16,17 +16,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 2차: 가장 빨리 죽이는 layout.spec 반복을 swangle_indirect 와 RAM·코어 상향에서 돌려요. 대조로 현재 설정도 같이 돌려요.
+        # 3차: 휠 장면을 뺀 기기 묶음이 현재 설정에서 안 죽는지(5회), 휠 포함 전체가 swangle 에서 사는지(2회).
         include:
-          - { variant: layout-base, run: 1, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "layout" }
-          - { variant: layout-base, run: 2, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "layout" }
-          - { variant: layout-swangle, run: 1, options: "-no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "layout" }
-          - { variant: layout-swangle, run: 2, options: "-no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "layout" }
-          - { variant: layout-swangle, run: 3, options: "-no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "layout" }
-          - { variant: layout-bigram, run: 1, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "4096M", cores: 4, tests: "layout" }
-          - { variant: layout-bigram, run: 2, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "4096M", cores: 4, tests: "layout" }
-          - { variant: layout-bigram, run: 3, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "4096M", cores: 4, tests: "layout" }
-          - { variant: full-swangle, run: 3, options: "-no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
+          - { variant: core-base, run: 1, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
+          - { variant: core-base, run: 2, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
+          - { variant: core-base, run: 3, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
+          - { variant: core-base, run: 4, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
+          - { variant: core-base, run: 5, options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "yes" }
+          - { variant: core-wheel-swangle, run: 1, options: "-no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "wheel" }
+          - { variant: core-wheel-swangle, run: 2, options: "-no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none", ram: "2048M", cores: 2, tests: "wheel" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -81,6 +79,7 @@ jobs:
           case "$PROBE_TESTS" in
             yes) node scripts/verify.mjs --ci --device --only=에뮬레이터 || fail ;;
             layout) JARI_PLAYWRIGHT_ARGS="layout.spec --repeat-each=6" node scripts/verify.mjs --ci --device --only=에뮬레이터 || fail ;;
+            wheel) JARI_DEVICE_WHEEL=1 node scripts/verify.mjs --ci --device --only=에뮬레이터 || fail ;;
             *) sleep 1500 ;;
           esac
           SH
