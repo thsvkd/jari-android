@@ -66,7 +66,7 @@ class Agent:
 
     def __init__(self, api: str):
         self.api = api
-        self.resource = api + "/api/mobile/mcp"
+        self.resource = api + "/mcp"
         self.verifier = secrets.token_urlsafe(48)
         self.cookie = ""
         self.ids = iter(range(1, 1000))
@@ -187,14 +187,12 @@ def trip() -> dict:
 
 
 def test_an_mcp_client_without_a_token_finds_where_to_authorize(stack):
-    reply = post_json(
-        stack["api"] + "/api/mobile/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"}
-    )
+    reply = post_json(stack["api"] + "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"})
     assert reply.status == 401
     challenge = reply.headers["WWW-Authenticate"]
     prm_url = re.search(r'resource_metadata="([^"]+)"', challenge).group(1)
     prm = send("GET", prm_url).json()
-    assert prm["resource"] == stack["api"] + "/api/mobile/mcp"
+    assert prm["resource"] == stack["api"] + "/mcp"
     issuer = prm["authorization_servers"][0]
     meta = send("GET", issuer + "/.well-known/oauth-authorization-server").json()
     assert meta["registration_endpoint"] == issuer + "/oauth/register"

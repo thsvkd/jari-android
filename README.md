@@ -103,9 +103,9 @@ docker compose exec -T api python -m korail_bot.mobile admin --username <아이�
 
 Claude Code, claude.ai 같은 AI 에이전트에게 열차 찾기와 예약을 맡길 수 있습니다. 서버에 `MOBILE_PUBLIC_URL`이 설정되어 있어야 합니다([서버 운영 가이드](docs/self-hosting.md#에이전트-연결)).
 
-1. 앱의 **설정 → 에이전트 연결**에서 주소(`https://<서버>/api/mobile/mcp`)를 복사합니다.
+1. 앱의 **설정 → 에이전트 연결**에서 주소(`https://<서버>/mcp`)를 복사합니다.
 2. 에이전트에 그 주소를 넣습니다.
-   - Claude Code: `claude mcp add -s user --transport http jari https://<서버>/api/mobile/mcp` (`-s user` 라 어느 프로젝트에서나 쓰여요)
+   - Claude Code: `claude mcp add -s user --transport http jari https://<서버>/mcp` (`-s user` 라 어느 프로젝트에서나 쓰여요)
    - claude.ai: 설정 → 커넥터 → 커스텀 커넥터 추가
 3. 에이전트에서 연결을 시작합니다. Claude Code 는 `/mcp` 에서 jari 를 골라 인증하고, claude.ai 는 커넥터의 연결을 누릅니다.
 4. 브라우저에 8자리 코드가 나오면 앱의 같은 화면에 입력하고 **연결하기**를 누릅니다.

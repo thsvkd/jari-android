@@ -105,9 +105,9 @@ The password is visible while you type. A hidden-input variant is in [Admin acco
 
 You can let an AI agent such as Claude Code or claude.ai find trains and book seats for you. The server needs `MOBILE_PUBLIC_URL` set ([self-hosting guide](docs/self-hosting.md#에이전트-연결), Korean).
 
-1. In the app, open **설정 → 에이전트 연결** (Settings → Agent connections) and copy the address (`https://<server>/api/mobile/mcp`).
+1. In the app, open **설정 → 에이전트 연결** (Settings → Agent connections) and copy the address (`https://<server>/mcp`).
 2. Give that address to your agent.
-   - Claude Code: `claude mcp add -s user --transport http jari https://<server>/api/mobile/mcp` (`-s user` makes it available in every project)
+   - Claude Code: `claude mcp add -s user --transport http jari https://<server>/mcp` (`-s user` makes it available in every project)
    - claude.ai: Settings → Connectors → Add custom connector
 3. Start the connection from the agent. In Claude Code, open `/mcp`, pick jari and authenticate; in claude.ai, press Connect on the connector.
 4. When the browser shows an 8-character code, enter it on the same screen in the app and tap **연결하기** (Connect).

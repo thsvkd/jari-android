@@ -1,5 +1,5 @@
 """
-에이전트가 부르는 MCP 엔드포인트(/api/mobile/mcp)를 명세 §5·§9 대로 고정한다.
+에이전트가 부르는 MCP 엔드포인트(/mcp)를 명세 §5·§9 대로 고정한다.
 
 도구는 앱이 부르는 것과 같은 gateway 메서드를 같은 입력 형태로 불러야 한다.
 find_trains 의 조건은 앱 src/model.ts buildConditions 가 만드는 값과 같다.
@@ -82,9 +82,7 @@ def conditions_sent(mock):
 
 
 def test_without_a_token_the_client_is_told_where_to_authorize(env):
-    response = env.client.post(
-        "/api/mobile/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"}
-    )
+    response = env.client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
     assert response.status_code == 401
     assert response.get_json() == {"error": "invalid_token"}
     challenge = response.headers["WWW-Authenticate"]
@@ -96,7 +94,7 @@ def test_without_a_token_the_client_is_told_where_to_authorize(env):
 @pytest.mark.parametrize("token", ["", "x" * 43, "not even long"])
 def test_an_invalid_token_gets_the_same_challenge(env, token):
     response = env.client.post(
-        "/api/mobile/mcp",
+        "/mcp",
         json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
         headers=bearer(token),
     )
@@ -171,13 +169,13 @@ def test_a_session_id_sent_by_the_client_is_ignored(env, reader):
 
 @pytest.mark.parametrize("method", ["get", "delete"])
 def test_there_is_no_stream_and_no_session_to_end(env, reader, method):
-    response = getattr(env.client, method)("/api/mobile/mcp", headers=bearer(reader))
+    response = getattr(env.client, method)("/mcp", headers=bearer(reader))
     assert response.status_code == 405
 
 
 def test_a_batch_is_an_invalid_request(env, reader):
     response = env.client.post(
-        "/api/mobile/mcp",
+        "/mcp",
         json=[{"jsonrpc": "2.0", "id": 1, "method": "ping"}],
         headers=bearer(reader),
     )
@@ -437,7 +435,7 @@ def test_get_status_and_list_favourites_read_the_users_own_state(env, reader, st
 def test_a_failed_train_search_is_not_reported_as_sold_out(env, reader, status):
     env.gateway.list_trains.side_effect = MiniAppError("열차 목록을 불러오지 못했어요.", status)
     response = env.client.post(
-        "/api/mobile/mcp",
+        "/mcp",
         json={
             "jsonrpc": "2.0",
             "id": 1,
@@ -474,7 +472,7 @@ def test_a_railway_refusal_keeps_its_own_message(env, reader):
 def test_an_internal_failure_does_not_leak_its_message(env, reader):
     env.gateway.list_trains.side_effect = RuntimeError("korail-password-hunter2")
     response = env.client.post(
-        "/api/mobile/mcp",
+        "/mcp",
         json={
             "jsonrpc": "2.0",
             "id": 1,
@@ -738,7 +736,7 @@ def test_a_tool_name_that_is_not_a_string_is_invalid_params(env, reader, name):
 
 def test_an_oversized_mcp_body_is_a_json_rpc_error(env, reader):
     response = env.client.post(
-        "/api/mobile/mcp",
+        "/mcp",
         data=json.dumps(
             {"jsonrpc": "2.0", "id": 1, "method": "ping", "pad": "x" * (3 * 1024 * 1024)}
         ),
@@ -810,7 +808,7 @@ class Held:
         client = env.app.test_client(use_cookies=False)
         self.first = threading.Thread(
             target=lambda: client.post(
-                "/api/mobile/mcp",
+                "/mcp",
                 json={
                     "jsonrpc": "2.0",
                     "id": 1,
@@ -830,7 +828,7 @@ class Held:
         self.second = threading.Thread(
             target=lambda: self.replies.append(
                 client.post(
-                    "/api/mobile/mcp",
+                    "/mcp",
                     json={
                         "jsonrpc": "2.0",
                         "id": 2,

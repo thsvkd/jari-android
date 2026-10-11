@@ -9,7 +9,7 @@ import { expectCleanLayout } from "./layout";
 // 에이전트 연결(명세 .omc/plans/mcp-agent-spec.md §7). 대기 요청은 실제 MCP 클라이언트처럼
 // /oauth/register 와 /oauth/authorize 를 불러 만들어요. 스택은 MOBILE_PUBLIC_URL 을 API 주소로 띄워요.
 const API = `http://127.0.0.1:${E2E.api}`;
-const MCP_URL = `${API}/api/mobile/mcp`;
+const MCP_URL = `${API}/mcp`;
 const CLAUDE = "https://claude.ai/api/mcp/auth_callback";
 const LOOPBACK = "http://127.0.0.1:53682/callback";
 const WARNING = "직접 연 브라우저에 나온 코드만 입력해 주세요. 다른 사람이 알려 준 코드라면 거절해 주세요.";
@@ -196,7 +196,7 @@ test.describe("에이전트 연결", () => {
     });
     await expect(page.getByText(MCP_URL, { exact: false }).first()).toBeVisible();
     // §13 U10: 주소를 넣은 뒤 에이전트에서 연결을 시작해야 코드가 나와요(Claude Code 는 /mcp).
-    // MCP 주소(…/api/mobile/mcp)가 아니라 명령으로서의 /mcp 예요.
+    // MCP 주소(https://…/mcp)가 아니라 명령으로서의 /mcp 예요.
     await expect(page.locator("main.screen")).toContainText(/(?<![\w./:-])\/mcp\b/);
     await expectCleanLayout(page, "에이전트 연결");
 

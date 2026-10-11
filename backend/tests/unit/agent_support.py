@@ -23,8 +23,8 @@ from korail_bot.mobile.api import create_app
 from korail_bot.mobile.identity import IdentityStore
 
 PUBLIC = "https://jari.example"
-RESOURCE = PUBLIC + "/api/mobile/mcp"
-PRM_URL = PUBLIC + "/.well-known/oauth-protected-resource/api/mobile/mcp"
+RESOURCE = PUBLIC + "/mcp"
+PRM_URL = PUBLIC + "/.well-known/oauth-protected-resource/mcp"
 CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 LOOPBACK_CALLBACK = "http://localhost:53682/callback"
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -340,7 +340,7 @@ def rpc(env, access_token, method, params=None, *, id=1, headers=None):
     if params is not None:
         message["params"] = params
     return env.client.post(
-        "/api/mobile/mcp",
+        "/mcp",
         json=message,
         headers={
             "Accept": "application/json, text/event-stream",

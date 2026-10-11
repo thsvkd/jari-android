@@ -126,7 +126,7 @@ describe("체험 모드의 에이전트 연결", () => {
     }
     const bootstrap = await api.bootstrap();
     expect(bootstrap.capabilities.agents).toBe(true);
-    expect(bootstrap.agents?.mcpUrl).toMatch(/^https:\/\/.+\/api\/mobile\/mcp$/);
+    expect(bootstrap.agents?.mcpUrl).toMatch(/^https:\/\/[^/]+\/mcp$/);
     expect(network).not.toHaveBeenCalled();
   });
 
@@ -175,7 +175,7 @@ describe("연결 화면의 주소", () => {
   // §11 M6: 앱은 baseUrl 로 주소를 만들지 않고 서버가 bootstrap 으로 준 mcpUrl 을 보여 줘요.
   it("서버가 준 MCP 주소를 그대로 보여요", async () => {
     const demo = createDemoApi();
-    const mcpUrl = "https://elsewhere.example/api/mobile/mcp";
+    const mcpUrl = "https://elsewhere.example/mcp";
     const api = {
       ...demo,
       bootstrap: async () => {

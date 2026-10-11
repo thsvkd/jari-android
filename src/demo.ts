@@ -188,7 +188,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
       lastChecked: true,
       agents: true,
     }),
-    agents: { mcpUrl: "https://jari.example/api/mobile/mcp" },
+    agents: { mcpUrl: "https://jari.example/mcp" },
     pushAvailable: false,
     notifications: { pushAvailable: false },
     demo: true,

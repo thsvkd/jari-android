@@ -19,13 +19,13 @@ from flask import Response, jsonify, request
 from korail_bot import __version__
 from korail_bot.config.settings import settings
 from korail_bot.mobile.identity import AuthError
-from korail_bot.mobile.oauth import BOOK, PRM_PATH, SCOPES
+from korail_bot.mobile.oauth import BOOK, MCP_PATH, PRM_PATH, SCOPES
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.mini_app_gateway import MiniAppError
 
 logger = logging.getLogger(__name__)
 
-PATH = "/api/mobile/mcp"
+PATH = MCP_PATH
 VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"]
 SEOUL = ZoneInfo("Asia/Seoul")
 ISO_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})")
@@ -555,7 +555,7 @@ def _result(value=None, error=None):
 
 
 def install(app, identity, gateway, store, locks):
-    """POST /api/mobile/mcp. GET and DELETE answer 405: no stream, no session."""
+    """POST /mcp. GET and DELETE answer 405: no stream, no session."""
     challenge = f'Bearer resource_metadata="{store.issuer}{PRM_PATH}", scope="{" ".join(SCOPES)}"'
 
     def reply(message_id, result=None, error=None, status=200):

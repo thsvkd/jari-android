@@ -111,7 +111,7 @@ def test_public_url_unset_means_the_feature_is_off(monkeypatch, tmp_path):
 
 
 AGENT_PATHS = [
-    ("get", "/.well-known/oauth-protected-resource/api/mobile/mcp"),
+    ("get", "/.well-known/oauth-protected-resource/mcp"),
     ("get", "/.well-known/oauth-protected-resource"),
     ("get", "/.well-known/oauth-authorization-server"),
     ("post", "/oauth/register"),
@@ -119,7 +119,7 @@ AGENT_PATHS = [
     ("get", "/oauth/authorize/poll"),
     ("post", "/oauth/token"),
     ("post", "/oauth/revoke"),
-    ("post", "/api/mobile/mcp"),
+    ("post", "/mcp"),
     ("post", "/api/mobile/agents/requests/lookup"),
     ("post", "/api/mobile/agents/requests/approve"),
     ("post", "/api/mobile/agents/requests/deny"),
@@ -152,7 +152,7 @@ def test_bootstrap_hands_the_app_the_mcp_url_only_when_on(tmp_path):
     off = make_env(tmp_path / "off", public_url=None)
     user = signup(on, "alice")
     body = on.client.post("/api/mobile/bootstrap", headers=app_headers(user)).json
-    assert body["agents"] == {"mcpUrl": "https://jari.thsvkd.dev/api/mobile/mcp"}
+    assert body["agents"] == {"mcpUrl": "https://jari.thsvkd.dev/mcp"}
     user = signup(off, "alice")
     assert "agents" not in off.client.post("/api/mobile/bootstrap", headers=app_headers(user)).json
 
@@ -163,7 +163,7 @@ def test_bootstrap_hands_the_app_the_mcp_url_only_when_on(tmp_path):
 @pytest.mark.parametrize(
     "path",
     [
-        "/.well-known/oauth-protected-resource/api/mobile/mcp",
+        "/.well-known/oauth-protected-resource/mcp",
         "/.well-known/oauth-protected-resource",
     ],
 )
@@ -207,7 +207,7 @@ def test_browser_and_external_origins_reach_oauth_but_not_mcp(env):
     )
     assert registered.status_code == 201
     # MCP 는 기존 규칙 그대로: 허용 목록 밖 Origin 은 403.
-    assert env.client.post("/api/mobile/mcp", headers=foreign, json={}).status_code == 403
+    assert env.client.post("/mcp", headers=foreign, json={}).status_code == 403
 
 
 # ----------------------------------------------------------------- §4.2 DCR
@@ -414,7 +414,7 @@ def test_loopback_redirect_port_is_ignored(env):
         ({"code_challenge_method": "plain"}, {"invalid_request"}),
         ({"code_challenge_method": None}, {"invalid_request"}),
         (
-            {"resource": "https://other.example/api/mobile/mcp"},
+            {"resource": "https://other.example/mcp"},
             {"invalid_request", "invalid_target"},
         ),
         ({"response_type": "token"}, {"invalid_request", "unsupported_response_type"}),
@@ -535,7 +535,7 @@ def test_local_http_server_drops_the_host_prefix_and_secure(tmp_path):
             registered["client_id"],
             CLAUDE_CALLBACK,
             pkce()[1],
-            resource="http://127.0.0.1:18281/api/mobile/mcp",
+            resource="http://127.0.0.1:18281/mcp",
         )
     )
     assert name == "jari_oauth"
@@ -861,7 +861,7 @@ def test_code_exchange_refuses_another_clients_id(env, alice):
 
 def test_code_exchange_refuses_another_resource(env, alice):
     pending, code = authorization_code(env, alice)
-    response = exchange(env, pending, code, resource="https://other.example/api/mobile/mcp")
+    response = exchange(env, pending, code, resource="https://other.example/mcp")
     assert response.status_code == 400
     assert oauth_error(response).get("error") in {"invalid_grant", "invalid_target"}
 
@@ -1404,13 +1404,11 @@ def test_agent_routes_need_the_app_session(env):
 
 def test_metadata_urls_follow_the_configured_public_url(tmp_path):
     env = make_env(tmp_path, public_url="https://jari.thsvkd.dev")
-    prm = env.client.get("/.well-known/oauth-protected-resource/api/mobile/mcp").json
-    assert prm["resource"] == "https://jari.thsvkd.dev/api/mobile/mcp"
-    unauthenticated = env.client.post(
-        "/api/mobile/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"}
-    )
+    prm = env.client.get("/.well-known/oauth-protected-resource/mcp").json
+    assert prm["resource"] == "https://jari.thsvkd.dev/mcp"
+    unauthenticated = env.client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
     assert (
-        'resource_metadata="https://jari.thsvkd.dev/.well-known/oauth-protected-resource/api/mobile/mcp"'
+        'resource_metadata="https://jari.thsvkd.dev/.well-known/oauth-protected-resource/mcp"'
         in unauthenticated.headers["WWW-Authenticate"]
     )
 

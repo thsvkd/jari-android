@@ -25,7 +25,7 @@ Python 3.13 이상과 Redis가 필요합니다. Windows에는 시간대 데이�
 | `MOBILE_DATA_DIR` | SQLite 계정·알림 저장 디렉터리; 기본 `.data/jari` |
 | `MOBILE_ORIGINS` | 허용할 앱 출처를 쉼표로 나열; 기본 `https://localhost,capacitor://localhost` |
 | `MOBILE_FCM_CREDENTIALS` | 선택 사항; 서버에 보관한 Firebase 서비스 계정 JSON 경로 |
-| `MOBILE_PUBLIC_URL` | 선택 사항; 에이전트(MCP)가 바깥에서 부르는 HTTPS 주소(경로 없이). 비우면 에이전트 연결(`/oauth/*`·`/.well-known/*`·`/api/mobile/mcp`)이 꺼짐 |
+| `MOBILE_PUBLIC_URL` | 선택 사항; 에이전트(MCP)가 바깥에서 부르는 HTTPS 주소(경로 없이). 비우면 에이전트 연결(`/oauth/*`·`/.well-known/*`·`/mcp`)이 꺼짐 |
 
 기존 봇 `.env`는 자동으로 읽지 않습니다. 봇의 계정·비밀 키를 모바일 설정으로 복사하지 않습니다.
 모바일 Redis 키에는 `jari:mobile:v1:` 접두어가 붙고, 앱 계정은 `mobile_...` ID 및

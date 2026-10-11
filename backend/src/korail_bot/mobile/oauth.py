@@ -28,7 +28,8 @@ from korail_bot.mobile.identity import digest, timestamp
 from korail_bot.mobile.pages import _STYLE, APP_NAME
 
 READ, BOOK = "jari.read", "jari.book"
-PRM_PATH = "/.well-known/oauth-protected-resource/api/mobile/mcp"
+MCP_PATH = "/mcp"
+PRM_PATH = "/.well-known/oauth-protected-resource" + MCP_PATH
 SCOPES = [READ, BOOK]
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 REQUEST_TTL = 600
@@ -119,7 +120,7 @@ class AgentStore:
     def __init__(self, identity, issuer):
         self.identity = identity
         self.issuer = issuer
-        self.resource = issuer + "/api/mobile/mcp"
+        self.resource = issuer + MCP_PATH
 
     def _sweep(self, db, now):
         db.execute("DELETE FROM oauth_requests WHERE expires<=?", (now - REQUEST_TTL,))
