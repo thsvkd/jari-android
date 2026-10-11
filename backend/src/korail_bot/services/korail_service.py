@@ -639,7 +639,7 @@ class KorailService(RailService):
             if (
                 len(page) < _KORAIL_PAGE_ROWS
                 or (wanted and wanted <= {t.train_no for t in rows})
-                or (last_known and last >= last_known)
+                or (last_known and last > last_known)
                 or not last[:4].isdigit()
                 or last[:4] >= "2359"
                 or (max_dep_time != "2400" and int(last[:4]) >= int(max_dep_time))
@@ -686,7 +686,9 @@ class KorailService(RailService):
             return False
         if wanted <= {str(train.train_no) for train in trains}:
             return True
-        return bool(last_known and page and str(page[-1].departure_time or "") >= last_known)
+        # Strictly after: another train in the very minute the watched one leaves can be the
+        # page's last row, with the watched one on the next page.
+        return bool(last_known and page and str(page[-1].departure_time or "") > last_known)
 
     @staticmethod
     def _window_covered(page, max_dep_time: str) -> bool:

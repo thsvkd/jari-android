@@ -539,3 +539,20 @@ def test_ten_trains_in_one_minute_do_not_loop_forever():
 
     assert len(trains) == 10  # the page it could read; the repeat of it added nothing new
     assert len(day.asked) == 2
+
+
+def test_a_watched_train_in_the_same_minute_as_a_page_end_is_still_found(monkeypatch):
+    # 08:00 A와 12:30 W 를 고른 감시. 12:30 에 열차가 둘이고 한 쪽이 그 첫째로 끝나면, 기억한 12:30 에서
+    # 멈추는 판정(>=)은 W 가 다음 쪽에 있는데도 읽지 않고 매번 놓쳐요.
+    service = service_with_modern_client()
+    fill = [row(f"{n:03d}", f"{8 + n // 4:02d}{n % 4 * 15 + 5:02d}00") for n in range(1, 9)]
+    day = KorailDay([row("100", "080000"), *fill, row("200", "123000"), row("300", "123000")])
+    service._modern_client.search_trains.side_effect = day
+
+    first = listing(service, wanted=["100", "300"])
+    assert {train.train_no for train in first} >= {"100", "300"}
+
+    day.asked.clear()
+    again = listing(service, wanted=["100", "300"])
+
+    assert "300" in {train.train_no for train in again}

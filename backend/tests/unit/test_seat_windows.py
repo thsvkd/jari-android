@@ -420,3 +420,19 @@ def test_a_failed_page_after_a_sold_out_first_page_is_a_failed_search_not_no_sea
 
     with pytest.raises(SearchUnavailableError):
         service.search_trains("20261013", "서울", "부산", "000000", "2400", include_no_seats=False)
+
+
+def test_a_watched_train_in_the_minute_a_legacy_page_ends_is_still_found(monkeypatch):
+    def at(number, clock):
+        return SimpleNamespace(train_no=number, dep_time=clock, has_seat=lambda: True)
+
+    fill = [at(f"{n:03d}", f"{8 + n // 4:02d}{n % 4 * 15 + 5:02d}00") for n in range(1, 9)]
+    pager = _Pager([at("100", "080000"), *fill, at("200", "123000"), at("300", "123000")])
+    service, _ = _service(monkeypatch, pager)
+
+    first = _search(service, wanted={"100", "300"})
+    assert {t.train_no for t in first} >= {"100", "300"}
+
+    again = _search(service, wanted={"100", "300"})
+
+    assert "300" in {t.train_no for t in again}
