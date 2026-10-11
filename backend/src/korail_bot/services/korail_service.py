@@ -509,22 +509,27 @@ class KorailService(RailService):
         wanted = set(wanted or ())
         place = (dep_date, src_locate, dst_locate)
         start, last_known = self._wanted_start(place, wanted, dep_time)
-        query = TrainSearchQuery(
-            departure_station_code=src_locate,
-            arrival_station_code=dst_locate,
-            departure_date=dep_date,
-            departure_time=start,
-            passengers=passenger_count,
-        )
+
+        def query_from(at: str) -> TrainSearchQuery:
+            return TrainSearchQuery(
+                departure_station_code=src_locate,
+                arrival_station_code=dst_locate,
+                departure_date=dep_date,
+                departure_time=at,
+                passengers=passenger_count,
+            )
+
         trains: list = []
-        continuation = None
+        at = start
+        cursor = None
+        more = False
         failure: Exception | None = None
         for index in range(_SEARCH_MAX_PAGES):
             try:
-                result = client.search_trains(query, continuation=continuation)
+                result = client.search_trains(query_from(at), continuation=cursor)
             except KorailNoResultsError:
                 # The first page: nothing runs in this window. A later page: the day ran out.
-                continuation = None
+                more = False
                 break
             except Exception as exc:
                 if not trains or self._wanted_missing(wanted, trains):
@@ -542,25 +547,30 @@ class KorailService(RailService):
                 break
             # Padded before anything is read from them: Korail sends some numbers as JSON numbers,
             # and "73500" is not 07:35.
+            rows = [self._padded_train(row) for row in result.trains]
             seen = {self._row_key(train) for train in trains}
-            page = [
-                train
-                for train in (self._padded_train(row) for row in result.trains)
-                if self._row_key(train) not in seen
-            ]
+            page = [train for train in rows if self._row_key(train) not in seen]
             trains.extend(page)
-            continuation = result.next_page()
+            cursor = result.next_page()
+            # Korail says "there is more" (h_next_pg_flg=Y) without the cursor fields the library
+            # wants, so the next page is asked for like korail2 does: from the last row's departure.
+            flagged = getattr(getattr(result, "metadata", None), "next_page_flag", None) == "Y"
+            more = cursor is not None or flagged
+            if cursor is None and more:
+                at = str(rows[-1].departure_time or "") if rows else ""
+                # A page of nothing but trains already seen cannot lead anywhere new.
+                more = bool(page) and at[:4].isdigit()
             if (
-                continuation is None
+                not more
                 or self._window_covered(page, max_dep_time)
                 or self._wanted_covered(page, trains, wanted, last_known)
             ):
-                continuation = None
+                more = False
                 break
             # Pages follow each other like passes do: Korail blocks a client that asks too fast.
             self.wait_between_requests(1.0 if wanted else 0.5)
-        # Also true when a later page failed: its cursor is still in hand and the day is not all here.
-        self.search_cut_short = continuation is not None
+        # Also true when a later page failed: the day is not all here.
+        self.search_cut_short = more or failure is not None
         self._remember_wanted(
             place,
             wanted,

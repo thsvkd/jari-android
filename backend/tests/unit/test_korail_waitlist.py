@@ -465,3 +465,77 @@ def test_a_list_the_filters_empty_after_a_failed_page_is_a_failure_not_no_trains
 
     with pytest.raises(ConnectionError):
         listing(service)
+
+
+class KorailDay:
+    """
+    Korail's search as production answers it (probed 2026-10-12): ten rows from the asked-for time
+    on, `h_next_pg_flg` Y while more follow, and no cursor fields, so `next_page()` is None.
+    """
+
+    def __init__(self, rows):
+        self.rows = sorted(rows, key=lambda item: item.departure_time)
+        self.asked = []
+
+    def __call__(self, query, continuation=None):
+        assert continuation is None  # there is no cursor to give back
+        self.asked.append(query.departure_time)
+        page = [train for train in self.rows if train.departure_time >= query.departure_time]
+        if not page:
+            raise KorailNoResultsError("P100", "결과가 없습니다.")
+        flag = "Y" if len(page) > 10 else "N"
+        return SimpleNamespace(
+            trains=page[:10], next_page=lambda: None, metadata=SimpleNamespace(next_page_flag=flag)
+        )
+
+
+def a_day(count, *, ktx_every=2):
+    """`count` trains from 05:00, every `ktx_every`th one a KTX and the rest not."""
+    rows = []
+    for n in range(count):
+        train = row(f"{n + 1:03d}", f"{5 + n // 2:02d}{n % 2 * 30:02d}00")
+        if n % ktx_every:
+            train.train_group_name = "무궁화호"
+        rows.append(train)
+    return rows
+
+
+def test_a_day_is_read_page_by_page_from_the_last_row_when_korail_gives_no_cursor():
+    service = service_with_modern_client()
+    day = KorailDay(a_day(26))
+    service._modern_client.search_trains.side_effect = day
+
+    trains = listing(service)
+
+    assert [train.train_no for train in trains] == [
+        t.train_no for t in day.rows if t.train_group_name == "KTX"
+    ]
+    assert len(trains) == 13
+    # The second page starts at the last row of the first; the third at the last row of the second.
+    assert len(day.asked) == 3
+    assert day.asked[1] == day.rows[9].departure_time
+    assert day.asked[2] == day.rows[18].departure_time
+    assert service.search_cut_short is False
+
+
+def test_a_long_day_stops_at_the_page_limit_and_says_so():
+    service = service_with_modern_client()
+    day = KorailDay(a_day(120))
+    service._modern_client.search_trains.side_effect = day
+
+    listing(service)
+
+    assert len(day.asked) == 5
+    assert service.search_cut_short is True
+
+
+def test_ten_trains_in_one_minute_do_not_loop_forever():
+    service = service_with_modern_client()
+    same_minute = [row(f"{n:03d}", "090000") for n in range(1, 13)]
+    day = KorailDay(same_minute)
+    service._modern_client.search_trains.side_effect = day
+
+    trains = listing(service)
+
+    assert len(trains) == 10  # the page it could read; the repeat of it added nothing new
+    assert len(day.asked) == 2
