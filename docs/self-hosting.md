@@ -187,6 +187,7 @@ Docker 이미지에는 알림 의존성이 이미 들어 있습니다. Docker �
 | 진행 중인 자리 찾기 목록(읽기만) | `docker compose exec -T api python -m korail_bot.mobile running` |
 | 초대 코드 만들기 | `docker compose exec api python -m korail_bot.mobile invite --ttl-hours 24` |
 | 메일로 온 탈퇴 요청 처리 | `docker compose exec -T api python -m korail_bot.mobile delete-account --username <앱 아이디>` |
+| 빈자리가 얼마나 오래 남는지 보기(감시 간격을 정할 때, 읽기만) | `docker compose exec -T api python -m korail_bot.mobile seat-windows` |
 | 앱이 겪은 연결 실패 보기 | `docker compose logs api 2>&1 \| grep "Client connection miss"` |
 
 ## 10. 외부 감시(선택)

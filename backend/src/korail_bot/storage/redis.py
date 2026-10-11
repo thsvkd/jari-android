@@ -785,6 +785,23 @@ class RedisStorage(StorageInterface):
             ex=settings.SEARCH_HEARTBEAT_TTL_SECONDS,
         )
 
+    #: Seat windows kept for the interval study (services/seat_windows.py).
+    #: Newest first, capped so a forgotten study cannot grow without bound.
+    #: The app's storage keeps them under its own namespace, which is the one
+    #: `python -m korail_bot.mobile seat-windows` reads; the Telegram bot's
+    #: land outside it and are not read by anything yet.
+    SEAT_WINDOWS_KEY = "seat_windows"
+    SEAT_WINDOWS_KEEP = 10000
+
+    def record_seat_window(self, event: dict) -> None:
+        """Keep one seat window or lost race. Carries no user, only trains."""
+        self.redis.lpush(self.SEAT_WINDOWS_KEY, json.dumps(event))
+        self.redis.ltrim(self.SEAT_WINDOWS_KEY, 0, self.SEAT_WINDOWS_KEEP - 1)
+
+    def get_seat_windows(self) -> list[dict]:
+        """Every kept seat window, newest first."""
+        return [json.loads(item) for item in self.redis.lrange(self.SEAT_WINDOWS_KEY, 0, -1)]
+
     def get_search_heartbeat(self, chat_id: int) -> dict | None:
         """
         What this chat's search last managed, or None when it has not said.

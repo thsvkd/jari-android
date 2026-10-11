@@ -1,4 +1,4 @@
-"""python -m korail_bot.mobile {serve,invite,admin,running}; no BOTTOKEN required."""
+"""python -m korail_bot.mobile {serve,invite,admin,running,seat-windows}; no BOTTOKEN required."""
 
 import argparse
 import json
@@ -31,6 +31,10 @@ def main():
         help="Delete an app account and everything kept for it (a deletion request made by email)",
     )
     delete.add_argument("--username", required=True)
+    commands.add_parser(
+        "seat-windows",
+        help="How long freed seats stayed free, for choosing the search interval (read-only)",
+    )
     serve = commands.add_parser("serve", help="Run one API and booking worker owner")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8081)
@@ -56,6 +60,9 @@ def main():
             return
         if args.command == "running":
             print_running(config, as_json=args.json)
+            return
+        if args.command == "seat-windows":
+            print(json.dumps(seat_windows(config), ensure_ascii=False, indent=2))
             return
         if args.command == "delete-account":
             print(delete_account(config, args.username))
@@ -136,6 +143,20 @@ def delete_account(config, username):
         if runtime.storage:
             runtime.storage.close()
     return f"Deleted {user['username']} ({user['id']})"
+
+
+def seat_windows(config):
+    """The interval study's summary, read beside the API (docker compose exec)."""
+    from korail_bot.config.settings import settings
+    from korail_bot.mobile.storage import MobileStorage
+    from korail_bot.services.seat_windows import summarize
+
+    storage = MobileStorage(secret=config.secret, url=config.redis_url)
+    try:
+        events = storage.get_seat_windows()
+    finally:
+        storage.close()
+    return summarize(events, settings.KORAIL_SEARCH_INTERVAL)
 
 
 def print_running(config, *, as_json):

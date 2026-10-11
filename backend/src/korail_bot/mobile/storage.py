@@ -41,7 +41,20 @@ class NamespacedRedis:
     # The namespace this data lived under before the app was renamed.
     LEGACY_PREFIX = "teum:mobile:v1:"
     SINGLE_KEY = frozenset(
-        {"get", "set", "expire", "incr", "ttl", "sadd", "sismember", "smembers", "srem"}
+        {
+            "get",
+            "set",
+            "expire",
+            "incr",
+            "ttl",
+            "sadd",
+            "sismember",
+            "smembers",
+            "srem",
+            "lpush",
+            "ltrim",
+            "lrange",
+        }
     )
 
     def __init__(self, client, lease_client=None):

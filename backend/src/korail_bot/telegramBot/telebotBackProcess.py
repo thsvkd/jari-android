@@ -39,6 +39,7 @@ from korail_bot.services import (
 )
 from korail_bot.services.cancellation_wait_service import train_label
 from korail_bot.services.rail_service import SearchUnavailableError
+from korail_bot.services.seat_windows import SeatWindows
 from korail_bot.storage.redis import RedisStorage
 from korail_bot.telegramBot.messages import Messages
 from korail_bot.utils.formatting import format_duration
@@ -269,11 +270,14 @@ class BackgroundReservationProcess:
         A resumed search is the same app session the user started, not a
         freshly launched one, so it picks up the timestamp it began with.
         """
-        return KorailService(
+        service = KorailService(
             app_session_start=self.storage.get_or_create_app_session_start(self.chat_id),
             on_status=self._announce_search_status,
             on_progress=self._report_search_progress,
         )
+        # Free: it reads the answers the watch already asks for.
+        service.seat_windows = SeatWindows(self.storage.record_seat_window)
+        return service
 
     def _parse_train_type(self, train_type_str: str):
         """Parse train type from string."""

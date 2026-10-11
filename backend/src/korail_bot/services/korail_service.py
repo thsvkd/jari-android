@@ -53,6 +53,7 @@ from korail_bot.services.rail_service import (
     SearchProgress,
     SearchUnavailableError,
 )
+from korail_bot.services.seat_windows import SeatWindows
 from korail_bot.utils.logger import get_logger
 from korail_bot.utils.privacy import mask_phone
 from korail_bot.utils.timezone import RAIL_TIMEZONE
@@ -244,6 +245,10 @@ class KorailService(RailService):
     """Service for interacting with Korail API."""
 
     operator_name = "코레일"
+
+    #: Set by a watch to record how long freed seats stay free; None for every
+    #: other client, which only looks once and has no passes to compare.
+    seat_windows: SeatWindows | None = None
 
     def __init__(self, *args, **kwargs):
         """
@@ -489,6 +494,8 @@ class KorailService(RailService):
             )
         )
         trains = [self._padded_train(train) for train in result.trains]
+        if self.seat_windows is not None:
+            self.seat_windows.observe(trains, passenger_count)
         if train_type == TrainType.KTX:
             trains = [train for train in trains if train.train_group_name == "KTX"]
         if max_dep_time != "2400":
@@ -890,14 +897,22 @@ class KorailService(RailService):
                 raise ValueError("좌석 정보가 바뀌었습니다. 좌석표를 다시 불러와 주세요.")
             assignments.append(KorailSeatAssignment.from_inventory(inventory, physical))
 
-        return client.reserve(
-            train,
-            consent=MutationConsent(allow_reserve=True, dry_run=False),
-            passengers=KorailPassengerCounts(adult=passenger_count),
-            seat_class=self._seat_class(seat_class),
-            job_type=KorailReservationJobType.SEAT_DESIGNATED,
-            seats=assignments,
-        )
+        try:
+            hold = client.reserve(
+                train,
+                consent=MutationConsent(allow_reserve=True, dry_run=False),
+                passengers=KorailPassengerCounts(adult=passenger_count),
+                seat_class=self._seat_class(seat_class),
+                job_type=KorailReservationJobType.SEAT_DESIGNATED,
+                seats=assignments,
+            )
+        except KorailAppError as exc:
+            if self._is_no_remaining_seats(exc) and self.seat_windows is not None:
+                self.seat_windows.lost(train)
+            raise
+        if self.seat_windows is not None:
+            self.seat_windows.took(train)
+        return hold
 
     def release_unpaid_hold(self, hold):
         """Release a modern unpaid hold when the app cannot safely persist it."""
@@ -990,6 +1005,9 @@ class KorailService(RailService):
                 logger.debug(f"  passengers: {passengers} (count: {passenger_count})")
                 logger.debug(f"  max_dep_time: {max_dep_time}")
 
+            # Always every train: korail2 drops the sold-out ones only after
+            # the answer arrives, so asking for them costs no request, and the
+            # seat windows need the trains that are full as much as the free.
             trains = self._korail_instance.search_train(
                 src_locate,
                 dst_locate,
@@ -997,8 +1015,12 @@ class KorailService(RailService):
                 dep_time,
                 train_type=train_type,
                 passengers=passengers,
-                include_no_seats=include_no_seats,
+                include_no_seats=True,
             )
+            if self.seat_windows is not None:
+                self.seat_windows.observe(trains, passenger_count)
+            if not include_no_seats:
+                trains = [train for train in trains if train.has_seat()]
 
             if verbose:
                 logger.debug(f"📋 Korail API returned {len(trains) if trains else 0} trains")
@@ -1141,6 +1163,8 @@ class KorailService(RailService):
                 )
 
             if reservation:
+                if self.seat_windows is not None:
+                    self.seat_windows.took(train)
                 logger.info("🎉 RESERVATION SUCCESS!")
                 logger.info(f"  Reservation details: {reservation}")
                 if hasattr(reservation, "rsv_id"):
@@ -1151,7 +1175,11 @@ class KorailService(RailService):
                 logger.debug("Reservation returned None (no seats available)")
                 return None
 
-        except SoldOutError:
+        except SoldOutError as e:
+            # With a code it is Korail's answer (ERR211161); without one it is
+            # korail2 refusing locally from the search row, no race involved.
+            if e.code and self.seat_windows is not None:
+                self.seat_windows.lost(train)
             logger.debug(f"Train sold out during reservation attempt: {train}")
             return None
         except requests.exceptions.RequestException as e:
@@ -1174,6 +1202,8 @@ class KorailService(RailService):
                             and str(getattr(existing, "train_no", "")) == str(train.train_no)
                         ):
                             logger.info(f"Reservation for {train} appeared despite the timeout")
+                            if self.seat_windows is not None:
+                                self.seat_windows.took(train)
                             self._attach_assigned_seats(existing)
                             return existing
                 except Exception as check_err:
@@ -1193,6 +1223,10 @@ class KorailService(RailService):
                 logger.warning("⚠️ Duplicate reservation detected - will continue searching")
                 logger.warning(f"  Error: {error_msg}")
                 return "DUPLICATE"
+
+            # Any other "no seats left" answer is the same lost race.
+            if "잔여석" in error_msg and self.seat_windows is not None:
+                self.seat_windows.lost(train)
 
             if error_type == "NeedToLoginError":
                 logger.debug(f"🔒 Session expired during reservation, re-logging in: {error_msg}")
