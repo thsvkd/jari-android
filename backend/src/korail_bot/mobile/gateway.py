@@ -47,6 +47,9 @@ MAX_CONSECUTIVE_CAR_FAILURES = 3
 # for that formation again and can land on another date whose car list
 # differs, which is how a car could go missing from "모든 호차에 적용".
 RAIL_SESSION_SECONDS = 1800
+# Korail's refusals that say this account already holds the train (the Korail app sends the person
+# to the reservation list for the last two): not "someone else took the seat".
+ALREADY_BOOKED_CODES = {"WRR800029", "ERR911531", "ERR911051"}
 
 
 def serialized_operation(method):
@@ -378,14 +381,14 @@ class MobileGateway(MiniAppGateway):
             KorailSeatUnavailableError,
             KorailReservationRefusedError,
         ) as exc:
-            # Korail answered: the seat is not for sale (any more). Not an outage.
+            # Korail answered: it will not take this booking. Not an outage.
             logger.warning(
-                "Korail refused designated seats for chat_id=%s (%s)", chat_id, type(exc).__name__
+                "Korail refused designated seats for chat_id=%s (%s %s)",
+                chat_id,
+                type(exc).__name__,
+                getattr(exc, "code", None),
             )
-            raise MiniAppError(
-                "코레일이 이 좌석을 받아 주지 않았어요. 이미 팔렸을 수 있으니 좌석표를 새로 불러와 주세요.",
-                409,
-            ) from exc
+            raise MiniAppError(self._refusal(exc), 409) from exc
         except Exception as exc:
             logger.error(
                 "Could not reserve designated seats for chat_id=%s (%s)",
@@ -448,6 +451,15 @@ class MobileGateway(MiniAppGateway):
             "pending": self._pending(chat_id),
             "paymentUrl": settings.KORAIL_PAYMENT_URL,
         }
+
+    @staticmethod
+    def _refusal(exc) -> str:
+        """What Korail's refusal means to the person: sold, already booked, or just refused."""
+        if isinstance(exc, KorailReservationRefusedError):
+            if getattr(exc, "code", None) in ALREADY_BOOKED_CODES:
+                return "이 계정에 이미 이 열차의 예약이 있어요. 코레일 예약 목록을 확인해 주세요."
+            return "코레일이 예약을 받아 주지 않았어요. 코레일 앱에서 예약 목록을 확인해 주세요."
+        return "코레일이 이 좌석을 받아 주지 않았어요. 이미 팔렸을 수 있으니 좌석표를 새로 불러와 주세요."
 
     @staticmethod
     def _release_failed_hold(rail, hold, chat_id):

@@ -1,5 +1,6 @@
 """에이전트(MCP)가 기대는 gateway 동작: 감시할 수 있는 열차 판정과 열차 목록의 끝."""
 
+from datetime import timedelta
 from unittest.mock import MagicMock
 
 import fakeredis
@@ -8,12 +9,14 @@ import pytest
 from korail_bot.mobile.config import MobileConfig
 from korail_bot.mobile.runtime import MobileRuntime
 from korail_bot.models import OnboardedAccount, UserSession
+from korail_bot.utils.timezone import utc_now
 
 OWNER = -100
+DAY = (utc_now() + timedelta(days=3)).strftime("%Y%m%d")
 TRIP = {
     "v": 1,
     "action": "prepare_search",
-    "dep_date": "20261013",
+    "dep_date": DAY,
     "src_station": "서울",
     "dst_station": "부산",
     "dep_time": "0000",
@@ -46,7 +49,7 @@ def runtime(tmp_path, monkeypatch):
 def listed(runtime, *options):
     session = UserSession(chat_id=OWNER)
     session.train_info = {
-        "depDate": "20261013",
+        "depDate": DAY,
         "srcLocate": "서울",
         "dstLocate": "부산",
         "trainOptions": [

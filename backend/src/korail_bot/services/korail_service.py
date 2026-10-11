@@ -271,6 +271,10 @@ class KorailService(RailService):
         self._seat_layout_references: dict[tuple, object] = {}
         # Whether the last search_waitlist_trains stopped at the page limit with more trains behind it.
         self.search_cut_short = False
+        # (date, from, to) -> {train number: departure HHMMSS} of the watched trains once seen. A
+        # watch polls every second; knowing when its trains leave, it asks for the page they are on
+        # instead of walking the day from the first page every time.
+        self._wanted_departures: dict[tuple, dict[str, str]] = {}
         # 코레일이 호차 목록에서 뺀 호차를 다른 날짜의 같은 열차 편성에서 채운 기록. 편성 조회는 열차·등급마다
         # 한 번만 하고(찾지 못했다면 None), 채운 호차는 목록을 읽을 때마다 새로 계산해요.
         # 열차·등급 → {호차 번호: (그 호차를 담은 참고 열차, 호차)}. 비어 있으면 찾지 못한 것이에요.
@@ -501,15 +505,17 @@ class KorailService(RailService):
         if not self._logged_in or client is None:
             raise ValueError("Must login before searching trains")
 
+        wanted = set(wanted or ())
+        place = (dep_date, src_locate, dst_locate)
+        start, last_known = self._wanted_start(place, wanted, dep_time)
         query = TrainSearchQuery(
             departure_station_code=src_locate,
             arrival_station_code=dst_locate,
             departure_date=dep_date,
-            departure_time=dep_time,
+            departure_time=start,
             passengers=passenger_count,
         )
-        wanted = set(wanted or ())
-        rows: list = []
+        trains: list = []
         continuation = None
         for _ in range(_SEARCH_MAX_PAGES):
             try:
@@ -518,17 +524,27 @@ class KorailService(RailService):
                 # The first page: nothing runs in this window. A later page: the day ran out.
                 continuation = None
                 break
-            rows.extend(result.trains)
+            # Padded before anything is read from them: Korail sends some numbers as JSON numbers,
+            # and "73500" is not 07:35.
+            page = [self._padded_train(train) for train in result.trains]
+            trains.extend(page)
             continuation = result.next_page()
             if (
                 continuation is None
-                or self._window_covered(result.trains, max_dep_time)
-                or (wanted and wanted <= {str(train.train_no) for train in rows})
+                or self._window_covered(page, max_dep_time)
+                or self._wanted_covered(page, trains, wanted, last_known)
             ):
                 continuation = None
                 break
+            if wanted:
+                # A watch is the one that asks every second: pace its pages like its passes.
+                self.wait_between_requests()
         self.search_cut_short = continuation is not None
-        trains = [self._padded_train(train) for train in rows]
+        self._remember_wanted(
+            place,
+            wanted,
+            [(train.train_no, getattr(train, "departure_time", "")) for train in trains],
+        )
         if self.seat_windows is not None:
             self.seat_windows.observe(trains, passenger_count)
         if train_type == TrainType.KTX:
@@ -552,7 +568,8 @@ class KorailService(RailService):
         """
         rows: list = []
         seen: set = set()
-        start = dep_time
+        place = (dep_date, src, dst)
+        start, last_known = self._wanted_start(place, wanted, dep_time)
         for _ in range(_SEARCH_MAX_PAGES):
             try:
                 page = self._korail_instance.search_train(
@@ -577,13 +594,44 @@ class KorailService(RailService):
             if (
                 len(page) < _KORAIL_PAGE_ROWS
                 or (wanted and wanted <= {t.train_no for t in rows})
+                or (last_known and last >= last_known)
                 or not last[:4].isdigit()
                 or last[:4] >= "2359"
                 or (max_dep_time != "2400" and int(last[:4]) >= int(max_dep_time))
             ):
                 break
             start = last
+            if wanted:
+                self.wait_between_requests()
+        self._remember_wanted(place, wanted, [(t.train_no, t.dep_time) for t in rows])
         return rows
+
+    def _wanted_start(self, place: tuple, wanted: set, dep_time: str) -> tuple[str, str | None]:
+        """Where to start asking, and the departure after which the watched trains cannot be."""
+        known = {
+            no: at for no, at in self._wanted_departures.get(place, {}).items() if no in wanted
+        }
+        if wanted and set(known) == wanted:
+            return max(str(dep_time), min(known.values())), max(known.values())
+        return dep_time, None
+
+    def _remember_wanted(self, place: tuple, wanted: set, departures) -> None:
+        seen = {
+            str(no): str(at or "")
+            for no, at in departures
+            if str(no) in wanted and str(at or "")[:4].isdigit()
+        }
+        if seen:
+            self._wanted_departures.setdefault(place, {}).update(seen)
+
+    @staticmethod
+    def _wanted_covered(page, trains, wanted: set, last_known: str | None) -> bool:
+        """Whether the watched trains are all in hand, or this page is past where they can be."""
+        if not wanted:
+            return False
+        if wanted <= {str(train.train_no) for train in trains}:
+            return True
+        return bool(last_known and page and str(page[-1].departure_time or "") >= last_known)
 
     @staticmethod
     def _window_covered(page, max_dep_time: str) -> bool:
@@ -1390,16 +1438,17 @@ class KorailService(RailService):
         if not self._logged_in or client is None:
             raise ValueError("코레일에 로그인한 뒤 예약 대기를 신청해 주세요.")
 
-        result = client.search_trains(
-            TrainSearchQuery(
-                departure_station_code=src_locate,
-                arrival_station_code=dst_locate,
-                departure_date=dep_date,
-                departure_time=dep_time,
-                passengers=passenger_count,
-            )
+        trains = self.search_waitlist_trains(
+            dep_date=dep_date,
+            src_locate=src_locate,
+            dst_locate=dst_locate,
+            dep_time=dep_time,
+            max_dep_time="2400",
+            train_type=TrainType.ALL,
+            passenger_count=passenger_count,
+            wanted=[str(train_no)],
         )
-        train = next((item for item in result.trains if str(item.train_no) == str(train_no)), None)
+        train = next((item for item in trains if str(item.train_no) == str(train_no)), None)
         if train is None:
             raise ValueError("선택한 열차를 다시 찾지 못했어요. 목록을 새로 조회해 주세요.")
         if str(getattr(train, "wait_reservation_flag", "") or "") != " 9":

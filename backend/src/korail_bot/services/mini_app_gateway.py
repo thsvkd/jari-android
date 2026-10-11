@@ -760,10 +760,23 @@ class MiniAppGateway:
         started = as_utc(running.started_at) if running.started_at else None
         return {
             **self._describe_params(running.search_params),
+            **self._party_progress(chat_id),
             "startedAt": started.isoformat() if started else None,
             "elapsedSeconds": (utc_now() - started).total_seconds() if started else None,
             **self._search_health(chat_id, running, started),
             **self._seat_plan_description(chat_id, running.search_params),
+        }
+
+    def _party_progress(self, chat_id: int) -> dict:
+        """Seats held out of the seats wanted, while this search is still filling a party."""
+        if not self.pending_payments.still_booking(chat_id):
+            return {}
+        multi = self.storage.get_multi_reservation_status(chat_id)
+        if multi is None:
+            return {}
+        return {
+            "seatsHeld": multi.get_pending_count() + multi.get_paid_count(),
+            "seatsWanted": multi.total_seats,
         }
 
     def _search_health(

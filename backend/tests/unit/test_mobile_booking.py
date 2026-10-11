@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import fakeredis
 import pytest
 from korail_mobile_api import PhysicalSeat, SeatCar, SeatCarListResponse, SeatInventoryResponse
-from korail_mobile_api.errors import KorailSoldOutError
+from korail_mobile_api.errors import KorailReservationRefusedError, KorailSoldOutError
 
 from korail_bot.mobile.config import MobileConfig
 from korail_bot.mobile.runtime import MobileRuntime
@@ -517,6 +517,14 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
     taken = http.post("/api/mobile/reservations/designated", headers=headers, json=designated)
     assert taken.status_code == 409
     assert "받아 주지 않았어요" in taken.json["error"]
+    # 이 계정이 이미 그 열차를 잡고 있다는 거절은 "팔렸다"가 아니에요: 다른 좌석으로 되풀이할 일이 아니에요.
+    rail.reserve_designated.side_effect = KorailReservationRefusedError(
+        "WRR800029", "동일한 예약 내역이 있습니다"
+    )
+    twice = http.post("/api/mobile/reservations/designated", headers=headers, json=designated)
+    assert twice.status_code == 409
+    assert "이미 이 열차의 예약이 있어요" in twice.json["error"]
+    assert "팔렸" not in twice.json["error"]
     rail.reserve_designated.side_effect = None
 
     bob = runtime.identity.register(
@@ -549,8 +557,8 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
     assert status.reservation_id == "R1"
     assert status.seat_labels == ["3호차 5A"]
     assert runtime.notifications.items(owner)[0]["kind"] == "payment"
-    # 좌석표 조회 1회, 코레일이 거절한 예약 시도 1회, 성공한 예약 시도 1회.
-    assert rail.seat_inventory.call_count == 3
+    # 좌석표 조회 1회, 코레일이 거절한 예약 시도 2회, 성공한 예약 시도 1회.
+    assert rail.seat_inventory.call_count == 4
     runtime.storage.close()
 
 

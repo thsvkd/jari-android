@@ -269,10 +269,37 @@ SHAPES = [
                 "좌석 조건: 일반실만, 2명, 연속 좌석",
                 "정한 시각에 감시를 시작해요.",
                 "결제를 기다리는 예약이 1건 있어요. 결제 기한 안에 사용자가 직접 결제해야 해요.",
-                "2석 중 1석을 잡았고 나머지는 감시가 찾고 있어요.",
             ],
         },
         id="get_status-full",
+    ),
+    pytest.param(
+        "get_status",
+        {},
+        "status",
+        {
+            "running": {**RUNNING, "seatsHeld": 1, "seatsWanted": 2},
+            "scheduled": None,
+            "pending": [PENDING],
+        },
+        {
+            "running": {
+                **RUNNING,
+                "seatsHeld": 1,
+                "seatsWanted": 2,
+                "startedAt": "2026-10-07T09:00:00+09:00",
+                "lastCheckedAt": "2026-10-07T09:01:00+09:00",
+            },
+            "scheduled": None,
+            "pending": [{**PENDING, "expiresAt": "2026-10-10T10:10:00+09:00", "paymentUrl": URL}],
+            "notes": [
+                WATCHING,
+                "좌석 조건: 일반실만, 2명, 연속 좌석",
+                "결제를 기다리는 예약이 1건 있어요. 결제 기한 안에 사용자가 직접 결제해야 해요.",
+                "2석 중 1석을 잡았고 나머지는 감시가 찾고 있어요.",
+            ],
+        },
+        id="get_status-party-partly-held",
     ),
     pytest.param(
         "get_status",

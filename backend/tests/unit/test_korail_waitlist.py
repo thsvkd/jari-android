@@ -304,3 +304,96 @@ def test_a_window_with_no_train_is_an_empty_list_not_a_failure():
 
     assert listing(service) == []
     assert service.search_cut_short is False
+
+
+def numeric_row(number, minute_of_day):
+    """A row as Korail sends it when the numbers arrive as JSON numbers: no leading zeros."""
+    from korail_mobile_api import TrainSummary
+
+    hour, minute = divmod(minute_of_day, 60)
+    return TrainSummary.from_raw(
+        {
+            "h_trn_no": number,
+            "h_trn_gp_cd": "100",
+            "h_dpt_rs_stn_cd": 1,
+            "h_arv_rs_stn_cd": 20,
+            "h_dpt_dt": "20261013",
+            "h_run_dt": "20261013",
+            "h_dpt_tm": hour * 10000 + minute * 100,
+            "h_arv_tm": "235900",
+            "h_trn_clsf_cd": 7,
+        }
+    )
+
+
+def test_pages_are_read_after_the_leading_zeros_are_restored():
+    # 07:35 arrives as 73500. Read raw, that is "73:50", past a 12:00 window, and the day stopped at page one.
+    service = service_with_modern_client()
+    first = [numeric_row(n, 6 * 60 + 5 * n) for n in range(1, 11)]
+    second = [numeric_row(n, 9 * 60 + 5 * n) for n in range(11, 14)]
+    service._modern_client.search_trains.side_effect = pages(first, second)
+
+    trains = service.search_waitlist_trains(
+        dep_date="20261013",
+        src_locate="서울",
+        dst_locate="부산",
+        dep_time="060000",
+        max_dep_time="1200",
+        train_type=TrainType.ALL,
+        passenger_count=1,
+    )
+
+    assert len(trains) == 13
+    assert service._modern_client.search_trains.call_count == 2
+
+
+def test_a_watch_starts_at_the_page_its_trains_are_on_once_it_has_seen_them(monkeypatch):
+    service = service_with_modern_client()
+    monkeypatch.setattr(service, "wait_between_requests", lambda *_: 0)
+    first = [row(f"{n:03d}", f"{6 + n:02d}0000") for n in range(10)]
+    second = [row("015", "170000"), row("017", "180000")]
+    service._modern_client.search_trains.side_effect = pages(first, second)
+
+    listing(service, wanted=["015"])
+    assert service._modern_client.search_trains.call_count == 2
+
+    service._modern_client.search_trains.reset_mock()
+    service._modern_client.search_trains.side_effect = pages(second)
+    listing(service, wanted=["015"])
+
+    (call,) = service._modern_client.search_trains.call_args_list
+    assert call.args[0].departure_time == "170000"
+
+
+def test_a_vanished_watched_train_does_not_walk_the_day_every_pass(monkeypatch):
+    service = service_with_modern_client()
+    monkeypatch.setattr(service, "wait_between_requests", lambda *_: 0)
+    service._wanted_departures[("20261013", "서울", "부산")] = {"015": "170000"}
+    gone = [row(f"{n:03d}", f"{17 + n // 10:02d}{n % 10 * 5:02d}00") for n in range(10)]
+    service._modern_client.search_trains.side_effect = pages(gone, [row("099", "230000")])
+
+    trains = listing(service, wanted=["015"])
+
+    assert len(trains) == 10
+    assert service._modern_client.search_trains.call_count == 1
+
+
+def test_a_waitlist_request_finds_a_train_on_a_later_page(monkeypatch):
+    service = service_with_modern_client()
+    monkeypatch.setattr(service, "wait_between_requests", lambda *_: 0)
+    first = [row(f"{n:03d}", f"{6 + n:02d}0000") for n in range(10)]
+    target = row("015", "170000")
+    target.wait_reservation_flag = " 9"
+    service._modern_client.search_trains.side_effect = pages(first, [target])
+    service._modern_client.reserve.return_value = SimpleNamespace(pnr_no="PRIVATE")
+
+    result = service.request_waitlist(
+        dep_date="20261013",
+        src_locate="서울",
+        dst_locate="부산",
+        dep_time="000000",
+        train_no="015",
+    )
+
+    assert result["train_no"] == "015"
+    assert service._modern_client.search_trains.call_count == 2

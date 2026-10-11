@@ -549,9 +549,9 @@ def _status(result):
             f"결제를 기다리는 예약이 {len(pending)}건 있어요. "
             "결제 기한 안에 사용자가 직접 결제해야 해요."
         )
-        wanted = (running or {}).get("passengerCount")
-        if isinstance(wanted, int) and wanted > len(pending):
-            notes.append(f"{wanted}석 중 {len(pending)}석을 잡았고 나머지는 감시가 찾고 있어요.")
+        held, wanted = (running or {}).get("seatsHeld"), (running or {}).get("seatsWanted")
+        if isinstance(held, int) and isinstance(wanted, int) and wanted > held > 0:
+            notes.append(f"{wanted}석 중 {held}석을 잡았고 나머지는 감시가 찾고 있어요.")
     return {
         **result,
         "pending": pending,

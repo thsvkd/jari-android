@@ -164,3 +164,21 @@ def test_watched_trains_keep_their_departure_labels_after_the_picker_is_gone(run
 
     assert running["trainLabels"] == {"101": "07:00→09:40 KTX"}
     assert running["selectedTrains"] == ["101"]
+
+
+def test_status_counts_the_seats_a_party_search_holds_out_of_those_it_wants(runtime):
+    hold_half_a_party(runtime)
+    watch_another_trip(runtime)
+
+    running = runtime.gateway.status(OWNER)["running"]
+
+    assert (running["seatsHeld"], running["seatsWanted"]) == (1, 2)
+
+
+def test_status_does_not_count_a_leftover_party_of_another_trip(runtime):
+    hold_half_a_party(runtime, train_no="101", dep_date="20261001")
+    watch_another_trip(runtime)
+
+    running = runtime.gateway.status(OWNER)["running"]
+
+    assert "seatsHeld" not in running
