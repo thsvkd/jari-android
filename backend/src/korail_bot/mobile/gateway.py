@@ -187,7 +187,9 @@ class MobileGateway(MiniAppGateway):
 
     @staticmethod
     def _watchable(option, submission, ktx_only):
-        # The worker's own test is the train group; names are the fallback for an older list.
+        # The seat-plan worker filters on the train group; the older worker asks Korail for KTX
+        # (korail2 TrainType.KTX), which may or may not mean the same trains for odd ones such as
+        # KTX-이음. The group is the best test the list carries; names are the fallback.
         group = option.get("trainGroup")
         if ktx_only and not (
             group == "KTX" if group else str(option.get("name") or "").startswith("KTX")

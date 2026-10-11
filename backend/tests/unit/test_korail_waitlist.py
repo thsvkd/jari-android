@@ -430,3 +430,38 @@ def test_a_first_page_that_fails_is_still_a_failure():
 
     with pytest.raises(ConnectionError):
         listing(service)
+
+
+def test_a_failed_later_page_is_not_reported_as_a_missing_watched_train():
+    service = service_with_modern_client()
+    first = pages([row("001", "060000")], [row("015", "170000")])[0]
+    service._modern_client.search_trains.side_effect = [first, ConnectionError("timeout")]
+
+    with pytest.raises(ConnectionError):
+        listing(service, wanted=["015"])
+
+
+def test_a_waitlist_request_whose_train_page_failed_is_a_failure_not_a_missing_train():
+    service = service_with_modern_client()
+    first = pages([row("001", "060000")], [row("015", "170000")])[0]
+    service._modern_client.search_trains.side_effect = [first, ConnectionError("timeout")]
+
+    with pytest.raises(ConnectionError):
+        service.request_waitlist(
+            dep_date="20261013",
+            src_locate="서울",
+            dst_locate="부산",
+            dep_time="000000",
+            train_no="015",
+        )
+
+
+def test_a_list_the_filters_empty_after_a_failed_page_is_a_failure_not_no_trains():
+    service = service_with_modern_client()
+    slow = row("001", "150000")
+    slow.train_group_name = "무궁화호"
+    first = pages([slow], [row("003", "153000")])[0]
+    service._modern_client.search_trains.side_effect = [first, ConnectionError("timeout")]
+
+    with pytest.raises(ConnectionError):
+        listing(service)

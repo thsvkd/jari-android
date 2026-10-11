@@ -8,6 +8,7 @@ would only show against the real objects.
 from types import SimpleNamespace
 
 import fakeredis
+import pytest
 from korail2 import NoResultsError, SoldOutError
 from korail2.korail2 import Train
 from korail_mobile_api.models import TrainSummary
@@ -388,3 +389,16 @@ def test_a_page_that_fails_after_the_first_keeps_the_first(monkeypatch):
 
     assert len(_search(service)) == 10
     assert service.search_cut_short is True
+
+
+def test_a_failed_page_is_not_a_missing_watched_train(monkeypatch):
+    class Flaky(_Pager):
+        def search_train(self, dep, arr, date, start, **kwargs):
+            if self.asked:
+                raise ConnectionError("timeout")
+            return super().search_train(dep, arr, date, start, **kwargs)
+
+    service, _ = _service(monkeypatch, Flaky(_paged(14)))
+
+    with pytest.raises(ConnectionError):
+        _search(service, wanted={"012"})

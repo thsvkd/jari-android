@@ -517,6 +517,7 @@ class KorailService(RailService):
         )
         trains: list = []
         continuation = None
+        failure: Exception | None = None
         for index in range(_SEARCH_MAX_PAGES):
             try:
                 result = client.search_trains(query, continuation=continuation)
@@ -525,7 +526,9 @@ class KorailService(RailService):
                 continuation = None
                 break
             except Exception as exc:
-                if not trains:
+                if not trains or self._wanted_missing(wanted, trains):
+                    # Nothing read yet, or the trains asked for are not in what was: a failed
+                    # read must not turn into "that train is not there".
                     raise
                 # What the earlier pages showed is still true; losing it to page three's hiccup
                 # would fail a whole pass (a list, a watch) for want of trains it already has.
@@ -534,6 +537,7 @@ class KorailService(RailService):
                     index + 1,
                     type(exc).__name__,
                 )
+                failure = exc
                 break
             # Padded before anything is read from them: Korail sends some numbers as JSON numbers,
             # and "73500" is not 07:35.
@@ -572,6 +576,9 @@ class KorailService(RailService):
                 if str(train.departure_time or "")[:4].isdigit()
                 and int(str(train.departure_time)[:4]) < int(max_dep_time)
             ]
+        if failure is not None and not trains:
+            # The pages that failed may have held the only trains the filters keep.
+            raise failure
         return trains
 
     def _search_legacy_pages(
@@ -603,7 +610,7 @@ class KorailService(RailService):
                     raise
                 break
             except Exception as exc:
-                if not rows:
+                if not rows or (wanted and not wanted <= {t.train_no for t in rows}):
                     raise
                 # The earlier pages are still true: do not lose them to a later page's hiccup.
                 logger.warning(
@@ -651,6 +658,10 @@ class KorailService(RailService):
         }
         if seen:
             self._wanted_departures.setdefault(place, {}).update(seen)
+
+    @staticmethod
+    def _wanted_missing(wanted: set, trains) -> bool:
+        return bool(wanted) and not wanted <= {str(train.train_no) for train in trains}
 
     @staticmethod
     def _row_key(train) -> tuple[str, str]:
