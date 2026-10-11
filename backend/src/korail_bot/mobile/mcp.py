@@ -34,7 +34,7 @@ MAX_RESULT_BYTES = 100 * 1024
 STALE_AFTER = datetime.timedelta(seconds=120)
 NOT_READ = "조회하지 못했어요(좌석이 없다는 뜻이 아니에요)."
 TOO_MANY = "요청이 너무 많아요. 잠시 후 다시 시도해 주세요."
-RAIL_TOO_MANY = "요청이 너무 많아요. 코레일 조회는 1분에 10번까지예요. 1분쯤 뒤에 다시 해 주세요."
+RAIL_TOO_MANY = "요청이 너무 많아요. 코레일에 닿는 도구는 1분에 10번까지 부를 수 있어요. 1분쯤 뒤에 다시 해 주세요."
 BOOK_REFUSED = (
     "이 연결은 조회만 할 수 있어요. 예약을 맡기려면 사용자가 "
     "앱의 설정 → 에이전트 연결에서 '예약까지 맡기기'를 켜 주세요."
@@ -57,6 +57,17 @@ HEALTH_NOTES = {
     "unknown": "감시 상태를 아직 확인하지 못했어요. 잠시 뒤 다시 확인해 주세요.",
     "late": "감시는 돌고 있지만 한동안 코레일 조회 결과가 없어요. 좌석이 없다는 뜻이 아니에요. "
     "사용자에게 앱에서 확인해 달라고 알려 주세요.",
+}
+WATCH_RUNNING_NOTE = (
+    "이미 감시 중이에요. 다른 감시를 시작하려면 먼저 멈춰야 하고, "
+    "stop_watch 는 사용자에게 확인을 받은 뒤에만 불러 주세요. 지금 감시는 get_status 로 볼 수 있어요."
+)
+# What the agent cannot tell when a call that changes things did not answer, by tool.
+UNSURE_OUTCOME = {
+    "start_watch": "감시가 시작됐을 수도 있으니 get_status 로 확인해 주세요.",
+    "stop_watch": "감시가 멈췄는지 get_status 로 확인해 주세요.",
+    "reserve_seat": "예약이 됐을 수도 있으니 get_status 로 확인해 주세요.",
+    "cancel_reservation": "취소됐는지 get_status 로 확인해 주세요.",
 }
 SEARCH_RUNNING_NOTE = (
     "이미 감시 중이라 열차를 새로 찾을 수 없어요. 감시 중인 열차는 get_status 로 볼 수 있어요. "
@@ -366,6 +377,10 @@ def _trains(result):
         notes.append(
             "열차가 많아 일부만 보여요. earliest·latest 로 시간대를 좁혀 다시 찾아 주세요."
         )
+    if not result.get("trains"):
+        notes.append(
+            "이 시간대에 열차가 없어요. 아직 승차권을 팔지 않는 먼 날짜도 이렇게 보일 수 있어요."
+        )
     return {
         "notes": notes,
         "trains": [
@@ -465,22 +480,33 @@ def _now():
     return datetime.datetime.now(datetime.UTC)
 
 
-def _quiet(running):
-    """A running search whose last check is older than the app tolerates, or that never made one."""
-    now = _now()
-    for key in ("lastCheckedAt", "startedAt"):
-        raw = running.get(key)
-        if not isinstance(raw, str):
-            continue
-        try:
-            stamp = datetime.datetime.fromisoformat(raw)
-        except ValueError:
-            return False
-        if stamp.tzinfo is None:
-            stamp = stamp.replace(tzinfo=datetime.UTC)
-        # The check time when there is one; otherwise how long the first pass has been under way.
-        return now - stamp > STALE_AFTER
-    return False
+def _age(raw):
+    """How old an ISO time is, or None when it is missing or unreadable."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        stamp = datetime.datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=datetime.UTC)
+    return _now() - stamp
+
+
+def _quiet(running, health):
+    """
+    Whether the app would draw this search as "확인 지연" (src/model.ts deriveRadarView).
+
+    Any state but a failing one with a last check older than STALE_AFTER; with no check at all, a
+    healthy search whose first pass has been under way that long.
+    """
+    if health in ("error", "unavailable", "stale"):
+        return False
+    checked = _age(running.get("lastCheckedAt"))
+    if checked is not None:
+        return checked > STALE_AFTER
+    started = _age(running.get("startedAt"))
+    return health in ("healthy", "running") and started is not None and started > STALE_AFTER
 
 
 def _started(result):
@@ -527,7 +553,7 @@ def _status(result):
     running = result.get("running")
     if running:
         health = running.get("health")
-        if health in ("healthy", "running") and _quiet(running):
+        if _quiet(running, health):
             # The server calls a search healthy while its heartbeat exists; the app, which draws
             # what the user reads, calls it "확인 지연" once the last check is this old.
             health = "late"
@@ -568,7 +594,7 @@ def _korean_times(value):
     if isinstance(value, str) and ISO_TIME.fullmatch(value):
         try:
             return datetime.datetime.fromisoformat(value).astimezone(SEOUL).isoformat()
-        except ValueError:
+        except (ValueError, OverflowError):
             # A user's own text (a favourite's name) can look like a time without being one.
             return value
     return value
@@ -636,7 +662,7 @@ def unlisted(gateway, storage_id, arguments):
 def _failure(name, exc):
     message = str(exc)
     if message == SEARCH_RUNNING:
-        return SEARCH_RUNNING_NOTE
+        return SEARCH_RUNNING_NOTE if name == "find_trains" else WATCH_RUNNING_NOTE
     if exc.status in (404, 410) and name in ("get_seat_map", "reserve_seat"):
         # The trainKey expired (30 minutes) or never existed.
         return "열차 정보가 없거나 만료됐어요. find_trains 를 다시 불러 주세요."
@@ -647,7 +673,7 @@ def _failure(name, exc):
         if exc.status != 401:
             # Not "unreachable": a refusal and a failed save come through here too. What the
             # agent needs to know is that the booking may or may not have happened.
-            return f"{message} 예약이 됐을 수도 있으니 get_status 로 확인해 주세요."
+            return f"{message} {UNSURE_OUTCOME.get(name, '')}".rstrip()
     return message
 
 

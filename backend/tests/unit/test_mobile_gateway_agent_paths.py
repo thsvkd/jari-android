@@ -47,14 +47,20 @@ def runtime(tmp_path, monkeypatch):
 
 
 def listed(runtime, *options):
+    """Options are (number, name, HHMM) or (number, name, HHMM, group)."""
     session = UserSession(chat_id=OWNER)
     session.train_info = {
         "depDate": DAY,
         "srcLocate": "서울",
         "dstLocate": "부산",
         "trainOptions": [
-            {"no": number, "name": name, "dep_time": f"{clock}00"}
-            for number, name, clock in options
+            {
+                "no": number,
+                "name": name,
+                "dep_time": f"{clock}00",
+                **({"trainGroup": group[0]} if group else {}),
+            }
+            for number, name, clock, *group in options
         ],
     }
     runtime.storage.save_user_session(session)
@@ -95,3 +101,13 @@ def test_a_window_without_trains_is_an_empty_list(runtime):
     answer = runtime.gateway.list_trains(OWNER, TRIP)
     assert answer["trains"] == []
     assert answer["truncated"] is False
+
+
+def test_a_ktx_watch_follows_the_train_group_the_worker_filters_on(runtime):
+    # 워커는 이름이 아니라 열차 그룹이 KTX 인 열차만 봐요.
+    listed(
+        runtime,
+        ("001", "KTX-이음", "0600", "KTX"),
+        ("003", "KTX 이름의 다른 그룹", "0700", "ITX"),
+    )
+    assert runtime.gateway.listed_trains(OWNER, TRIP) == ["001"]

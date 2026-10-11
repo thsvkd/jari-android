@@ -18,6 +18,8 @@ def service_with_modern_client():
     service = KorailService()
     service._logged_in = True
     service._modern_client = MagicMock()
+    # Pages follow each other at the pace of a search pass; a test does not wait for it.
+    service.wait_between_requests = lambda *_: 0
     return service
 
 
@@ -397,3 +399,34 @@ def test_a_waitlist_request_finds_a_train_on_a_later_page(monkeypatch):
 
     assert result["train_no"] == "015"
     assert service._modern_client.search_trains.call_count == 2
+
+
+def test_a_train_two_pages_repeat_is_listed_once():
+    service = service_with_modern_client()
+    shared = row("009", "090000")
+    service._modern_client.search_trains.side_effect = pages(
+        [row("001", "060000"), shared], [shared, row("011", "100000")]
+    )
+
+    trains = listing(service)
+
+    assert [train.train_no for train in trains] == ["001", "009", "011"]
+
+
+def test_a_later_page_that_fails_keeps_the_pages_before_it_and_says_it_is_cut_short():
+    service = service_with_modern_client()
+    first = pages([row("001", "060000")], [row("003", "070000")])[0]
+    service._modern_client.search_trains.side_effect = [first, ConnectionError("timeout")]
+
+    trains = listing(service)
+
+    assert [train.train_no for train in trains] == ["001"]
+    assert service.search_cut_short is True
+
+
+def test_a_first_page_that_fails_is_still_a_failure():
+    service = service_with_modern_client()
+    service._modern_client.search_trains.side_effect = ConnectionError("timeout")
+
+    with pytest.raises(ConnectionError):
+        listing(service)

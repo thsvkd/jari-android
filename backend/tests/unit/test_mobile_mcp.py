@@ -1404,3 +1404,64 @@ def test_a_favourite_named_like_a_broken_time_does_not_fail_the_list(env, reader
     result = call_tool(env, reader, "list_favourites")
     assert not result.get("isError")
     assert "2026-13-01T07:00Z" in tool_text(result)
+
+
+@pytest.mark.parametrize(
+    ("tool", "method", "hint"),
+    [
+        ("cancel_reservation", "cancel_pending", "취소됐는지"),
+        ("stop_watch", "cancel_search", "멈췄는지"),
+        ("reserve_seat", "reserve_designated", "예약이 됐을 수도"),
+    ],
+)
+def test_an_unanswered_change_asks_the_agent_to_check_what_that_tool_changes(
+    env, booker, tool, method, hint
+):
+    getattr(env.gateway, method).side_effect = MiniAppError("처리하지 못했어요.", 502)
+    arguments = (
+        {
+            "trainKey": "T1",
+            "seatClass": "general",
+            "carNo": 3,
+            "seats": [{"carNo": 3, "seatNo": "3-7A", "label": "7A"}],
+        }
+        if tool == "reserve_seat"
+        else {}
+    )
+    text = tool_text(call_tool(env, booker, tool, arguments))
+    assert hint in text
+    assert "get_status" in text
+
+
+def test_a_watch_that_is_already_running_is_not_told_to_list_trains_differently(env, booker):
+    env.gateway.start_search.side_effect = MiniAppError(SEARCH_RUNNING, 409)
+    args = {**TRIP, "trains": ["00101"]}
+    text = tool_text(call_tool(env, booker, "start_watch", args))
+    assert "이미 감시 중이에요" in text
+    assert "열차를 새로 찾을 수 없어요" not in text
+
+
+def test_a_favourite_with_a_time_too_big_to_read_does_not_fail_the_list(env, reader):
+    env.gateway.favourites.return_value = [{"id": "f1", "name": "9999-12-31T23:59-23:59"}]
+    result = call_tool(env, reader, "list_favourites")
+    assert not result.get("isError")
+
+
+@pytest.mark.parametrize("health", ["unknown", "healthy"])
+def test_an_old_last_check_is_late_in_every_state_that_is_not_failing(
+    env, reader, monkeypatch, health
+):
+    checked = datetime.datetime(2026, 10, 7, 0, 0, tzinfo=datetime.UTC)
+    monkeypatch.setattr(mcp, "_now", lambda: checked + datetime.timedelta(minutes=5))
+    env.gateway.status.return_value = {
+        "running": {"health": health, "lastCheckedAt": checked.isoformat()},
+        "scheduled": None,
+        "pending": [],
+    }
+    assert "한동안 코레일 조회 결과가 없어요" in tool_text(call_tool(env, reader, "get_status"))
+
+
+def test_a_window_with_no_train_says_a_far_date_looks_the_same(env, reader):
+    env.gateway.list_trains.return_value = {"trains": [], "truncated": False}
+    text = tool_text(call_tool(env, reader, "find_trains", TRIP))
+    assert "이 시간대에 열차가 없어요" in text

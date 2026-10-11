@@ -522,7 +522,7 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
         "WRR800029", "동일한 예약 내역이 있습니다"
     )
     twice = http.post("/api/mobile/reservations/designated", headers=headers, json=designated)
-    assert twice.status_code == 409
+    assert twice.status_code == 422  # not 409: the app reads that as "seat just sold"
     assert "이미 이 열차의 예약이 있어요" in twice.json["error"]
     assert "팔렸" not in twice.json["error"]
     rail.reserve_designated.side_effect = None

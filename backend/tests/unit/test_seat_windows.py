@@ -314,7 +314,7 @@ class _Pager:
 
     def search_train(self, dep, arr, date, start, **kwargs):
         self.asked.append(start)
-        page = [t for t in self.rows if t.dep_time >= start][:10]
+        page = [t for t in self.rows if str(t.dep_time).zfill(6) >= start][:10]
         if not page:
             raise NoResultsError()
         return page
@@ -327,9 +327,9 @@ def _paged(count):
     ]
 
 
-def _search(service, **extra):
+def _search(service, wanted=frozenset(), until="2400"):
     return service._search_legacy_pages(
-        "서울", "부산", "20261013", "000000", None, [], "2400", extra.get("wanted", set())
+        "서울", "부산", "20261013", "000000", None, [], until, set(wanted)
     )
 
 
@@ -360,3 +360,31 @@ def test_a_short_page_is_the_end_of_the_day_and_costs_no_second_request(monkeypa
 
     assert len(_search(service)) == 6
     assert len(pager.asked) == 1
+
+
+def test_the_watch_search_reads_departures_korail_sends_as_numbers(monkeypatch):
+    # 07:35:00 arrives as 73500. Read raw it is past 23:59 and the day would stop at page one.
+    rows = [
+        SimpleNamespace(train_no=f"{n:03d}", dep_time=73500 + n * 100, has_seat=lambda: True)
+        for n in range(14)
+    ]
+    pager = _Pager(rows)
+    service, _ = _service(monkeypatch, pager)
+
+    assert len(_search(service, until="1200")) == 14
+    assert len(pager.asked) == 2  # read raw, "73500" is past noon and the day ended at page one
+
+
+def test_a_page_that_fails_after_the_first_keeps_the_first(monkeypatch):
+    rows = _paged(10)
+
+    class Flaky(_Pager):
+        def search_train(self, dep, arr, date, start, **kwargs):
+            if self.asked:
+                raise ConnectionError("timeout")
+            return super().search_train(dep, arr, date, start, **kwargs)
+
+    service, _ = _service(monkeypatch, Flaky(rows))
+
+    assert len(_search(service)) == 10
+    assert service.search_cut_short is True

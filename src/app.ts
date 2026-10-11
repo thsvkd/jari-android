@@ -953,7 +953,7 @@ export class JariApp {
     return `${this.renderSubhead("열차 선택", "좌석 예약·취소표 대기")}
       <div class="context-line"><b>${escapeHtml(conditions.src_station)} → ${escapeHtml(conditions.dst_station)}</b><span>${escapeHtml(formatWindow(conditions))}</span></div>
       <p class="intro">좌석이 있으면 바로 예약할 수 있어요. 매진이면 원하는 좌석 범위를 골라 취소표 대기를 시작하세요.<br>카드를 누르면 그 열차의 어떤 자리든 기다려요.</p>
-      ${this.trainListTruncated ? notice({ tone: "warning", text: "목록이 길어 일부 열차만 보여드려요. 시간대 전체 찾기는 그대로 이용할 수 있어요." }) : ""}
+      ${this.trainListTruncated ? notice({ tone: "warning", text: "목록이 길어 일부 열차만 보여드려요. 시간대를 좁혀 다시 조회하면 나머지를 볼 수 있어요." }) : ""}
       <div class="train-list">${list}</div>
       ${this.renderError()}
       ${this.renderAccessRequest()}

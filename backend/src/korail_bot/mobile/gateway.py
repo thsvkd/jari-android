@@ -150,6 +150,7 @@ class MobileGateway(MiniAppGateway):
                     "trainKey": self.seat_maps.remember_train(chat_id, train),
                     "generalAvailable": getattr(train, "general_reservation_code", None) == "11",
                     "specialAvailable": getattr(train, "special_reservation_code", None) == "11",
+                    "trainGroup": getattr(train, "train_group_name", None),
                 }
             )
             options.append(option)
@@ -186,7 +187,11 @@ class MobileGateway(MiniAppGateway):
 
     @staticmethod
     def _watchable(option, submission, ktx_only):
-        if ktx_only and not str(option.get("name") or "").startswith("KTX"):
+        # The worker's own test is the train group; names are the fallback for an older list.
+        group = option.get("trainGroup")
+        if ktx_only and not (
+            group == "KTX" if group else str(option.get("name") or "").startswith("KTX")
+        ):
             return False
         clock = str(option.get("dep_time") or "")[:4]
         # A departure time that cannot be read is left to the worker's own filter.
@@ -388,7 +393,8 @@ class MobileGateway(MiniAppGateway):
                 type(exc).__name__,
                 getattr(exc, "code", None),
             )
-            raise MiniAppError(self._refusal(exc), 409) from exc
+            message, status = self._refusal(exc)
+            raise MiniAppError(message, status) from exc
         except Exception as exc:
             logger.error(
                 "Could not reserve designated seats for chat_id=%s (%s)",
@@ -453,13 +459,28 @@ class MobileGateway(MiniAppGateway):
         }
 
     @staticmethod
-    def _refusal(exc) -> str:
-        """What Korail's refusal means to the person: sold, already booked, or just refused."""
+    def _refusal(exc) -> tuple[str, int]:
+        """
+        What Korail's refusal means to the person, and the status to say it with.
+
+        409 is "this seat was just sold": the app reloads the seat map on it. A refusal that is not
+        about the seat (the account already holds the train) is a 422, so that nothing retries it
+        with another seat and the app shows the sentence as it is.
+        """
         if isinstance(exc, KorailReservationRefusedError):
             if getattr(exc, "code", None) in ALREADY_BOOKED_CODES:
-                return "이 계정에 이미 이 열차의 예약이 있어요. 코레일 예약 목록을 확인해 주세요."
-            return "코레일이 예약을 받아 주지 않았어요. 코레일 앱에서 예약 목록을 확인해 주세요."
-        return "코레일이 이 좌석을 받아 주지 않았어요. 이미 팔렸을 수 있으니 좌석표를 새로 불러와 주세요."
+                return (
+                    "이 계정에 이미 이 열차의 예약이 있어요. 코레일 예약 목록을 확인해 주세요.",
+                    422,
+                )
+            return (
+                "코레일이 예약을 받아 주지 않았어요. 코레일 앱에서 예약 목록을 확인해 주세요.",
+                422,
+            )
+        return (
+            "코레일이 이 좌석을 받아 주지 않았어요. 이미 팔렸을 수 있으니 좌석표를 새로 불러와 주세요.",
+            409,
+        )
 
     @staticmethod
     def _release_failed_hold(rail, hold, chat_id):

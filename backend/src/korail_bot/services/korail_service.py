@@ -517,16 +517,32 @@ class KorailService(RailService):
         )
         trains: list = []
         continuation = None
-        for _ in range(_SEARCH_MAX_PAGES):
+        for index in range(_SEARCH_MAX_PAGES):
             try:
                 result = client.search_trains(query, continuation=continuation)
             except KorailNoResultsError:
                 # The first page: nothing runs in this window. A later page: the day ran out.
                 continuation = None
                 break
+            except Exception as exc:
+                if not trains:
+                    raise
+                # What the earlier pages showed is still true; losing it to page three's hiccup
+                # would fail a whole pass (a list, a watch) for want of trains it already has.
+                logger.warning(
+                    "Search page %d failed (%s); using the pages before it",
+                    index + 1,
+                    type(exc).__name__,
+                )
+                break
             # Padded before anything is read from them: Korail sends some numbers as JSON numbers,
             # and "73500" is not 07:35.
-            page = [self._padded_train(train) for train in result.trains]
+            seen = {self._row_key(train) for train in trains}
+            page = [
+                train
+                for train in (self._padded_train(row) for row in result.trains)
+                if self._row_key(train) not in seen
+            ]
             trains.extend(page)
             continuation = result.next_page()
             if (
@@ -536,9 +552,9 @@ class KorailService(RailService):
             ):
                 continuation = None
                 break
-            if wanted:
-                # A watch is the one that asks every second: pace its pages like its passes.
-                self.wait_between_requests()
+            # Pages follow each other like passes do: Korail blocks a client that asks too fast.
+            self.wait_between_requests(1.0 if wanted else 0.5)
+        # Also true when a later page failed: its cursor is still in hand and the day is not all here.
         self.search_cut_short = continuation is not None
         self._remember_wanted(
             place,
@@ -568,6 +584,7 @@ class KorailService(RailService):
         """
         rows: list = []
         seen: set = set()
+        self.search_cut_short = False
         place = (dep_date, src, dst)
         start, last_known = self._wanted_start(place, wanted, dep_time)
         for _ in range(_SEARCH_MAX_PAGES):
@@ -585,12 +602,22 @@ class KorailService(RailService):
                 if not rows:
                     raise
                 break
+            except Exception as exc:
+                if not rows:
+                    raise
+                # The earlier pages are still true: do not lose them to a later page's hiccup.
+                logger.warning(
+                    "Search page failed (%s); using the pages before it", type(exc).__name__
+                )
+                self.search_cut_short = True
+                break
             fresh = [t for t in page if (t.train_no, t.dep_time) not in seen]
             if not fresh:
                 break
             seen.update((t.train_no, t.dep_time) for t in fresh)
             rows.extend(fresh)
-            last = str(rows[-1].dep_time or "")
+            # korail2 may hand the time over as a number: 73500 is 07:35:00.
+            last = str(rows[-1].dep_time or "").zfill(6)
             if (
                 len(page) < _KORAIL_PAGE_ROWS
                 or (wanted and wanted <= {t.train_no for t in rows})
@@ -601,9 +628,10 @@ class KorailService(RailService):
             ):
                 break
             start = last
-            if wanted:
-                self.wait_between_requests()
-        self._remember_wanted(place, wanted, [(t.train_no, t.dep_time) for t in rows])
+            self.wait_between_requests(1.0 if wanted else 0.5)
+        self._remember_wanted(
+            place, wanted, [(t.train_no, str(t.dep_time or "").zfill(6)) for t in rows]
+        )
         return rows
 
     def _wanted_start(self, place: tuple, wanted: set, dep_time: str) -> tuple[str, str | None]:
@@ -623,6 +651,11 @@ class KorailService(RailService):
         }
         if seen:
             self._wanted_departures.setdefault(place, {}).update(seen)
+
+    @staticmethod
+    def _row_key(train) -> tuple[str, str]:
+        """One train service of one day, however many pages repeat it."""
+        return str(train.train_no), str(getattr(train, "departure_time", "") or "")
 
     @staticmethod
     def _wanted_covered(page, trains, wanted: set, last_known: str | None) -> bool:
