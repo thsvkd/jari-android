@@ -19,7 +19,7 @@ from korail2 import Korail as K2MKorail
 # cancellation endpoint: the client's own cancel() cannot be called (see
 # cancel_reservation below). TicketReservation is wrapped the same way, to
 # slip a seat-location code into a payload korail2 otherwise hard-codes.
-from korail2.korail2 import KORAIL_CANCEL, KORAIL_MOBILE, KORAIL_TICKETRESERVATION
+from korail2.korail2 import KORAIL_CANCEL, KORAIL_MOBILE, KORAIL_TICKETRESERVATION, Reservation
 from korail_mobile_api import (
     KorailClient,
     KorailConfig,
@@ -880,8 +880,13 @@ class KorailService(RailService):
         *,
         passenger_count: int,
         seat_class: str,
+        known: set[str] | None = None,
     ):
-        """Reserve only sellable wire seats from the freshly read inventory."""
+        """
+        Reserve only sellable wire seats from the freshly read inventory.
+
+        ``known`` is for a watch: see _reserve_current.
+        """
         client = self._modern_client
         if not self._logged_in or client is None:
             raise ValueError("좌석을 예약하려면 먼저 로그인해 주세요.")
@@ -907,9 +912,12 @@ class KorailService(RailService):
             seat_class=seat_class,
             job_type=KorailReservationJobType.SEAT_DESIGNATED,
             seats=assignments,
+            known=known,
         )
 
-    def reserve_any_seat(self, train, *, passenger_count: int, seat_class: str):
+    def reserve_any_seat(
+        self, train, *, passenger_count: int, seat_class: str, known: set[str] | None = None
+    ):
         """
         Hold a current-API train in one class and let Korail seat the party.
 
@@ -928,6 +936,7 @@ class KorailService(RailService):
                 passenger_count=passenger_count,
                 seat_class=seat_class,
                 job_type=KorailReservationJobType.IMMEDIATE,
+                known=known,
             )
         except KorailAppError as exc:
             if exc.code == _DUPLICATE_RESERVATION_CODE:
@@ -937,7 +946,20 @@ class KorailService(RailService):
                 return None
             raise
 
-    def _reserve_current(self, client, train, *, passenger_count, seat_class, job_type, seats=None):
+    def _reserve_current(
+        self, client, train, *, passenger_count, seat_class, job_type, seats=None, known=None
+    ):
+        """
+        One reservation POST, and for a watch (``known`` given) what it left behind.
+
+        A POST whose answer is lost can still have made the hold, and the next
+        try at the same train then only hears WRR800029: without looking, the
+        seat sat unpaid and unannounced until its deadline. So a lost answer,
+        or a duplicate, looks once for a hold on this train that is not in
+        ``known`` (what the account held when the watch began, and what it
+        has taken since) and answers with it. A duplicate with nothing new
+        behind it is "DUPLICATE": the account's own earlier booking.
+        """
         try:
             hold = client.reserve(
                 train,
@@ -947,13 +969,71 @@ class KorailService(RailService):
                 job_type=job_type,
                 seats=seats,
             )
+        except (KorailTransportError, KorailProtocolError):
+            hold = self._hold_made_since(train, known)
+            if hold is None:
+                raise
         except KorailAppError as exc:
-            if self._lost_race(exc) and self.seat_windows is not None:
-                self.seat_windows.lost(train)
-            raise
+            if exc.code == _DUPLICATE_RESERVATION_CODE and known is not None:
+                hold = self._hold_made_since(train, known)
+                if hold is None:
+                    return "DUPLICATE"
+            else:
+                if self._lost_race(exc) and self.seat_windows is not None:
+                    self.seat_windows.lost(train)
+                raise
         if self.seat_windows is not None:
             self.seat_windows.took(train)
         return hold
+
+    def unpaid_reservation_ids(self) -> set[str] | None:
+        """
+        The reservations this account has waiting for payment right now.
+
+        A watch keeps these from before it books anything, so a hold that
+        shows up on its train later can be told from one the user already
+        had (_reserve_current). None when Korail could not be asked.
+        """
+        reservations = self._unpaid_reservations()
+        if reservations is None:
+            return None
+        return {rsv_id for item in reservations if (rsv_id := self.reservation_id(item))}
+
+    def _unpaid_reservations(self) -> list | None:
+        if not self._logged_in or not self._korail_instance:
+            return None
+        try:
+            return list(self._korail_instance.reservations())
+        except NoResultsError:
+            return []
+        except Exception as exc:
+            logger.warning("Could not list unpaid reservations (%s)", type(exc).__name__)
+            return None
+
+    def _hold_made_since(self, train, known: set[str] | None):
+        """
+        A korail2 Reservation on ``train`` whose number is not in ``known``.
+
+        Same train number and running date; no departure-date check, for the
+        reason reserve_train gives. None when there is nothing to compare
+        with: a hold that cannot be told from the user's own is not claimed.
+        """
+        if known is None:
+            return None
+        reservations = self._unpaid_reservations() or []
+        train_no = str(getattr(train, "train_no", "") or "")
+        run_date = str(getattr(train, "run_date", "") or "")
+        for item in reservations:
+            rsv_id = self.reservation_id(item)
+            if (
+                rsv_id
+                and rsv_id not in known
+                and str(getattr(item, "train_no", "") or "") == train_no
+                and (not run_date or str(getattr(item, "dep_date", "") or run_date) == run_date)
+            ):
+                logger.info("A hold on train %s turned up after its request failed", train_no)
+                return item
+        return None
 
     @classmethod
     def _lost_race(cls, exc: KorailAppError) -> bool:
@@ -962,6 +1042,9 @@ class KorailService(RailService):
 
     def release_unpaid_hold(self, hold):
         """Release a modern unpaid hold when the app cannot safely persist it."""
+        if isinstance(hold, Reservation):
+            # Found on the list after its answer was lost (_hold_made_since).
+            return self.cancel_reservation(hold.rsv_id)
         client = self._modern_client
         if not self._logged_in or client is None:
             raise ValueError("예약을 취소하려면 먼저 로그인해 주세요.")

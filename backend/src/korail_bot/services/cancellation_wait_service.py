@@ -64,15 +64,27 @@ class DesignatedCapture:
 class CancellationWaitService:
     """Find cancellations without ever widening the approved seat range."""
 
-    def __init__(self, rail, plan: CancellationWaitPlan, search_kwargs: dict) -> None:
+    def __init__(
+        self, rail, plan: CancellationWaitPlan, search_kwargs: dict, on_duplicate=None
+    ) -> None:
         self.rail = rail
         self.plan = plan
         self.search_kwargs = search_kwargs
+        # Called with a train Korail refused because this account already
+        # holds it, and the hold is not one this watch made.
+        self.on_duplicate = on_duplicate or (lambda train: None)
+        # Reservation numbers that are not this watch's to claim: what the
+        # account held when the watch began, then every hold it handed back.
+        # None until Korail has answered once; until then a hold whose answer
+        # was lost cannot be told from the user's own and is not claimed.
+        self._known: set[str] | None = None
 
     def poll_once(
         self, excluded: set[tuple[str, str, int, str]] | None = None
     ) -> DesignatedCapture | None:
         """Run one read pass and reserve at most one matching hold."""
+        if self._known is None:
+            self._known = self.rail.unpaid_reservation_ids()
         passenger_count = 1 if self.plan.strategy == "independent" else self.plan.passenger_count
         trains = self.rail.search_selectable_trains(
             **self.search_kwargs, passenger_count=passenger_count
@@ -108,6 +120,8 @@ class CancellationWaitService:
                 )
                 continue
             if capture is not None:
+                if self._known is not None:
+                    self._known.add(self.rail.reservation_id(capture.hold))
                 return capture
         if failure is not None and failed == attempted:
             # Nothing was read at all, so this is a failed pass and the caller's
@@ -154,13 +168,18 @@ class CancellationWaitService:
         if seat_class is None:
             return None
         hold = self.rail.reserve_any_seat(
-            train, passenger_count=passenger_count, seat_class=seat_class
+            train, passenger_count=passenger_count, seat_class=seat_class, known=self._known
         )
-        if not hold or hold == "DUPLICATE":
-            # "DUPLICATE" is this account already holding the train; the plain
-            # loop tells the user once, here it is simply not a capture.
+        if not self._held(hold, train):
             return None
         return DesignatedCapture(hold, train, seat_class, ())
+
+    def _held(self, hold, train) -> bool:
+        """Whether a reserve call took the train; tells the caller about a duplicate."""
+        if hold == "DUPLICATE":
+            self.on_duplicate(train)
+            return False
+        return bool(hold)
 
     def _independent_capture(self, train, wanted, excluded) -> DesignatedCapture | None:
         by_car = self._by_car(wanted.targets)
@@ -185,8 +204,15 @@ class CancellationWaitService:
             if target is None:
                 continue
             hold = self.rail.reserve_designated(
-                train, inventory, [target], passenger_count=1, seat_class=wanted.seat_class
+                train,
+                inventory,
+                [target],
+                passenger_count=1,
+                seat_class=wanted.seat_class,
+                known=self._known,
             )
+            if not self._held(hold, train):
+                return None
             return DesignatedCapture(hold, train, wanted.seat_class, (target,))
         return None
 
@@ -214,7 +240,10 @@ class CancellationWaitService:
                 list(block),
                 passenger_count=self.plan.passenger_count,
                 seat_class=wanted.seat_class,
+                known=self._known,
             )
+            if not self._held(hold, train):
+                return None
             return DesignatedCapture(hold, train, wanted.seat_class, block)
         return None
 
