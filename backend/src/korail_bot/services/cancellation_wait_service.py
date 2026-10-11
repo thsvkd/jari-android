@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime
 
+from korail_mobile_api.errors import KorailAppError, KorailProtocolError, KorailTransportError
+
+from korail_bot.config.settings import settings
 from korail_bot.models import CancellationWaitPlan, SeatTarget, TrainSeatTargets
+from korail_bot.services.korail_service import DUPLICATE_RESERVATION_CODE
 from korail_bot.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -61,6 +66,35 @@ class DesignatedCapture:
     targets: tuple[SeatTarget, ...]
 
 
+@dataclass(frozen=True)
+class LostAnswer:
+    """A reserve request of this watch whose answer never arrived."""
+
+    train: object
+    seat_class: str
+    passenger_count: int
+    targets: tuple[SeatTarget, ...]
+    until: float
+
+
+def same_service(a, b) -> bool:
+    """
+    Same train number on the same running date.
+
+    A current-API train keeps the running date in run_date; a korail2
+    reservation in dep_date (its h_run_dt).
+    """
+
+    def key(train) -> tuple[str, str]:
+        run = getattr(train, "dep_date", None) if hasattr(train, "rsv_id") else None
+        return (
+            str(getattr(train, "train_no", "") or ""),
+            str(run or getattr(train, "run_date", "") or ""),
+        )
+
+    return key(a) == key(b)
+
+
 class CancellationWaitService:
     """Find cancellations without ever widening the approved seat range."""
 
@@ -71,20 +105,34 @@ class CancellationWaitService:
         self.plan = plan
         self.search_kwargs = search_kwargs
         # Called with a train Korail refused because this account already
-        # holds it, and the hold is not one this watch made.
+        # holds it, when the hold cannot be one this watch made.
         self.on_duplicate = on_duplicate or (lambda train: None)
-        # Reservation numbers that are not this watch's to claim: what the
-        # account held when the watch began, then every hold it handed back.
-        # None until Korail has answered once; until then a hold whose answer
-        # was lost cannot be told from the user's own and is not claimed.
+        # Reservation numbers that are never this watch's: what the account
+        # held when the watch began, then every hold the watch handed back.
+        # None until Korail has listed them once.
         self._known: set[str] | None = None
+        # Requests whose answer was lost. Korail may have made the hold anyway,
+        # so the unpaid list is read each pass until it shows up or the
+        # payment window it would have had is over.
+        self._lost: list[LostAnswer] = []
 
     def poll_once(
         self, excluded: set[tuple[str, str, int, str]] | None = None
     ) -> DesignatedCapture | None:
         """Run one read pass and reserve at most one matching hold."""
         if self._known is None:
-            self._known = self.rail.unpaid_reservation_ids()
+            listed = self.rail.unpaid_reservations()
+            if listed is not None:
+                # A hold from a lost answer can be on a list first read only
+                # now: it stays claimable rather than being filed as old.
+                self._known = {
+                    rsv_id
+                    for item in listed
+                    if (rsv_id := self.rail.reservation_id(item))
+                    and not any(same_service(item, lost.train) for lost in self._lost)
+                }
+        if self._lost and (capture := self._recover_lost()) is not None:
+            return self._taken(capture)
         passenger_count = 1 if self.plan.strategy == "independent" else self.plan.passenger_count
         trains = self.rail.search_selectable_trains(
             **self.search_kwargs, passenger_count=passenger_count
@@ -111,6 +159,11 @@ class CancellationWaitService:
                 else:
                     capture = self._independent_capture(train, wanted, excluded or set())
             except Exception as exc:
+                if (
+                    isinstance(exc, (KorailTransportError, KorailProtocolError))
+                    and (capture := self._recover_lost()) is not None
+                ):
+                    return self._taken(capture)
                 # One train's outage is not the pass's outage: the next train
                 # may well be the one holding the seat this user is waiting for.
                 failed += 1
@@ -120,13 +173,82 @@ class CancellationWaitService:
                 )
                 continue
             if capture is not None:
-                if self._known is not None:
-                    self._known.add(self.rail.reservation_id(capture.hold))
-                return capture
+                return self._taken(capture)
         if failure is not None and failed == attempted:
             # Nothing was read at all, so this is a failed pass and the caller's
             # backoff has to see it.
             raise failure
+        return None
+
+    def _taken(self, capture: DesignatedCapture) -> DesignatedCapture:
+        if self._known is not None:
+            self._known.add(self.rail.reservation_id(capture.hold))
+        return capture
+
+    def _reserve(self, reserve, train, *args, targets, passenger_count: int, seat_class: str):
+        """
+        One reserve call. Remembers a lost answer, and tells on_duplicate
+        about a refusal that a lost answer does not explain.
+        """
+        try:
+            hold = reserve(train, *args, passenger_count=passenger_count, seat_class=seat_class)
+        except (KorailTransportError, KorailProtocolError):
+            self._lost.append(
+                LostAnswer(
+                    train,
+                    seat_class,
+                    passenger_count,
+                    tuple(targets),
+                    time.monotonic() + settings.PAYMENT_TIMEOUT_MINUTES * 60,
+                )
+            )
+            raise
+        except KorailAppError as exc:
+            if exc.code != DUPLICATE_RESERVATION_CODE:
+                raise
+            hold = "DUPLICATE"
+        if hold == "DUPLICATE":
+            # The account already holds this train. After a lost answer on it
+            # that is most likely this watch's own hold, which the unpaid list
+            # will show; "cancel your booking" would be the wrong advice.
+            if not any(same_service(lost.train, train) for lost in self._lost):
+                self.on_duplicate(train)
+            return None
+        return hold or None
+
+    def _recover_lost(self) -> DesignatedCapture | None:
+        """
+        A hold a lost answer made, read back from the unpaid list.
+
+        Taken only when it is provably this watch's: a reservation number the
+        watch did not start with, on the same train and running date, for as
+        many seats as were asked for, and for designated seats exactly the
+        seats asked for. Anything less could be the user's own booking from
+        the Korail app, the seat map or another search, and is left alone.
+        """
+        now = time.monotonic()
+        self._lost = [lost for lost in self._lost if lost.until > now]
+        if not self._lost or self._known is None:
+            return None
+        for item in self.rail.unpaid_reservations() or []:
+            rsv_id = self.rail.reservation_id(item)
+            if not rsv_id or rsv_id in self._known:
+                continue
+            for lost in self._lost:
+                if not same_service(item, lost.train) or (
+                    getattr(item, "seat_no_count", None) != lost.passenger_count
+                ):
+                    continue
+                if lost.targets and self.rail.reserved_seats(item) != {
+                    (target.car_no, target.label) for target in lost.targets
+                }:
+                    continue
+                self._lost.remove(lost)
+                logger.info(
+                    "응답을 잃은 예약을 미결제 목록에서 찾았습니다: train_no=%s",
+                    lost.train.train_no,
+                )
+                return DesignatedCapture(item, lost.train, lost.seat_class, lost.targets)
         return None
 
     def _open_cars(self, train, wanted, passenger_count: int, candidates: set[int]) -> set[int]:
@@ -167,19 +289,16 @@ class CancellationWaitService:
         )
         if seat_class is None:
             return None
-        hold = self.rail.reserve_any_seat(
-            train, passenger_count=passenger_count, seat_class=seat_class, known=self._known
+        hold = self._reserve(
+            self.rail.reserve_any_seat,
+            train,
+            targets=(),
+            passenger_count=passenger_count,
+            seat_class=seat_class,
         )
-        if not self._held(hold, train):
+        if hold is None:
             return None
         return DesignatedCapture(hold, train, seat_class, ())
-
-    def _held(self, hold, train) -> bool:
-        """Whether a reserve call took the train; tells the caller about a duplicate."""
-        if hold == "DUPLICATE":
-            self.on_duplicate(train)
-            return False
-        return bool(hold)
 
     def _independent_capture(self, train, wanted, excluded) -> DesignatedCapture | None:
         by_car = self._by_car(wanted.targets)
@@ -203,15 +322,16 @@ class CancellationWaitService:
             )
             if target is None:
                 continue
-            hold = self.rail.reserve_designated(
+            hold = self._reserve(
+                self.rail.reserve_designated,
                 train,
                 inventory,
                 [target],
+                targets=(target,),
                 passenger_count=1,
                 seat_class=wanted.seat_class,
-                known=self._known,
             )
-            if not self._held(hold, train):
+            if hold is None:
                 return None
             return DesignatedCapture(hold, train, wanted.seat_class, (target,))
         return None
@@ -234,15 +354,16 @@ class CancellationWaitService:
             sellable = self._sellable(inventory)
             if not all((item.seat_no, item.label) in sellable for item in block):
                 continue
-            hold = self.rail.reserve_designated(
+            hold = self._reserve(
+                self.rail.reserve_designated,
                 train,
                 inventory,
                 list(block),
+                targets=block,
                 passenger_count=self.plan.passenger_count,
                 seat_class=wanted.seat_class,
-                known=self._known,
             )
-            if not self._held(hold, train):
+            if hold is None:
                 return None
             return DesignatedCapture(hold, train, wanted.seat_class, block)
         return None

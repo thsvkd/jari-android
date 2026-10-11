@@ -775,25 +775,21 @@ class BackgroundReservationProcess:
             self._leave_mark(self.storage.mark_search_held_seat)
 
             deadline = self._payment_deadline(capture.hold)
-            hints = self._train_hints(capture.hold)
-            if not hints["train_no"]:
-                # A designated hold (ReservationHoldResponse) names no train; the
-                # searched one does. Without these a resumed search could not tie
-                # the seat to this plan, and the seat keys would exclude nothing.
-                train = capture.train
-                hints = {
-                    "train_no": str(getattr(train, "train_no", "") or ""),
-                    "dep_date": str(
-                        getattr(train, "dep_date", None)
-                        or getattr(train, "departure_date", "")
-                        or ""
-                    ),
-                    "dep_time": str(
-                        getattr(train, "dep_time", None)
-                        or getattr(train, "departure_time", "")
-                        or ""
-                    ),
-                }
+            # Filed under the searched train, never the hold: a designated hold
+            # (ReservationHoldResponse) names no train, and one read back from
+            # the unpaid list names its running date, which is not the
+            # departure date for a train that passes midnight first. Without
+            # these a resumed search could not tie the seat to this plan.
+            train = capture.train
+            hints = {
+                "train_no": str(getattr(train, "train_no", "") or ""),
+                "dep_date": str(
+                    getattr(train, "dep_date", None) or getattr(train, "departure_date", "") or ""
+                ),
+                "dep_time": str(
+                    getattr(train, "dep_time", None) or getattr(train, "departure_time", "") or ""
+                ),
+            }
             train_info = train_label(capture.train)
             labels = [f"{target.car_no}호차 {target.label}" for target in capture.targets]
             info = SingleReservationInfo(
