@@ -2,8 +2,9 @@
 에이전트 연결 한 흐름을 실제 서버·워커·저장소와 가짜 코레일로 끝까지 따라가요.
 
 MCP 클라이언트가 하는 순서 그대로예요: 토큰 없이 부름 → 401 의 메타데이터 주소 →
-DCR → 브라우저 인가 페이지(코드·쿠키) → 사용자가 앱에서 코드 입력·승인 → 브라우저 poll →
-토큰 교환 → MCP initialize → tools/list → find_trains → start_watch → refresh 회전.
+DCR → 브라우저 인가 페이지(로그인 폼·CSRF 쿠키) → 사용자가 자리났다 아이디·비밀번호로
+로그인하고 허용 → 302 로 권한 코드 → 토큰 교환 → MCP initialize → tools/list →
+find_trains → start_watch → refresh 회전.
 명세: .omc/plans/mcp-agent-spec.md. 스택은 MOBILE_PUBLIC_URL 을 API 주소로 띄워요.
 """
 
@@ -12,6 +13,7 @@ from __future__ import annotations
 import base64
 import datetime
 import hashlib
+import html
 import json
 import re
 import secrets
@@ -20,9 +22,7 @@ import urllib.request
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 CALLBACK = "http://127.0.0.1:53682/callback"
-CODE = re.compile(
-    r"\b([ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4})-([ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4})\b"
-)
+HIDDEN = re.compile(r'<input type="hidden" name="([a-z_]+)" value="([^"]*)">')
 
 
 class Reply:
@@ -61,6 +61,13 @@ def post_form(url: str, form: dict) -> Reply:
     )
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """브라우저가 따라갈 302 를 그대로 받아 Location 을 읽어요(루프백 콜백은 아무도 듣지 않아요)."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
 class Agent:
     """MCP 클라이언트 흉내. 브라우저 쿠키도 이 손잡이가 들고 있어요."""
 
@@ -84,6 +91,7 @@ class Agent:
         self.client_id = reply.json()["client_id"]
 
     def open_browser(self) -> str:
+        """인가 페이지를 열어 로그인 폼을 받아요. 페이지 HTML 을 돌려줘요."""
         query = {
             "response_type": "code",
             "client_id": self.client_id,
@@ -99,19 +107,29 @@ class Agent:
         for header in page.headers.get_all("Set-Cookie") or []:
             if header.startswith("jari_oauth="):
                 self.cookie = header.split(";", 1)[0]
-        assert self.cookie, "인가 페이지가 브라우저 쿠키를 주지 않았어요"
-        match = CODE.search(page.body.decode())
-        assert match, "인가 페이지에 코드가 없어요"
-        return f"{match.group(1)}-{match.group(2)}"
+        assert self.cookie, "인가 페이지가 CSRF 쿠키를 주지 않았어요"
+        return page.body.decode()
 
-    def poll(self, request_id: str) -> dict:
-        reply = send(
-            "GET",
-            self.api + "/oauth/authorize/poll?" + urlencode({"request": request_id}),
-            headers={"Cookie": self.cookie},
+    def sign_in(self, page: str, username: str, password: str) -> dict:
+        """사용자가 폼에 아이디·비밀번호를 넣고 "로그인하고 허용"을 눌러요. 302 Location 의 값을 돌려줘요."""
+        form = {name: html.unescape(value) for name, value in HIDDEN.findall(page)}
+        form.update(username=username, password=password, decision="allow")
+        request = urllib.request.Request(
+            self.api + "/oauth/authorize",
+            urlencode(form).encode(),
+            {"Content-Type": "application/x-www-form-urlencoded", "Cookie": self.cookie},
+            method="POST",
         )
-        assert reply.status == 200, reply.body
-        return reply.json()
+        try:
+            urllib.request.build_opener(NoRedirect).open(request, timeout=30)
+        except urllib.error.HTTPError as answer:
+            with answer:
+                assert answer.code == 302, answer.read()
+                location = answer.headers["Location"]
+        else:
+            raise AssertionError("로그인하고 허용한 뒤 에이전트로 돌아가지 않았어요")
+        assert location.startswith(CALLBACK + "?"), location
+        return {key: values[0] for key, values in parse_qs(urlsplit(location).query).items()}
 
     def exchange(self, code: str) -> dict:
         reply = post_form(
@@ -162,18 +180,13 @@ class Agent:
 def connect(stack, client, *, allow_booking: bool) -> Agent:
     agent = Agent(stack["api"])
     agent.register()
-    code = agent.open_browser()
-    found = client.call("POST", "/agents/requests/lookup", {"code": code.lower()})
-    assert found["client"]["local"] is True
-    assert agent.poll(found["requestId"])["status"] == "pending"
-    # §12 S-H1: 승인은 늘 읽기 전용이다. 예약 허용은 연결한 뒤 목록에서 켠다.
-    client.call("POST", "/agents/requests/approve", {"requestId": found["requestId"]})
-    approved = agent.poll(found["requestId"])
-    assert approved["status"] == "approved"
-    params = parse_qs(urlsplit(approved["redirect"]).query)
-    assert params["state"] == ["e2e-state"]
-    assert params["iss"] == [stack["api"]]
-    agent.exchange(params["code"][0])
+    page = agent.open_browser()
+    assert "e2e 에이전트 — 이 컴퓨터의 프로그램" in page
+    params = agent.sign_in(page, client.user["username"], client.user["password"])
+    assert params["state"] == "e2e-state"
+    assert params["iss"] == stack["api"]
+    agent.exchange(params["code"])
+    # §12 S-H1: 새 연결은 늘 읽기 전용이다. 예약 허용은 연결한 뒤 목록에서 켠다.
     assert agent.tokens["scope"].split() == ["jari.read"]
     if allow_booking:
         [connection] = client.call("GET", "/agents")["agents"]
@@ -199,7 +212,7 @@ def test_an_mcp_client_without_a_token_finds_where_to_authorize(stack):
     assert meta["code_challenge_methods_supported"] == ["S256"]
 
 
-def test_an_agent_connects_through_the_app_and_starts_a_watch(stack, client):
+def test_an_agent_connects_through_a_browser_sign_in_and_starts_a_watch(stack, client):
     agent = connect(stack, client, allow_booking=True)
 
     hello = agent.rpc(

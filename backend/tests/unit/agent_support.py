@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import re
 import secrets
 import sqlite3
@@ -29,8 +30,8 @@ RESOURCE = PUBLIC + "/mcp"
 PRM_URL = PUBLIC + "/.well-known/oauth-protected-resource/mcp"
 CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 LOOPBACK_CALLBACK = "http://localhost:53682/callback"
-CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
-USER_CODE = re.compile(rf"\b([{CODE_ALPHABET}]{{4}})-([{CODE_ALPHABET}]{{4}})\b")
+PASSWORD = "a long secure passphrase"
+HIDDEN = re.compile(r'<input type="hidden" name="([a-z_]+)" value="([^"]*)">')
 PROTOCOL = "2025-06-18"
 BOOK_HINT = "예약까지 맡기기"
 
@@ -142,7 +143,7 @@ def make_env(tmp_path, *, public_url=PUBLIC, clock=None, identity=None, gateway=
     else:
         app = create_app(identity, gateway, public_url=public_url, **kwargs)
     app.testing = True
-    # 쿠키는 테스트가 직접 보낸다. 브라우저 쿠키 없이 poll 하는 경우를 따로 검사해야 해서다.
+    # 쿠키는 테스트가 직접 보낸다. CSRF 쿠키 없이 보내는 경우를 따로 검사해야 해서다.
     return Env(app.test_client(use_cookies=False), identity, gateway, clock, app)
 
 
@@ -151,7 +152,7 @@ def signup(env, username):
         "/api/mobile/auth/register",
         json={
             "username": username,
-            "password": "a long secure passphrase",
+            "password": PASSWORD,
             "invite": env.identity.create_invite(),
         },
     )
@@ -201,43 +202,32 @@ def authorize(env, client_id, redirect_uri, challenge, *, headers=None, **overri
     return env.client.get("/oauth/authorize?" + urlencode(query), headers=headers or {})
 
 
-def user_code(response):
-    match = USER_CODE.search(response.get_data(as_text=True))
-    assert match, "인가 페이지에 ABCD-EFGH 형식의 코드가 없어요"
-    return f"{match.group(1)}-{match.group(2)}"
-
-
-def browser_cookie(response):
-    """인가 페이지가 준 브라우저 비밀 쿠키 (이름, 값, 속성 문자열 소문자)."""
+def csrf_cookie(response):
+    """인가 페이지가 준 CSRF 쿠키 (이름, 값, 속성 문자열 소문자)."""
     for header in response.headers.getlist("Set-Cookie"):
         name, _, rest = header.partition("=")
         if name in {"__Host-jari_oauth", "jari_oauth"}:
             value, _, attributes = rest.partition(";")
             return name, value, attributes.lower()
-    raise AssertionError("인가 페이지가 브라우저 쿠키를 주지 않았어요")
+    raise AssertionError("인가 페이지가 CSRF 쿠키를 주지 않았어요")
 
 
-def poll(env, request_id, cookie=None):
-    headers = {"Cookie": f"{cookie[0]}={cookie[1]}"} if cookie else {}
-    return env.client.get(
-        "/oauth/authorize/poll?" + urlencode({"request": request_id}), headers=headers
-    )
+def form_fields(page):
+    """인가 페이지 폼의 hidden 필드. 브라우저처럼 HTML 이스케이프를 풀어 그대로 돌려보낸다."""
+    return {
+        name: html.unescape(value) for name, value in HIDDEN.findall(page.get_data(as_text=True))
+    }
 
 
-def lookup(env, user, code, headers=None):
+def submit(env, page, username, password=PASSWORD, *, decision="allow", headers=None, **fields):
+    """인가 페이지의 폼을 브라우저처럼 보낸다. fields 로 hidden 값을 덮거나(None 이면 뺀다) 더한다."""
+    name, value, _ = csrf_cookie(page)
+    form = {**form_fields(page), "username": username, "password": password, "decision": decision}
+    form.update(fields)
     return env.client.post(
-        "/api/mobile/agents/requests/lookup",
-        headers={**app_headers(user), **(headers or {})},
-        json={"code": code},
-    )
-
-
-def approve(env, user, request_id):
-    # §12 S-H1: 승인은 예약 허용을 받지 않는다. 새 연결은 늘 jari.read 다.
-    return env.client.post(
-        "/api/mobile/agents/requests/approve",
-        headers=app_headers(user),
-        json={"requestId": request_id},
+        "/oauth/authorize",
+        data={key: item for key, item in form.items() if item is not None},
+        headers={"Cookie": f"{name}={value}", **(headers or {})},
     )
 
 
@@ -263,9 +253,7 @@ class Pending:
     client_id: str
     redirect_uri: str
     verifier: str
-    code: str
-    cookie: tuple
-    request_id: str
+    page: object
 
 
 def challenge_for(verifier):
@@ -274,34 +262,25 @@ def challenge_for(verifier):
     )
 
 
-def start(env, user, redirect_uri=CLAUDE_CALLBACK, verifier=None):
-    """DCR → authorize → 앱 lookup 까지. 승인 직전 상태를 돌려준다."""
+def start(env, redirect_uri=CLAUDE_CALLBACK, verifier=None):
+    """DCR → authorize 까지. 로그인 폼이 뜬 상태를 돌려준다."""
     registered = register_client(env, [redirect_uri])
     verifier = verifier or pkce()[0]
-    challenge = challenge_for(verifier)
-    page = authorize(env, registered["client_id"], redirect_uri, challenge)
+    page = authorize(env, registered["client_id"], redirect_uri, challenge_for(verifier))
     assert page.status_code == 200, page.get_data(as_text=True)
-    code = user_code(page)
-    found = lookup(env, user, code)
-    assert found.status_code == 200, found.json
-    return Pending(
-        registered["client_id"],
-        redirect_uri,
-        verifier,
-        code,
-        browser_cookie(page)[:2],
-        found.json["requestId"],
-    )
+    return Pending(registered["client_id"], redirect_uri, verifier, page)
+
+
+def code_from(response):
+    """폼을 보낸 뒤 302 Location 의 권한 코드."""
+    assert response.status_code == 302, (response.status_code, response.get_data(as_text=True))
+    return redirect_params(response.headers["Location"])["code"]
 
 
 def authorization_code(env, user, *, redirect_uri=CLAUDE_CALLBACK, verifier=None):
-    """승인하고 브라우저 poll 로 권한 코드를 받는다."""
-    pending = start(env, user, redirect_uri, verifier)
-    assert approve(env, user, pending.request_id).status_code == 200
-    polled = poll(env, pending.request_id, pending.cookie)
-    assert polled.status_code == 200 and polled.json["status"] == "approved", polled.json
-    params = redirect_params(polled.json["redirect"])
-    return pending, params["code"]
+    """브라우저 폼에서 로그인하고 허용해 권한 코드를 받는다."""
+    pending = start(env, redirect_uri, verifier)
+    return pending, code_from(submit(env, pending.page, user["user"]["username"]))
 
 
 def exchange(env, pending, code, **overrides):

@@ -1,6 +1,5 @@
 import type {
   AgentConnection,
-  AgentRequest,
   AuthResult,
   BookingPayload,
   BootstrapState,
@@ -342,10 +341,6 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
         body: { token },
       }),
     status: () => request<StatusResult>("/status", { method: "GET", timeoutMs: POLL_TIMEOUT_MS }),
-    agentLookup: (code) => request<AgentRequest>("/agents/requests/lookup", { body: { code } }),
-    agentApprove: (requestId) =>
-      request<{ approved: boolean }>("/agents/requests/approve", { body: { requestId } }),
-    agentDeny: (requestId) => request<{ approved: boolean }>("/agents/requests/deny", { body: { requestId } }),
     agents: () => request<{ agents: AgentConnection[] }>("/agents", { method: "GET" }),
     agentSetBooking: (id, allowBooking) =>
       request<{ id: string; allowBooking: boolean }>(`/agents/${encodeURIComponent(id)}`, { body: { allowBooking } }),

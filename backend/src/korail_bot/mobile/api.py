@@ -52,8 +52,7 @@ def erase_account(identity, gateway, notifications, user):
         user["id"],
         user["username"],
         rate_limit_keys=[
-            f"{kind}:{user['id']}"
-            for kind in ("api", "rail", "diag", "account-delete", "agent-code")
+            f"{kind}:{user['id']}" for kind in ("api", "rail", "diag", "account-delete")
         ],
     )
     if notifications:
@@ -472,35 +471,6 @@ def create_app(
     if not agents:
         return app
     mcp.install(app, identity, gateway, agents, locks)
-
-    def agent_code_budget():
-        # Lookups, approvals and denials alike: a wrong guess spends the same as a right one.
-        limited("agent-code:" + g.user["id"], 10, 300)
-
-    @app.post(PREFIX + "/agents/requests/lookup")
-    @authenticated
-    def agent_lookup():
-        agent_code_budget()
-        found = agents.lookup(g.user["id"], g.payload.get("code"), oauth.client_country())
-        if found is None:
-            raise AuthError("코드를 다시 확인해 주세요.", 404)
-        return jsonify(found)
-
-    @app.post(PREFIX + "/agents/requests/approve")
-    @app.post(PREFIX + "/agents/requests/deny")
-    @authenticated
-    def agent_decide():
-        agent_code_budget()
-        approve = request.path.endswith("/approve")
-        # A new connection only reads: booking is turned on later, from the list. An
-        # older app that still sends the switch is refused rather than half obeyed.
-        if approve and "allowBooking" in g.payload:
-            raise AuthError("앱을 업데이트한 뒤 다시 연결해 주세요.", 400)
-        scope = oauth.READ if approve else None
-        request_id = g.payload.get("requestId")
-        if not isinstance(request_id, str) or not agents.decide(g.user["id"], request_id, scope):
-            raise AuthError("코드를 다시 확인해 주세요.", 404)
-        return jsonify(approved=approve)
 
     @app.get(PREFIX + "/agents")
     @authenticated

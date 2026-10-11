@@ -13,19 +13,7 @@ export interface Capabilities {
   agents: boolean;
 }
 
-/** 에이전트가 브라우저에 띄운 코드로 찾은 연결 요청. */
-export interface AgentRequest {
-  requestId: string;
-  client: { name: string; host: string; local: boolean };
-  requestedAt: string;
-  expiresAt: string;
-  /** 코드를 받은 브라우저가 있던 나라(Cloudflare 가 알려 준 두 글자). 모르면 없어요. */
-  requestCountry?: string | null;
-  /** 그 나라가 지금 휴대폰이 있는 나라와 다른지. */
-  countryMismatch?: boolean;
-}
-
-/** 사용자가 승인한 에이전트 연결 하나. */
+/** 사용자가 브라우저에서 허용한 에이전트 연결 하나. */
 export interface AgentConnection {
   id: string;
   name: string;
@@ -326,11 +314,8 @@ export interface MobileApi {
   registerDevice(token: string): Promise<{ ok?: boolean; pushAvailable?: boolean }>;
   deleteDevice(token: string): Promise<{ ok?: boolean; pushAvailable?: boolean }>;
   status(): Promise<StatusResult>;
-  agentLookup(code: string): Promise<AgentRequest>;
-  /** 새 연결은 늘 조회만 해요. 예약 허용은 연결한 뒤 목록에서 켜요(agentSetBooking). */
-  agentApprove(requestId: string): Promise<{ approved: boolean }>;
-  agentDeny(requestId: string): Promise<{ approved: boolean }>;
   agents(): Promise<{ agents: AgentConnection[] }>;
+  /** 새 연결은 늘 조회만 해요. 예약 허용은 연결한 뒤 목록에서 켜요. */
   agentSetBooking(id: string, allowBooking: boolean): Promise<{ id: string; allowBooking: boolean }>;
   agentDisconnect(id: string): Promise<{ disconnected: boolean }>;
 }

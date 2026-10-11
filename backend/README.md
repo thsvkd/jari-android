@@ -47,7 +47,8 @@ uv run --frozen python -m korail_bot.mobile serve --host 127.0.0.1 --port 8081
 앱 계정 암호, 초대 코드, Bearer 토큰은 평문 저장하지 않습니다.
 계정 비밀번호는 scrypt `N=32768,r=8,p=3`으로, 초대와 무작위 256비트 세션 토큰은 SHA-256으로 저장합니다.
 세션은 30일 뒤 만료되고 `/auth/logout`에서 즉시 폐기됩니다.
-에이전트 연결의 사용자 코드·브라우저 쿠키·권한 코드·access/refresh 토큰도 SHA-256으로만 저장합니다(docs/SPEC.md §12).
+에이전트 연결의 권한 코드·access/refresh 토큰도 SHA-256으로만 저장합니다(docs/SPEC.md §12).
+에이전트 연결은 브라우저의 `/oauth/authorize` 페이지에서 앱 아이디·비밀번호로 로그인해 허용합니다. 이 로그인은 앱 로그인과 같은 인증 제한을 함께 쓰고 앱 세션을 만들지 않습니다.
 
 외부에 제공할 때는 HTTPS 리버스 프록시가 위 loopback 포트로 연결해야 합니다.
 API는 쿠키 대신 `Authorization: Bearer ...`를 사용합니다. 프록시의 전달 IP 헤더를 무조건 신뢰하지 않으므로

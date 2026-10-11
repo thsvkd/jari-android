@@ -659,7 +659,7 @@ def test_a_tool_over_the_railway_budget_never_reaches_the_gateway(env, booker):
 
 def test_more_than_120_requests_a_minute_is_an_http_429(env, reader):
     # §11 M3: api:<user> 120/60s 는 앱과 같은 버킷이고, 넘으면 HTTP 429.
-    env.clock.advance(61)  # 연결하며 쓴 앱 요청(lookup·approve)을 창 밖으로 보낸다.
+    env.clock.advance(61)  # 연결하며 쓴 앱 요청(목록·예약 허용)을 창 밖으로 보낸다.
     statuses = [rpc(env, reader, "ping").status_code for _ in range(121)]
     assert statuses == [200] * 120 + [429]
 

@@ -110,7 +110,7 @@ You can let an AI agent such as Claude Code or claude.ai find trains and book se
    - Claude Code: `claude mcp add -s user --transport http jari https://<server>/mcp` (`-s user` makes it available in every project)
    - claude.ai: Settings → Connectors → Add custom connector
 3. Start the connection from the agent. In Claude Code, open `/mcp`, pick jari and authenticate; in claude.ai, press Connect on the connector.
-4. When the browser shows an 8-character code, enter it on the same screen in the app and tap **연결하기** (Connect).
+4. When the browser opens the 자리났다 sign-in page, sign in with your app ID and password and press **로그인하고 허용** (Sign in and allow).
 
 A new connection may only look things up (trains, seat maps, status). To let it watch for cancellations and book seats too, turn on **예약까지 맡기기** (Allow booking) in the connection list after connecting. Agents such as Claude Code ask you before they start a watch or book or cancel a seat. Some agents may not ask, so turn on Allow booking only when you need it. In unattended runs such as `claude -p`, the watch, booking and cancel tools cannot be used (lookups still work). You always pay yourself. You can disconnect an agent from the app at any time.
 

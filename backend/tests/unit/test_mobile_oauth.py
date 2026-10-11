@@ -1,50 +1,50 @@
 """
-에이전트 연결의 인가 서버(OAuth 2.1 + DCR + 앱 승인)를 명세대로 고정한다.
+에이전트 연결의 인가 서버(OAuth 2.1 + DCR + 브라우저 로그인)를 명세대로 고정한다.
 
 명세: .omc/plans/mcp-agent-spec.md §1~§4, §6~§7, §9. 이 테스트들이 지키는 것은
 "토큰이 새도 앱 계정 전체가 열리지 않는다", "코드·refresh 가 새도 재사용하면 끊긴다",
-"앱에서 사용자가 코드를 직접 넣어야만 연결된다"이다.
+"브라우저에서 자리났다 아이디·비밀번호로 로그인해 허용해야만 연결된다"이다.
 """
 
 import re
-from datetime import datetime
 from pathlib import Path
 
 import pytest
 
+from korail_bot.mobile import identity as identity_module
 from korail_bot.mobile.config import MobileConfig
-from korail_bot.mobile.identity import digest
+from korail_bot.mobile.identity import AuthError
 
 from .agent_support import (
     CLAUDE_CALLBACK,
     LOOPBACK_CALLBACK,
+    PASSWORD,
     PUBLIC,
     RESOURCE,
-    USER_CODE,
+    Pending,
     allow_booking_for,
     app_headers,
-    approve,
     authorization_code,
     authorize,
     bearer,
-    browser_cookie,
     call_tool,
     challenge_for,
     cheap_setup,
+    code_from,
     connect,
+    csrf_cookie,
     exchange,
-    lookup,
+    form_fields,
     make_env,
     pkce,
-    poll,
     redirect_params,
     refresh,
     register_client,
     rpc,
     signup,
     start,
+    submit,
     token,
-    user_code,
 )
 
 DAY = 86400
@@ -116,13 +116,10 @@ AGENT_PATHS = [
     ("get", "/.well-known/oauth-authorization-server"),
     ("post", "/oauth/register"),
     ("get", "/oauth/authorize"),
-    ("get", "/oauth/authorize/poll"),
+    ("post", "/oauth/authorize"),
     ("post", "/oauth/token"),
     ("post", "/oauth/revoke"),
     ("post", "/mcp"),
-    ("post", "/api/mobile/agents/requests/lookup"),
-    ("post", "/api/mobile/agents/requests/approve"),
-    ("post", "/api/mobile/agents/requests/deny"),
     ("get", "/api/mobile/agents"),
     ("post", "/api/mobile/agents/some-id"),
     ("delete", "/api/mobile/agents/some-id"),
@@ -303,7 +300,11 @@ def test_client_name_shown_in_the_app_is_cleaned_and_short(env, alice):
     ).json
     verifier, challenge = pkce()
     page = authorize(env, registered["client_id"], CLAUDE_CALLBACK, challenge)
-    shown = lookup(env, alice, user_code(page)).json["client"]["name"]
+    code = code_from(submit(env, page, "alice"))
+    pending = Pending(registered["client_id"], CLAUDE_CALLBACK, verifier, page)
+    assert exchange(env, pending, code).status_code == 200
+    [agent] = connections(env, alice)
+    shown = agent["name"]
     assert len(shown) <= 64
     assert not any(ord(char) < 32 or ord(char) == 127 for char in shown)
     assert shown.startswith("Evil")
@@ -433,15 +434,21 @@ def test_other_authorize_errors_return_to_the_client_with_state_and_issuer(env, 
     assert "code" not in params
 
 
-def test_authorize_page_shows_the_code_where_to_enter_it_and_who_asked(env):
+def test_authorize_page_asks_for_the_app_account_and_says_who_asked(env):
     registered = register_client(env)
     response = authorize(env, registered["client_id"], CLAUDE_CALLBACK, pkce()[1])
     assert response.status_code == 200
     assert response.mimetype == "text/html"
     html = response.get_data(as_text=True)
-    assert USER_CODE.search(html)
-    assert "자리났다 앱 → 설정 → 에이전트 연결" in html
-    assert "claude.ai" in html
+    assert "Claude — claude.ai" in html
+    assert "조회만 허용합니다. 예약은 앱의 설정 → 에이전트 연결에서 켤 수 있어요." in html
+    # 브라우저 비밀번호 관리자가 채울 수 있어야 한다.
+    assert 'name="username" autocomplete="username"' in html
+    assert 'type="password" name="password" autocomplete="current-password"' in html
+    assert '<form method="post" action="/oauth/authorize">' in html
+    assert ">로그인하고 허용</button>" in html
+    # 거절에는 비밀번호가 필요 없다: 브라우저 검사를 건너뛴다.
+    assert 'value="deny" formnovalidate>거절</button>' in html
 
 
 def test_authorize_page_for_a_local_program_says_so(env):
@@ -462,13 +469,13 @@ def test_authorize_page_cannot_be_framed_cached_or_leak_its_url(env):
     csp = response.headers["Content-Security-Policy"]
     for directive in (
         "default-src 'none'",
-        "connect-src 'self'",
         "base-uri 'none'",
-        "form-action 'none'",
+        "form-action 'self' https://claude.ai",
         "frame-ancestors 'none'",
     ):
         assert directive in csp
-    nonce = re.search(r"script-src 'nonce-([^']+)'", csp)
+    assert "script-src" not in csp
+    nonce = re.search(r"style-src 'nonce-([^']+)'", csp)
     assert nonce, csp
     assert f'nonce="{nonce.group(1)}"' in response.get_data(as_text=True)
 
@@ -495,12 +502,13 @@ def test_state_chosen_by_the_client_is_not_written_into_the_page(env):
     assert "<script>alert(1)" not in response.get_data(as_text=True)
 
 
-def test_state_is_never_part_of_the_page(env):
-    # §11 M10: state 는 리다이렉트 URL 에만 쓴다. 이스케이프한 꼴로도 페이지에 없다.
+def test_state_returns_to_the_client_exactly_as_it_came(env, alice):
+    # state 는 hidden 필드로 폼을 지나 리다이렉트에 그대로 돌아간다(이스케이프는 페이지 안에서만).
     registered = register_client(env)
-    marker = "s7a7e" + "q" * 20
-    response = authorize(env, registered["client_id"], CLAUDE_CALLBACK, pkce()[1], state=marker)
-    assert marker not in response.get_data(as_text=True)
+    hostile = "a\"b<c>&d ' e"
+    page = authorize(env, registered["client_id"], CLAUDE_CALLBACK, pkce()[1], state=hostile)
+    assert form_fields(page)["state"] == hostile
+    assert redirect_params(submit(env, page, "alice").headers["Location"])["state"] == hostile
 
 
 def test_client_name_in_the_page_is_escaped(env):
@@ -514,9 +522,9 @@ def test_client_name_in_the_page_is_escaped(env):
     assert "<img" not in html
 
 
-def test_browser_cookie_is_host_only_secure_and_unreadable_by_scripts(env):
+def test_csrf_cookie_is_host_only_secure_and_unreadable_by_scripts(env):
     registered = register_client(env)
-    name, value, attributes = browser_cookie(
+    name, value, attributes = csrf_cookie(
         authorize(env, registered["client_id"], CLAUDE_CALLBACK, pkce()[1])
     )
     assert name == "__Host-jari_oauth"
@@ -529,7 +537,7 @@ def test_browser_cookie_is_host_only_secure_and_unreadable_by_scripts(env):
 def test_local_http_server_drops_the_host_prefix_and_secure(tmp_path):
     env = make_env(tmp_path, public_url="http://127.0.0.1:18281")
     registered = register_client(env)
-    name, _, attributes = browser_cookie(
+    name, _, attributes = csrf_cookie(
         authorize(
             env,
             registered["client_id"],
@@ -543,198 +551,265 @@ def test_local_http_server_drops_the_host_prefix_and_secure(tmp_path):
     assert "httponly" in attributes and "samesite=lax" in attributes
 
 
-# ----------------------------------------------------------------- §4.4 poll
+# ----------------------------------------------------------------- §4.4 로그인과 동의
 
 
-def test_poll_is_pending_until_the_app_approves(env, alice):
-    pending = start(env, alice)
-    response = poll(env, pending.request_id, pending.cookie)
-    assert response.status_code == 200
-    assert response.json["status"] == "pending"
-    assert not response.json.get("redirect")
+def grant_count(env):
+    with env.identity.connect() as db:
+        return db.execute("SELECT count(*) FROM oauth_grants").fetchone()[0]
 
 
-def test_poll_needs_the_browser_that_started_the_request(env, alice):
-    first = start(env, alice)
-    second = start(env, alice)
-    assert poll(env, first.request_id).status_code == 404
-    assert poll(env, first.request_id, (first.cookie[0], "x" * 43)).status_code == 404
-    # 다른 요청을 시작한 브라우저의 쿠키로는 이 요청을 볼 수 없다.
-    assert poll(env, first.request_id, second.cookie).status_code == 404
+def session_count(env):
+    with env.identity.connect() as db:
+        return db.execute("SELECT count(*) FROM sessions").fetchone()[0]
 
 
-def test_approved_poll_hands_the_code_to_that_browser_once(env, alice):
-    pending = start(env, alice)
-    assert approve(env, alice, pending.request_id).status_code == 200
-
-    first = poll(env, pending.request_id, pending.cookie)
-    assert first.json["status"] == "approved"
-    redirect = first.json["redirect"]
-    assert redirect.startswith(CLAUDE_CALLBACK + "?")
-    params = redirect_params(redirect)
-    assert params["state"] == "state-123"
-    assert params["iss"] == PUBLIC
-    assert len(params["code"]) >= 43
-
-    second = poll(env, pending.request_id, pending.cookie)
-    assert second.json["status"] == "expired"
-    assert not second.json.get("redirect")
-
-
-def test_denied_poll_returns_access_denied_to_the_client(env, alice):
-    pending = start(env, alice)
+@pytest.mark.parametrize(
+    "cookie",
+    [None, "x" * 43, "", "한글"],
+    ids=["no-cookie", "other-value", "empty", "not-ascii"],
+)
+def test_a_form_without_its_own_csrf_cookie_is_refused(env, alice, cookie):
+    pending = start(env)
+    form = {**form_fields(pending.page), "username": "alice", "password": PASSWORD}
+    form["decision"] = "allow"
+    name = csrf_cookie(pending.page)[0]
     response = env.client.post(
-        "/api/mobile/agents/requests/deny",
-        headers=app_headers(alice),
-        json={"requestId": pending.request_id},
+        "/oauth/authorize",
+        data=form,
+        headers={"Cookie": f"{name}={cookie}"} if cookie is not None else {},
     )
-    assert response.status_code == 200
-    polled = poll(env, pending.request_id, pending.cookie).json
-    assert polled["status"] == "denied"
-    params = redirect_params(polled["redirect"])
+    assert response.status_code == 400
+    assert "Location" not in response.headers
+    assert response.mimetype == "text/html"
+    assert grant_count(env) == 0
+
+
+def test_a_form_without_the_csrf_field_is_refused_even_with_the_cookie(env, alice):
+    pending = start(env)
+    response = submit(env, pending.page, "alice", csrf=None)
+    assert response.status_code == 400
+    assert "Location" not in response.headers
+
+
+def test_a_csrf_value_from_another_page_is_refused(env, alice):
+    first, second = start(env), start(env)
+    response = submit(env, first.page, "alice", csrf=form_fields(second.page)["csrf"])
+    assert response.status_code == 400
+    assert grant_count(env) == 0
+
+
+def test_each_page_gets_a_fresh_csrf_value_in_cookie_and_form(env):
+    pages = [start(env).page for _ in range(3)]
+    values = {csrf_cookie(page)[1] for page in pages}
+    assert len(values) == 3
+    for page in pages:
+        assert form_fields(page)["csrf"] == csrf_cookie(page)[1]
+
+
+@pytest.mark.parametrize(
+    ("redirect_uri", "used", "origin"),
+    [
+        (CLAUDE_CALLBACK, CLAUDE_CALLBACK, "https://claude.ai"),
+        (LOOPBACK_CALLBACK, LOOPBACK_CALLBACK, "http://localhost:53682"),
+        (LOOPBACK_CALLBACK, "http://localhost:61999/callback", "http://localhost:61999"),
+        ("http://127.0.0.1/cb", "http://127.0.0.1:8123/cb", "http://127.0.0.1:8123"),
+        # CSP 출처에는 IPv6 주소를 쓸 수 없다. 그래서 http: 전체를 연다(리다이렉트는 서버가 이미 검사했다).
+        ("http://[::1]/cb", "http://[::1]:8123/cb", "http:"),
+    ],
+)
+def test_csp_form_action_lets_the_redirect_back_to_the_client_through(
+    env, redirect_uri, used, origin
+):
+    # Chrome 은 폼 제출 뒤 따라가는 리다이렉트에도 form-action 을 적용한다.
+    registered = register_client(env, [redirect_uri])
+    page = authorize(env, registered["client_id"], used, pkce()[1])
+    assert page.status_code == 200
+    assert f"form-action 'self' {origin};" in page.headers["Content-Security-Policy"]
+
+
+@pytest.mark.parametrize(
+    ("username", "password"),
+    [
+        ("alice", "a wrong long passphrase"),
+        ("nobody", PASSWORD),
+        ("Alice", "short"),
+        ("a", PASSWORD),
+        ("", ""),
+    ],
+)
+def test_a_failed_sign_in_shows_the_same_form_and_says_nothing_more(env, alice, username, password):
+    # 계정이 있는지 없는지는 드러내지 않는다: 같은 401, 같은 문구, 아이디는 채운 채로.
+    pending = start(env)
+    response = submit(env, pending.page, username, password)
+    assert response.status_code == 401
+    assert "Location" not in response.headers
+    html = response.get_data(as_text=True)
+    assert "아이디나 비밀번호를 다시 확인해 주세요." in html
+    assert f'required value="{username}"' in html
+    assert not password or password not in html
+    # 다시 보낼 수 있는 새 폼이다.
+    again = submit(env, response, "alice")
+    assert again.status_code == 302
+    assert grant_count(env) == 1
+
+
+def test_an_unknown_account_spends_the_same_password_check(env, monkeypatch):
+    # 없는 계정도 미리 만든 해시와 대조한다. 바로 거절하면 걸린 시간으로 계정 유무가 드러난다.
+    checked = []
+    original = identity_module.check_password_hash
+
+    def spy(encoded, password):
+        checked.append(encoded)
+        return original(encoded, password)
+
+    monkeypatch.setattr(identity_module, "check_password_hash", spy)
+    with pytest.raises(AuthError):
+        env.identity.verify("nobody", PASSWORD)
+    assert checked == [identity_module._DUMMY_HASH]
+
+
+def test_an_app_id_in_another_case_signs_in_like_the_app(env, alice):
+    pending = start(env)
+    assert submit(env, pending.page, "ALICE").status_code == 302
+
+
+def test_signing_in_here_starts_no_app_session(env, alice):
+    before = session_count(env)
+    pending, code = authorization_code(env, alice)
+    assert exchange(env, pending, code).status_code == 200
+    assert session_count(env) == before
+
+
+def login_from(env, ip, username, password="a wrong long passphrase"):
+    return env.client.post(
+        "/api/mobile/auth/login",
+        headers={"CF-Connecting-IP": ip},
+        json={"username": username, "password": password},
+    ).status_code
+
+
+def test_the_browser_shares_the_app_logins_budget_per_account(env, alice):
+    # auth-user:alice 10회/5분을 앱 로그인과 같이 쓴다(가입이 1회 썼다).
+    assert [login_from(env, "10.6.0.1", "alice") for _ in range(5)] == [401] * 5
+    for n in range(4):
+        page = start(env).page
+        wrong = submit(env, page, "alice", "a wrong long passphrase", headers=ip(f"10.6.1.{n}"))
+        assert wrong.status_code == 401
+    pending = start(env)
+    refused = submit(env, pending.page, "alice", headers=ip("10.6.2.1"))
+    assert refused.status_code == 429
+    assert "Location" not in refused.headers
+    assert "요청이 너무 많아요. 잠시 후 다시 시도해 주세요." in refused.get_data(as_text=True)
+    assert grant_count(env) == 0
+    env.clock.advance(301)
+    assert submit(env, refused, "alice", headers=ip("10.6.2.1")).status_code == 302
+
+
+def test_the_browser_shares_the_app_logins_budget_per_address(env, alice):
+    assert [login_from(env, "10.7.0.1", f"user{n}") for n in range(10)] == [401] * 10
+    pending = start(env)
+    assert submit(env, pending.page, "alice", headers=ip("10.7.0.1")).status_code == 429
+    assert login_from(env, "10.7.0.1", "alice", PASSWORD) == 429
+
+
+def test_the_browser_shares_the_app_logins_overall_budget(env, alice):
+    # auth-any 60회/5분. 가입이 1회 썼다.
+    statuses = [login_from(env, f"10.8.{n // 50}.{n % 50}", f"user{n}") for n in range(59)]
+    assert statuses == [401] * 59
+    pending = start(env)
+    assert submit(env, pending.page, "alice", headers=ip("10.8.9.9")).status_code == 429
+
+
+def ip(address):
+    return {"CF-Connecting-IP": address}
+
+
+def test_deny_returns_access_denied_without_a_password(env):
+    pending = start(env)
+    response = submit(env, pending.page, None, None, decision="deny")
+    assert response.status_code == 302
+    location = response.headers["Location"]
+    assert location.startswith(CLAUDE_CALLBACK + "?")
+    params = redirect_params(location)
     assert params["error"] == "access_denied"
     assert params["state"] == "state-123"
     assert params["iss"] == PUBLIC
     assert "code" not in params
+    assert grant_count(env) == 0
 
 
-def test_a_request_expires_after_ten_minutes(env, alice):
-    pending = start(env, alice)
-    env.clock.advance(601)
-    assert poll(env, pending.request_id, pending.cookie).json["status"] == "expired"
-    assert lookup(env, alice, pending.code).status_code == 404
-    assert approve(env, alice, pending.request_id).status_code == 404
+def test_allow_returns_a_code_with_state_and_issuer(env, alice):
+    pending = start(env)
+    response = submit(env, pending.page, "alice")
+    assert response.status_code == 302
+    location = response.headers["Location"]
+    assert location.startswith(CLAUDE_CALLBACK + "?")
+    params = redirect_params(location)
+    assert set(params) == {"code", "state", "iss"}
+    assert params["state"] == "state-123"
+    assert params["iss"] == PUBLIC
+    assert len(params["code"]) >= 43
 
 
-# ----------------------------------------------------------------- §4.5 앱 승인
-
-
-def test_lookup_names_the_client_and_where_it_will_return(env, alice):
-    registered = register_client(env)
-    page = authorize(env, registered["client_id"], CLAUDE_CALLBACK, pkce()[1])
-    found = lookup(env, alice, user_code(page))
-    assert found.status_code == 200
-    body = found.json
-    assert isinstance(body["requestId"], str) and body["requestId"]
-    assert body["client"] == {"name": "Claude", "host": "claude.ai", "local": False}
-    # §11 M5·H1: 요청 시각도 준다(시트의 "N분 전 요청").
-    requested = datetime.fromisoformat(body["requestedAt"])
-    expires = datetime.fromisoformat(body["expiresAt"])
-    assert requested.tzinfo is not None
-    assert abs(requested.timestamp() - env.clock.now) < 5
-    assert 590 <= (expires - requested).total_seconds() <= 600
-
-
-def test_lookup_marks_a_loopback_client_as_local(env, alice):
+def test_a_loopback_client_gets_its_code_on_the_port_it_opened(env, alice):
     registered = register_client(env, [LOOPBACK_CALLBACK])
-    page = authorize(env, registered["client_id"], LOOPBACK_CALLBACK, pkce()[1])
-    assert lookup(env, alice, user_code(page)).json["client"]["local"] is True
+    page = authorize(env, registered["client_id"], "http://localhost:61999/callback", pkce()[1])
+    location = submit(env, page, "alice").headers["Location"]
+    assert location.startswith("http://localhost:61999/callback?code=")
+
+
+def test_a_request_without_state_gets_none_back(env, alice):
+    registered = register_client(env)
+    page = authorize(env, registered["client_id"], CLAUDE_CALLBACK, pkce()[1], state=None)
+    assert "state" not in form_fields(page)
+    assert "state" not in redirect_params(submit(env, page, "alice").headers["Location"])
 
 
 @pytest.mark.parametrize(
-    "variant",
+    "field",
     [
-        lambda code: code,
-        lambda code: code.lower(),
-        lambda code: code.replace("-", ""),
-        lambda code: " " + code[:4] + " " + code[5:] + " ",
-        lambda code: code[:2] + "-" + code[2:].replace("-", "").lower(),
+        {"redirect_uri": "https://evil.example/callback"},
+        {"client_id": "no-such-client"},
+        {"redirect_uri": None},
     ],
 )
-def test_lookup_ignores_case_hyphens_and_spaces(env, alice, variant):
-    registered = register_client(env)
-    page = authorize(env, registered["client_id"], CLAUDE_CALLBACK, pkce()[1])
-    code = user_code(page)
-    canonical = lookup(env, alice, code).json["requestId"]
-    assert lookup(env, alice, variant(code)).json["requestId"] == canonical
+def test_a_tampered_form_that_cannot_be_vouched_for_is_an_error_page(env, alice, field):
+    # POST 도 GET 과 같은 검사를 다시 한다. 리다이렉트할 곳을 믿을 수 없으면 오류 페이지.
+    pending = start(env)
+    response = submit(env, pending.page, "alice", **field)
+    assert response.status_code == 400
+    assert "Location" not in response.headers
+    assert grant_count(env) == 0
 
 
-def test_wrong_and_expired_codes_get_the_same_answer(env, alice):
-    pending = start(env, alice)
-    wrong = lookup(env, alice, "ABCD-EFGH" if pending.code != "ABCD-EFGH" else "HGFE-DCBA")
-    env.clock.advance(601)
-    expired = lookup(env, alice, pending.code)
-    for response in (wrong, expired):
-        assert response.status_code == 404
-        assert response.json["error"] == "코드를 다시 확인해 주세요."
+@pytest.mark.parametrize(
+    ("field", "error"),
+    [
+        ({"code_challenge_method": "plain"}, "invalid_request"),
+        ({"code_challenge": "short"}, "invalid_request"),
+        ({"response_type": "token"}, "unsupported_response_type"),
+        ({"resource": "https://other.example/mcp"}, "invalid_target"),
+        ({"scope": "bad\\scope"}, "invalid_scope"),
+    ],
+)
+def test_a_tampered_form_returns_the_error_to_the_client(env, alice, field, error):
+    pending = start(env)
+    response = submit(env, pending.page, "alice", **field)
+    assert response.status_code == 302
+    params = redirect_params(response.headers["Location"])
+    assert params["error"] == error
+    assert "code" not in params
+    assert grant_count(env) == 0
 
 
-@pytest.mark.parametrize("path", ["lookup", "approve", "deny"])
-def test_approval_routes_need_the_app_session(env, path):
-    response = env.client.post(f"/api/mobile/agents/requests/{path}", json={"code": "ABCD-EFGH"})
-    assert response.status_code == 401
-
-
-def test_code_guessing_is_capped_per_user_and_failures_count(env, alice):
-    pending = start(env, alice)  # 1회
-    statuses = [lookup(env, alice, "ZZZZ-ZZZZ").status_code for _ in range(9)]  # 2~10회
-    assert statuses == [404] * 9
-    assert lookup(env, alice, pending.code).status_code == 429  # 11회
-    env.clock.advance(301)
-    assert lookup(env, alice, pending.code).status_code == 200
-
-
-def test_approve_and_deny_share_the_guessing_budget(env, alice):
-    pending = start(env, alice)  # 1회
-    for _ in range(9):
-        env.client.post(
-            "/api/mobile/agents/requests/deny",
-            headers=app_headers(alice),
-            json={"requestId": "no-such-request"},
-        )
-    assert approve(env, alice, pending.request_id).status_code == 429
-
-
-def test_another_user_cannot_touch_a_request_already_decided(env, alice):
-    bob = signup(env, "bob")
-    pending = start(env, alice)
-    assert approve(env, alice, pending.request_id).status_code == 200
-    assert lookup(env, bob, pending.code).status_code == 404
-    assert approve(env, bob, pending.request_id).status_code == 404
-    denied = env.client.post(
-        "/api/mobile/agents/requests/deny",
-        headers=app_headers(bob),
-        json={"requestId": pending.request_id},
-    )
-    assert denied.status_code == 404
-
-
-def deny(env, user, request_id):
-    return env.client.post(
-        "/api/mobile/agents/requests/deny",
-        headers=app_headers(user),
-        json={"requestId": request_id},
-    )
-
-
-def test_the_first_user_to_look_a_code_up_claims_the_request(env, alice):
-    # §11 M7: lookup 한 사용자가 요청을 확보한다. 다른 사용자는 코드를 알아도, requestId 를 알아도 못 쓴다.
-    bob = signup(env, "bob")
-    pending = start(env, alice)
-    assert lookup(env, bob, pending.code).status_code == 404
-    assert approve(env, bob, pending.request_id).status_code == 404
-    assert deny(env, bob, pending.request_id).status_code == 404
-    assert poll(env, pending.request_id, pending.cookie).json["status"] == "pending"
-    assert approve(env, alice, pending.request_id).status_code == 200
-
-
-def test_a_claimed_request_still_expires_ten_minutes_after_it_was_made(env, alice):
-    registered = register_client(env)
-    page = authorize(env, registered["client_id"], CLAUDE_CALLBACK, pkce()[1])
-    env.clock.advance(540)
-    request_id = lookup(env, alice, user_code(page)).json["requestId"]
-    env.clock.advance(61)
-    assert approve(env, alice, request_id).status_code == 404
-
-
-def test_a_denied_request_can_not_be_approved_afterwards(env, alice):
-    pending = start(env, alice)
-    env.client.post(
-        "/api/mobile/agents/requests/deny",
-        headers=app_headers(alice),
-        json={"requestId": pending.request_id},
-    )
-    assert approve(env, alice, pending.request_id).status_code == 404
+def test_the_form_post_spends_the_authorize_budget_too(env, alice):
+    pending = start(env)  # 1회
+    for _ in range(59):
+        authorize(env, pending.client_id, CLAUDE_CALLBACK, pkce()[1])
+    response = submit(env, pending.page, "alice")
+    assert response.status_code == 429
+    assert "Location" not in response.headers
 
 
 def test_a_new_connection_only_reads_whatever_the_client_asked_for(env, alice):
@@ -745,62 +820,10 @@ def test_a_new_connection_only_reads_whatever_the_client_asked_for(env, alice):
     assert connections(env, alice)[0]["allowBooking"] is False
 
 
-@pytest.mark.parametrize("value", [True, False, "yes", None])
-def test_approve_refuses_an_allow_booking_field(env, alice, value):
-    # §12 S-H1: 예약 허용은 연결한 뒤 목록에서만 켠다. 오래된 앱이 켠 채 보내면 무시하지 않고 막는다.
-    pending = start(env, alice)
-    response = env.client.post(
-        "/api/mobile/agents/requests/approve",
-        headers=app_headers(alice),
-        json={"requestId": pending.request_id, "allowBooking": value},
-    )
-    assert response.status_code == 400
-    assert poll(env, pending.request_id, pending.cookie).json["status"] == "pending"
-    assert connections(env, alice) == []
-
-
-# ----------------------------------------------------------------- §12 S-H1 위치 신호
-
-
-def country_lookup(env, user, *, asked=None, entered=None):
-    registered = register_client(env)
-    page = authorize(
-        env,
-        registered["client_id"],
-        CLAUDE_CALLBACK,
-        pkce()[1],
-        headers={"CF-IPCountry": asked} if asked is not None else None,
-    )
-    found = lookup(
-        env, user, user_code(page), headers={"CF-IPCountry": entered} if entered else None
-    )
-    assert found.status_code == 200
-    return found.json
-
-
-def test_lookup_tells_where_the_requesting_browser_was(env, alice):
-    body = country_lookup(env, alice, asked="JP", entered="JP")
-    assert body["requestCountry"] == "JP"
-    assert body["countryMismatch"] is False
-
-
-def test_lookup_flags_a_browser_in_another_country(env, alice):
-    body = country_lookup(env, alice, asked="JP", entered="KR")
-    assert body["requestCountry"] == "JP"
-    assert body["countryMismatch"] is True
-
-
-def test_no_country_header_means_no_country_and_no_warning(env, alice):
-    body = country_lookup(env, alice)
-    assert body.get("requestCountry") is None
-    assert body.get("countryMismatch", False) is False
-
-
-@pytest.mark.parametrize("raw", ["jp", "JPN", "J", "X1", "", "<b>", "T1"])
-def test_only_two_capital_letters_are_kept_as_a_country(env, alice, raw):
-    body = country_lookup(env, alice, asked=raw, entered="KR")
-    assert body.get("requestCountry") is None
-    assert body.get("countryMismatch", False) is False
+def test_an_admin_account_can_connect_too(env):
+    env.identity.ensure_admin("root", PASSWORD)
+    pending = start(env)
+    assert submit(env, pending.page, "root").status_code == 302
 
 
 # ----------------------------------------------------------------- §4.6 token
@@ -820,15 +843,16 @@ def test_token_response_is_a_bearer_pair_that_is_not_cached(env, alice):
     assert mcp_status(env, body["access_token"]) == 200
 
 
-def test_tokens_are_stored_only_as_hashes(env, alice):
-    tokens = connect(env, alice)
+def test_tokens_and_codes_are_stored_only_as_hashes(env, alice):
+    pending, code = authorization_code(env, alice)
+    tokens = exchange(env, pending, code).json
     # WAL 모드라 최근 쓰기는 -wal 파일에 있다.
     raw = b"".join(
         Path(env.identity.path + suffix).read_bytes()
         for suffix in ("", "-wal")
         if Path(env.identity.path + suffix).exists()
     )
-    for value in (tokens["access_token"], tokens["refresh_token"]):
+    for value in (code, tokens["access_token"], tokens["refresh_token"]):
         assert value.encode() not in raw
 
 
@@ -1053,42 +1077,6 @@ def test_authorize_allows_three_hundred_a_minute_overall(env):
     assert "Location" not in refused.headers
 
 
-def test_poll_allows_three_thousand_a_minute_overall(env, alice):
-    pending = start(env, alice)
-    cookie = f"{pending.cookie[0]}={pending.cookie[1]}"
-
-    def poll_from(ip):
-        return env.client.get(
-            "/oauth/authorize/poll?request=" + pending.request_id,
-            headers={"CF-Connecting-IP": ip, "Cookie": cookie},
-        ).status_code
-
-    statuses = [poll_from(f"10.4.{n // 100}.{n % 100}") for n in range(3000)]
-    assert 429 not in statuses
-    assert poll_from("192.0.2.1") == 429
-
-
-def test_authorize_stops_making_requests_at_two_thousand_waiting(env):
-    # 살아 있는 대기 요청이 2000개면 새 요청을 만들지 않고 503 오류 페이지(리다이렉트 없음).
-    client_id = register_client(env)["client_id"]
-    made = 0
-    for minute in range(7):
-        for n in range(min(300, 2000 - made)):
-            assert authorize_from(env, client_id, f"10.5.{minute}.{n}").status_code == 200
-            made += 1
-        env.clock.advance(61)
-    assert made == 2000
-    full = authorize_from(env, client_id, "192.0.2.1")
-    assert full.status_code == 503
-    assert "Location" not in full.headers
-    html = full.get_data(as_text=True)
-    assert "잠시 후 다시 시도해 주세요" in html
-    assert not USER_CODE.search(html)
-    # 대기 요청이 만료되면 다시 만든다.
-    env.clock.advance(601)
-    assert authorize_from(env, client_id, "192.0.2.2").status_code == 200
-
-
 # ----------------------------------------------------------------- §12 S-L2 너무 큰 본문
 
 
@@ -1115,23 +1103,6 @@ def test_revoke_shares_the_token_budget(env):
         data={"token": "x" * 43, "client_id": "c"},
     )
     assert response.status_code == 429
-
-
-def test_poll_allows_a_hundred_twenty_a_minute_per_address(env, alice):
-    pending = start(env, alice)
-
-    def poll_from(ip):
-        return env.client.get(
-            "/oauth/authorize/poll?request=" + pending.request_id,
-            headers={
-                "CF-Connecting-IP": ip,
-                "Cookie": f"{pending.cookie[0]}={pending.cookie[1]}",
-            },
-        ).status_code
-
-    statuses = [poll_from("203.0.113.9") for _ in range(121)]
-    assert statuses == [200] * 120 + [429]
-    assert poll_from("198.51.100.7") == 200
 
 
 # ----------------------------------------------------------------- refresh·만료·revoke
@@ -1382,18 +1353,19 @@ def test_app_logout_keeps_agent_connections(env, alice):
 
 def test_deleting_the_account_ends_agent_connections(env, alice):
     tokens = connect(env, alice)
-    pending = start(env, alice)
+    pending, code = authorization_code(env, alice)
     deleted = env.client.post(
         "/api/mobile/account/delete",
         headers=app_headers(alice),
-        json={"password": "a long secure passphrase"},
+        json={"password": PASSWORD},
     )
     assert deleted.status_code == 200
     assert mcp_status(env, tokens["access_token"]) == 401
     assert refresh(env, tokens).status_code == 400
-    # 그 사용자가 보던 대기 요청도 지워져, 브라우저는 더 기다리지 않는다.
-    polled = poll(env, pending.request_id, pending.cookie)
-    assert (polled.get_json(silent=True) or {}).get("status") != "approved"
+    # 탈퇴 전에 받아 둔 권한 코드도 함께 지워져 교환되지 않는다.
+    assert exchange(env, pending, code).status_code == 400
+    with env.identity.connect() as db:
+        assert db.execute("SELECT count(*) FROM oauth_codes").fetchone()[0] == 0
 
 
 def test_agent_routes_need_the_app_session(env):
@@ -1419,21 +1391,8 @@ def test_metadata_urls_follow_the_configured_public_url(tmp_path):
 def connect_again(env, user, client_id, verifier):
     """같은 client_id 로 인가를 처음부터 다시 한다(에이전트가 다시 로그인한 경우)."""
     page = authorize(env, client_id, CLAUDE_CALLBACK, challenge_for(verifier))
-    found = lookup(env, user, user_code(page)).json
-    cookie = browser_cookie(page)[:2]
-    assert approve(env, user, found["requestId"]).status_code == 200
-    code = redirect_params(poll(env, found["requestId"], cookie).json["redirect"])["code"]
-    issued = token(
-        env,
-        {
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": CLAUDE_CALLBACK,
-            "client_id": client_id,
-            "code_verifier": verifier,
-            "resource": RESOURCE,
-        },
-    )
+    code = code_from(submit(env, page, user["user"]["username"]))
+    issued = exchange(env, Pending(client_id, CLAUDE_CALLBACK, verifier, page), code)
     assert issued.status_code == 200, issued.get_data(as_text=True)
     return issued.json
 
@@ -1485,33 +1444,31 @@ def test_authorize_page_names_a_local_program_without_nested_brackets(env):
 # .omc/plans/mutation-report.md 의 "실제 공백"과 손 변이 생존. 동작으로 쓴다(줄 번호에 기대지 않는다).
 
 
-def test_starting_a_request_leaves_other_live_requests_alone(env, alice):
-    # 만료 요청 정리 기준(now - 10분)이 now + 10분으로 바뀌면 살아 있는 요청까지 지운다.
-    registered = register_client(env)
-    first = authorize(env, registered["client_id"], CLAUDE_CALLBACK, pkce()[1])
-    env.clock.advance(300)
-    authorize(env, registered["client_id"], CLAUDE_CALLBACK, pkce()[1])
-    found = lookup(env, alice, user_code(first))
-    assert found.status_code == 200
-    assert poll(env, found.json["requestId"], browser_cookie(first)[:2]).json["status"] == "pending"
-
-
 def test_a_late_but_valid_exchange_survives_cleanup_in_between(env, alice):
-    # 승인했지만 아직 교환하지 않은 grant 는 "요청 만료 + 코드 수명"까지 지우면 안 된다.
+    # 허용했지만 아직 교환하지 않은 grant 는 코드 수명(60초)까지 지우면 안 된다.
     # 그 사이에 다른 등록(정리를 부르는 쓰기)이 끼어도 교환이 된다.
-    pending = start(env, alice)
-    assert approve(env, alice, pending.request_id).status_code == 200
-    env.clock.advance(598)
-    code = redirect_params(poll(env, pending.request_id, pending.cookie).json["redirect"])["code"]
+    pending, code = authorization_code(env, alice)
     env.clock.advance(59)
     register_client(env)
     assert exchange(env, pending, code).status_code == 200
 
 
-def test_a_request_expires_exactly_at_ten_minutes(env, alice):
-    pending = start(env, alice)
-    env.clock.advance(600)
-    assert poll(env, pending.request_id, pending.cookie).json["status"] == "expired"
+def test_a_connection_never_exchanged_is_cleaned_up_after_its_code(env, alice):
+    authorization_code(env, alice)
+    env.clock.advance(61)
+    register_client(env)
+    assert grant_count(env) == 0
+
+
+def test_a_code_replayed_half_an_hour_later_still_ends_the_connection(env, alice):
+    # 쓴 코드는 만료 뒤 한 시간 남겨 둔다. 그 사이의 정리가 지우면 재사용을 알아채지 못한다.
+    pending, code = authorization_code(env, alice)
+    first = exchange(env, pending, code).json
+    env.clock.advance(1800)
+    register_client(env)
+    assert exchange(env, pending, code).status_code == 400
+    assert mcp_status(env, first["access_token"]) == 401
+    assert connections(env, alice) == []
 
 
 def test_a_code_expires_exactly_at_sixty_seconds(env, alice):
@@ -1552,13 +1509,16 @@ def test_authorize_page_csp_is_exactly_the_specified_directives(env):
     nonce = re.search(r"'nonce-([^']+)'", response.headers["Content-Security-Policy"]).group(1)
     assert directives - {""} == {
         "default-src 'none'",
-        f"script-src 'nonce-{nonce}'",
         f"style-src 'nonce-{nonce}'",
-        "connect-src 'self'",
         "base-uri 'none'",
-        "form-action 'none'",
+        "form-action 'self' https://claude.ai",
         "frame-ancestors 'none'",
     }
+
+
+def test_an_error_page_allows_no_form_at_all(env):
+    response = authorize(env, "no-such-client", CLAUDE_CALLBACK, pkce()[1])
+    assert "form-action 'none'" in response.headers["Content-Security-Policy"]
 
 
 def test_refresh_answers_with_the_connections_current_scope(env, alice):
@@ -1591,21 +1551,6 @@ def test_refresh_without_a_required_field_is_an_invalid_request(env, alice, fiel
     assert oauth_error(response)["error"] == "invalid_request"
 
 
-@pytest.mark.parametrize("code", [12345678, None, ["ABCD-EFGH"], {"code": 1}])
-def test_lookup_with_a_code_that_is_not_text_is_just_not_found(env, alice, code):
-    assert lookup(env, alice, code).status_code == 404
-
-
-@pytest.mark.parametrize("request_id", [123, None, ["x"], {"id": "x"}])
-def test_approve_with_a_request_id_that_is_not_text_is_just_not_found(env, alice, request_id):
-    response = env.client.post(
-        "/api/mobile/agents/requests/approve",
-        headers=app_headers(alice),
-        json={"requestId": request_id},
-    )
-    assert response.status_code == 404
-
-
 @pytest.mark.parametrize(
     "uri", ["http://localhost/cb?next=1", "http://localhost/cb#frag", "http://127.0.0.1:9/cb?x"]
 )
@@ -1633,33 +1578,6 @@ def test_the_token_budget_window_is_sixty_seconds(env):
     assert token_from(env, "203.0.113.50") == 429
     env.clock.advance(60)
     assert token_from(env, "203.0.113.50") == 400
-
-
-def test_deleting_the_account_removes_the_requests_it_held(env, alice):
-    # 손 변이: oauth_requests.user_id 의 FK·CASCADE 를 빼면 탈퇴 뒤에도 요청이 남아 poll 이 만료까지 pending 이다.
-    pending = start(env, alice)
-    env.client.post(
-        "/api/mobile/account/delete",
-        headers=app_headers(alice),
-        json={"password": "a long secure passphrase"},
-    )
-    assert poll(env, pending.request_id, pending.cookie).status_code == 404
-
-
-def test_deleting_the_account_clears_its_code_guessing_budget(env, alice):
-    # 손 변이: erase_account 가 agent-code 버킷을 지우지 않으면 그 행이 남는다.
-    for _ in range(3):
-        lookup(env, alice, "ZZZZ-ZZZZ")
-    key = digest("agent-code:" + alice["user"]["id"])
-    with env.identity.connect() as db:
-        assert db.execute("SELECT count(*) FROM rate_limits WHERE key=?", (key,)).fetchone()[0] == 1
-    env.client.post(
-        "/api/mobile/account/delete",
-        headers=app_headers(alice),
-        json={"password": "a long secure passphrase"},
-    )
-    with env.identity.connect() as db:
-        assert db.execute("SELECT count(*) FROM rate_limits WHERE key=?", (key,)).fetchone()[0] == 0
 
 
 def test_a_wrong_method_under_oauth_answers_in_oauth_shape(env):
@@ -1703,3 +1621,27 @@ def test_reconnecting_starts_read_only_again_even_after_booking_was_allowed(env,
     assert again["scope"] == "jari.read"
     [connection] = connections(env, alice)
     assert connection["allowBooking"] is False
+
+
+def test_restarting_on_a_database_from_the_device_code_flow_keeps_connections(tmp_path):
+    # 운영 DB 에는 장치 코드 흐름의 oauth_requests 표가 남아 있다. 시작할 때 그 표만 지우고
+    # 클라이언트·연결·토큰은 그대로 둔다.
+    first = make_env(tmp_path)
+    user = signup(first, "alice")
+    tokens = connect(first, user)
+    with first.identity.connect() as db:
+        db.execute(
+            "CREATE TABLE oauth_requests (id TEXT PRIMARY KEY, user_code_hash TEXT UNIQUE NOT NULL,"
+            " user_id TEXT REFERENCES users(id) ON DELETE CASCADE, status TEXT)"
+        )
+        db.execute(
+            "INSERT INTO oauth_requests VALUES ('r1', 'h', ?, 'pending')", (user["user"]["id"],)
+        )
+    again = make_env(tmp_path, clock=first.clock)
+    with again.identity.connect() as db:
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "oauth_requests" not in tables
+    assert {"oauth_clients", "oauth_grants", "oauth_tokens", "oauth_codes"} <= tables
+    assert mcp_status(again, tokens["access_token"]) == 200
+    assert refresh(again, tokens).status_code == 200
+    assert len(connections(again, user)) == 1

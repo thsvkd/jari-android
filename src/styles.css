@@ -642,15 +642,11 @@ a.settings-row { color: inherit; text-decoration: none; }
 .agent-howto { margin-top: 16px; padding-top: 4px; border-top: 1px solid var(--line); }
 .agent-howto p { margin: 10px 0 6px; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .agent-howto p b { color: var(--text); }
+.agent-note { color: var(--muted); font-size: 14px; line-height: 1.6; }
 .agent-row { display: grid; gap: 10px; }
 .agent-row-head { display: grid; gap: 2px; min-width: 0; }
 .agent-row-head b { font-size: 16px; overflow-wrap: anywhere; }
 .agent-row-head small, .agent-row-meta { margin: 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
-.agent-request { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13px; overflow-wrap: anywhere; }
-.action-sheet .agent-warning { color: var(--danger); font-weight: 650; }
-.action-sheet .agent-warning.strong { padding: 10px 12px; border-radius: 12px; background: var(--danger-soft); font-size: 13px; }
-.agent-waiting { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--accent-ink); font-size: 14px; font-weight: 650; }
-.agent-waiting.failed { padding: 10px 12px; border-radius: 12px; background: var(--danger-soft); color: var(--danger); }
 details.agent-connect > summary { display: flex; align-items: center; min-height: 48px; cursor: pointer; font-size: 15px; font-weight: 700; }
 details.agent-connect[open] > summary { margin-bottom: 10px; }
 .invite-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }

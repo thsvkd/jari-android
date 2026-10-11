@@ -72,7 +72,7 @@ class IdentityStore:
                     key TEXT PRIMARY KEY, expires REAL NOT NULL, count INTEGER NOT NULL
                 );
                 -- Agent connections (oauth.py). Secrets are kept as digests only, and deleting
-                -- a user cascades to its connections, their tokens and the requests it held.
+                -- a user cascades to its connections, their codes and their tokens.
                 CREATE TABLE IF NOT EXISTS oauth_clients (
                     id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris TEXT NOT NULL,
                     created REAL NOT NULL
@@ -84,16 +84,15 @@ class IdentityStore:
                     created REAL NOT NULL, last_used REAL, expires REAL NOT NULL,
                     active INTEGER NOT NULL DEFAULT 0
                 );
-                CREATE TABLE IF NOT EXISTS oauth_requests (
-                    id TEXT PRIMARY KEY, user_code_hash TEXT UNIQUE NOT NULL,
-                    browser_hash TEXT NOT NULL, client_id TEXT NOT NULL,
-                    redirect_uri TEXT NOT NULL, code_challenge TEXT NOT NULL, state TEXT, country TEXT,
-                    created REAL NOT NULL, expires REAL NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-                    grant_id TEXT, code_hash TEXT UNIQUE, code_expires REAL,
-                    delivered INTEGER NOT NULL DEFAULT 0
+                CREATE TABLE IF NOT EXISTS oauth_codes (
+                    hash TEXT PRIMARY KEY,
+                    grant_id TEXT NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE,
+                    client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL,
+                    code_challenge TEXT NOT NULL, expires REAL NOT NULL,
+                    used INTEGER NOT NULL DEFAULT 0
                 );
+                -- The device-code flow's requests, replaced by signing in on the browser page.
+                DROP TABLE IF EXISTS oauth_requests;
                 CREATE TABLE IF NOT EXISTS oauth_tokens (
                     hash TEXT PRIMARY KEY,
                     grant_id TEXT NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE,
@@ -221,24 +220,29 @@ class IdentityStore:
             "expiresAt": timestamp(expires),
         }
 
-    def login(self, username, password, expected_role=None):
+    def verify(self, username, password):
+        """The account behind an app ID and password, without starting a session; AuthError if wrong."""
         username = self.credentials(username, password)
         with self.connect() as db:
             user = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
-            # Same expensive primitive for unknown accounts; never disclose
-            # whether a particular invitation holder has registered.
-            encoded = user["password_hash"] if user else _DUMMY_HASH
-            valid = check_password_hash(encoded, password)
-            if user is None or not valid:
-                raise AuthError()
-            role = self._public_user(user)["role"]
-            if expected_role in {"admin", "member"} and role != expected_role:
-                raise AuthError(
-                    "관리자 계정이 아니에요."
-                    if expected_role == "admin"
-                    else "초대 회원 로그인 화면에서는 관리자 계정으로 로그인할 수 없어요.",
-                    403,
-                )
+        # Same expensive primitive for unknown accounts; never disclose
+        # whether a particular invitation holder has registered.
+        valid = check_password_hash(user["password_hash"] if user else _DUMMY_HASH, password)
+        if user is None or not valid:
+            raise AuthError()
+        return user
+
+    def login(self, username, password, expected_role=None):
+        user = self.verify(username, password)
+        role = self._public_user(user)["role"]
+        if expected_role in {"admin", "member"} and role != expected_role:
+            raise AuthError(
+                "관리자 계정이 아니에요."
+                if expected_role == "admin"
+                else "초대 회원 로그인 화면에서는 관리자 계정으로 로그인할 수 없어요.",
+                403,
+            )
+        with self.connect() as db:
             return self._session(db, user)
 
     def authenticate(self, token):
