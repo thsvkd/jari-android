@@ -978,9 +978,10 @@ class KorailService(RailService):
             logger.warning("Could not list unpaid reservations (%s)", type(exc).__name__)
             return None
 
-    def reserved_seats(self, reservation) -> set[tuple[int, str]] | None:
+    def reserved_seats(self, reservation) -> frozenset[tuple[int, str, str]] | None:
         """
-        (car, seat label) pairs Korail gave an unpaid reservation, like (3, "5A").
+        (car, seat label, class) Korail gave an unpaid reservation, like
+        (3, "5A", "general"). A class this app does not book keeps Korail's code.
 
         One PNR-keyed read (certification.ReservationList). None when it
         could not be read or named no seat, so a caller never matches on it.
@@ -993,11 +994,19 @@ class KorailService(RailService):
             detail = client.get_ticket_reservation_detail(
                 TicketReservationDetailRequest(pnr_no=rsv_id)
             )
-            seats = {
-                (int(str(seat.car_no)), str(seat.seat_no).strip())
+            classes = {
+                KorailSeatClass.GENERAL.value: "general",
+                KorailSeatClass.SPECIAL.value: "special",
+            }
+            seats = frozenset(
+                (
+                    int(str(seat.car_no)),
+                    str(seat.seat_no).strip(),
+                    classes.get(str(seat.room_class_code or ""), str(seat.room_class_code or "")),
+                )
                 for journey in detail.journeys
                 for seat in journey.seats
-            }
+            )
         except Exception as exc:
             logger.warning("Could not read the seats of an unpaid hold (%s)", type(exc).__name__)
             return None

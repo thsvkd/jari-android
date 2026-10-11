@@ -916,7 +916,8 @@ def unpaid_list(*answers):
     return client
 
 
-def seat_detail(*seats: tuple[str, str]):
+def seat_detail(*seats: tuple[str, ...]):
+    """certification.ReservationList seats: (car, seat) or (car, seat, room class code)."""
     from korail_mobile_api import (
         ReservationDetailJourney,
         ReservationSeatDetail,
@@ -926,9 +927,23 @@ def seat_detail(*seats: tuple[str, str]):
     return TicketReservationDetailResponse(
         journeys=(
             ReservationDetailJourney(
-                seats=tuple(ReservationSeatDetail(car_no=car, seat_no=no) for car, no in seats)
+                seats=tuple(
+                    ReservationSeatDetail(car_no=seat[0], seat_no=seat[1], room_class_code=code)
+                    for seat in seats
+                    for code in [seat[2] if len(seat) > 2 else "1"]
+                )
             ),
         )
+    )
+
+
+def sold(rail) -> None:
+    """The car read now shows the seat as sold, as it does once a hold took it."""
+    from dataclasses import replace  # PhysicalSeat is frozen
+
+    inventory = rail.seat_inventory.return_value
+    rail.seat_inventory.return_value = replace(
+        inventory, seats=(replace(inventory.seats[0], sale_possible="N"),), remaining_count=0
     )
 
 
@@ -1040,12 +1055,7 @@ def test_a_hold_that_reaches_the_list_late_is_still_read_back():
 
     with pytest.raises(type(lost())):
         wait.poll_once()
-    from dataclasses import replace  # PhysicalSeat is frozen
-
-    inventory = rail.seat_inventory.return_value
-    rail.seat_inventory.return_value = replace(
-        inventory, seats=(replace(inventory.seats[0], sale_possible="N"),), remaining_count=0
-    )
+    sold(rail)
     capture = wait.poll_once()
 
     assert rail.reservation_id(capture.hold) == "R-NEW"
@@ -1100,6 +1110,10 @@ def test_after_a_lost_answer_a_duplicate_is_the_watchs_own_hold_and_is_not_told(
     theirs = unpaid_row("019", "R-OLD", seats=2)
     mine = unpaid_row("019", "R-NEW", seats=2)
     rail = watching_rail(train, [theirs], [theirs], [theirs], [theirs, mine])
+    # Korail seated the party in the class asked for (special, code 2).
+    rail._modern_client.get_ticket_reservation_detail.return_value = seat_detail(
+        ("0005", "3A", "2"), ("0005", "3B", "2")
+    )
     duplicates = []
     wait = whole_train_wait(rail, on_duplicate=duplicates.append)
     rail._modern_client.reserve.side_effect = lost()
@@ -1113,6 +1127,7 @@ def test_after_a_lost_answer_a_duplicate_is_the_watchs_own_hold_and_is_not_told(
     capture = wait.poll_once()
     assert rail.reservation_id(capture.hold) == "R-NEW"
     assert (capture.train, capture.seat_class, capture.targets) == (train, "special", ())
+    assert wait._lost == []
 
     assert wait.poll_once() is None
     assert duplicates == [train]
@@ -1133,20 +1148,75 @@ def test_a_lost_answers_hold_on_a_late_first_list_stays_claimable():
     assert rail.reservation_id(capture.hold) == "R-NEW"
 
 
-def test_a_lost_answer_is_looked_for_only_for_its_payment_window(monkeypatch):
+def test_a_lost_answer_is_looked_for_for_minutes_not_a_payment_window(monkeypatch):
+    # The hold is made while Korail handles the POST, so it is listed within
+    # moments if at all; the list is not read for a whole payment window.
     from korail_bot.services import cancellation_wait_service as module
 
     clock = [1000.0]
     monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
-    rail = watching_rail(modern_train(), [], [], [unpaid_row("015", "R-NEW")], sellable="N")
+    rail = watching_rail(modern_train(), [])
+    rail._modern_client.reserve.side_effect = lost()
     wait = one_seat_wait(rail)
-    wait._lost.append(
-        module.LostAnswer(modern_train(), "general", 1, wait.plan.trains[0].targets[:1], 1001.0)
-    )
-    clock[0] = 2000.0
+    with pytest.raises(type(lost())):
+        wait.poll_once()
+    sold(rail)
+    reads = rail._korail_instance._session.get
 
+    clock[0] = 1000.0 + module.LOST_ANSWER_WINDOW_SECONDS - 1
+    before = reads.call_count
     assert wait.poll_once() is None
+    assert reads.call_count == before + 1
+
+    clock[0] = 1000.0 + module.LOST_ANSWER_WINDOW_SECONDS + 1
+    before = reads.call_count
+    assert wait.poll_once() is None
+    assert reads.call_count == before
     assert wait._lost == []
+    assert module.LOST_ANSWER_WINDOW_SECONDS <= 5 * 60
+
+
+def test_an_answer_lost_pass_after_pass_costs_no_more_reads_each_pass(monkeypatch):
+    # Every POST times out and never reaches Korail; the user's own booking
+    # on the train, in other seats, sits on the list. Asking Korail for that
+    # booking's seats once per lost answer per pass grew with the square of
+    # the passes (6 passes: 6 lost answers, 36 seat reads).
+    from korail_bot.services import cancellation_wait_service as module
+
+    log = Mock()
+    monkeypatch.setattr(module, "logger", log)
+    rail = watching_rail(modern_train(), [], [unpaid_row("015", "R-USER")])
+    rail._modern_client.reserve.side_effect = lost()
+    rail._modern_client.get_ticket_reservation_detail.return_value = seat_detail(("0003", "2B"))
+    wait = one_seat_wait(rail)
+
+    for _ in range(6):
+        with pytest.raises(type(lost())):
+            wait.poll_once()
+
+    assert len(wait._lost) == 1
+    assert rail._modern_client.get_ticket_reservation_detail.call_count == 1
+    # The list itself: the first one, then at most two reads a pass.
+    assert rail._korail_instance._session.get.call_count <= 1 + 2 * 6
+    # Korail's seat wording for the booking left alone, logged once.
+    [mismatch] = [
+        call for call in log.warning.call_args_list if "요청한 좌석과 달라" in call.args[0]
+    ]
+    assert mismatch.args[2] == [(3, "2B", "general")]
+
+
+def test_a_whole_train_booking_in_another_class_is_not_taken():
+    # Asked for special; a two-seat booking in general on the same train,
+    # made by the user after the lost answer, is not this watch's.
+    train = modern_train("019", general="13", special="11")
+    rail = watching_rail(train, [], [unpaid_row("019", "R-USER", seats=2)])
+    rail._modern_client.get_ticket_reservation_detail.return_value = seat_detail(
+        ("0008", "3A", "1"), ("0008", "3B", "1")
+    )
+    rail._modern_client.reserve.side_effect = lost()
+
+    with pytest.raises(type(lost())):
+        whole_train_wait(rail).poll_once()
 
 
 def test_the_seat_map_path_neither_reads_the_list_nor_swallows_a_refusal():
@@ -1255,6 +1325,8 @@ def test_a_duplicate_during_a_wait_is_told_once_per_watch(monkeypatch):
     assert notice.args[0] == -100
     assert "같은 열차 예약이 이미 있어서" in notice.args[1]
     assert "KTX 019 서울 → 부산" in notice.args[1]
+    # It may be this watch's own hold after a restart: no advice to cancel it.
+    assert "취소하면" not in notice.args[1]
 
 
 def test_a_refusal_on_a_train_this_watch_already_holds_is_not_told(monkeypatch):

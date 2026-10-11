@@ -8,7 +8,6 @@ from datetime import datetime
 
 from korail_mobile_api.errors import KorailAppError, KorailProtocolError, KorailTransportError
 
-from korail_bot.config.settings import settings
 from korail_bot.models import CancellationWaitPlan, SeatTarget, TrainSeatTargets
 from korail_bot.services.korail_service import DUPLICATE_RESERVATION_CODE
 from korail_bot.utils.logger import get_logger
@@ -21,6 +20,11 @@ AVAILABLE_RESERVATION_CODE = "11"
 # TrainSummary docstring in korail_mobile_api), so a train is only skipped
 # when the code and the word agree. "좌석부족" still gets read.
 SOLD_OUT_NAME = "매진"
+# How long a lost answer is looked for on the unpaid list. Korail makes the
+# hold while it handles the POST, before the answer that went missing, so a
+# hold that exists is listed within moments; minutes cover a slow list
+# without reading it for a whole payment window.
+LOST_ANSWER_WINDOW_SECONDS = 180
 
 
 def train_label(train) -> str:
@@ -76,6 +80,13 @@ class LostAnswer:
     targets: tuple[SeatTarget, ...]
     until: float
 
+    def same_request(self, other: LostAnswer) -> bool:
+        return same_service(self.train, other.train) and (
+            self.seat_class,
+            self.passenger_count,
+            self.targets,
+        ) == (other.seat_class, other.passenger_count, other.targets)
+
 
 def same_service(a, b) -> bool:
     """
@@ -111,10 +122,14 @@ class CancellationWaitService:
         # held when the watch began, then every hold the watch handed back.
         # None until Korail has listed them once.
         self._known: set[str] | None = None
-        # Requests whose answer was lost. Korail may have made the hold anyway,
-        # so the unpaid list is read each pass until it shows up or the
-        # payment window it would have had is over.
+        # Requests whose answer was lost, one per request however often it
+        # was lost. Korail may have made the hold anyway, so the unpaid list
+        # is read each pass until it shows up or the window is over.
         self._lost: list[LostAnswer] = []
+        # Seats of unpaid reservations already read: an unpaid hold's seats do
+        # not change, so each is read once per watch.
+        self._seats: dict[str, frozenset] = {}
+        self._mismatch_logged: set[str] = set()
 
     def poll_once(
         self, excluded: set[tuple[str, str, int, str]] | None = None
@@ -193,15 +208,16 @@ class CancellationWaitService:
         try:
             hold = reserve(train, *args, passenger_count=passenger_count, seat_class=seat_class)
         except (KorailTransportError, KorailProtocolError):
-            self._lost.append(
-                LostAnswer(
-                    train,
-                    seat_class,
-                    passenger_count,
-                    tuple(targets),
-                    time.monotonic() + settings.PAYMENT_TIMEOUT_MINUTES * 60,
-                )
+            answer = LostAnswer(
+                train,
+                seat_class,
+                passenger_count,
+                tuple(targets),
+                time.monotonic() + LOST_ANSWER_WINDOW_SECONDS,
             )
+            # The same request lost again only moves its window on.
+            self._lost = [lost for lost in self._lost if not lost.same_request(answer)]
+            self._lost.append(answer)
             raise
         except KorailAppError as exc:
             if exc.code != DUPLICATE_RESERVATION_CODE:
@@ -222,9 +238,10 @@ class CancellationWaitService:
 
         Taken only when it is provably this watch's: a reservation number the
         watch did not start with, on the same train and running date, for as
-        many seats as were asked for, and for designated seats exactly the
-        seats asked for. Anything less could be the user's own booking from
-        the Korail app, the seat map or another search, and is left alone.
+        many seats as were asked for, and in exactly the seats asked for or,
+        for a whole-train request, in the class asked for. Anything less could
+        be the user's own booking from the Korail app, the seat map or another
+        search, and is left alone.
         """
         now = time.monotonic()
         self._lost = [lost for lost in self._lost if lost.until > now]
@@ -239,11 +256,30 @@ class CancellationWaitService:
                     getattr(item, "seat_no_count", None) != lost.passenger_count
                 ):
                     continue
-                if lost.targets and self.rail.reserved_seats(item) != {
-                    (target.car_no, target.label) for target in lost.targets
-                }:
+                seats = self._seats.get(rsv_id)
+                if seats is None:
+                    seats = self.rail.reserved_seats(item)
+                    if seats is None:
+                        continue
+                    self._seats[rsv_id] = seats
+                if lost.targets:
+                    matches = {(car, label) for car, label, _ in seats} == {
+                        (target.car_no, target.label) for target in lost.targets
+                    }
+                else:
+                    matches = {seat_class for _, _, seat_class in seats} == {lost.seat_class}
+                if not matches:
+                    if rsv_id not in self._mismatch_logged:
+                        # Korail's own seat wording, to check the format against.
+                        self._mismatch_logged.add(rsv_id)
+                        logger.warning(
+                            "응답을 잃은 열차의 새 예약이 요청한 좌석과 달라 받지 않습니다: "
+                            "train_no=%s seats=%s",
+                            lost.train.train_no,
+                            sorted(seats),
+                        )
                     continue
-                self._lost.remove(lost)
+                self._lost = [other for other in self._lost if not other.same_request(lost)]
                 logger.info(
                     "응답을 잃은 예약을 미결제 목록에서 찾았습니다: train_no=%s",
                     lost.train.train_no,

@@ -61,7 +61,7 @@ WRONG_TRAIN_HINT = "날짜나 열차가 다르면 결제하기 전에 내 예약
 WAIT_DUPLICATE_NOTICE = (
     "이 계정에 같은 열차 예약이 이미 있어서 취소표를 잡지 못하고 있어요.\n\n"
     "{train}\n\n"
-    "코레일 앱의 내 예약을 확인해 주세요. 기존 예약을 취소하면 다시 잡아 볼게요."
+    "코레일 앱의 내 예약을 확인해 주세요."
 )
 
 # Set recursion limit
