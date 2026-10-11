@@ -325,6 +325,14 @@ class MobileGateway(MiniAppGateway):
             raise MiniAppError(str(exc), 422) from exc
         train = self._seat_train(chat_id, train_key)
         rail = self._logged_in_rail(chat_id)
+        if rail.seat_layout_is_reference(train, seat_class, count) is True:
+            # The seat map was drawn from another date because this class is sold out. Its
+            # seats are not on sale on this train, and reading "the current car" would read
+            # that date's.
+            raise MiniAppError(
+                "이 열차의 이 등급은 매진이라 좌석을 고를 수 없어요. 좌석표를 새로 불러와 주세요.",
+                409,
+            )
         try:
             current = rail.seat_inventory(train, car_no, seat_class, count)
             hold = rail.reserve_designated(

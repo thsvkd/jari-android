@@ -485,6 +485,21 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
     assert seats.status_code == 200
     target = seats.json["seats"][0]
 
+    # 매진이라 다른 날짜 편성으로 그린 좌석표의 좌석은 이 열차에서 팔지 않아요: 코레일에 가지 않고 거절해요.
+    designated = {
+        "trainKey": train_key,
+        "seatClass": "general",
+        "passengerCount": 1,
+        "carNo": 3,
+        "seats": [target],
+    }
+    rail.seat_layout_is_reference.return_value = True
+    refused = http.post("/api/mobile/reservations/designated", headers=headers, json=designated)
+    assert refused.status_code == 409
+    assert "매진" in refused.json["error"]
+    rail.reserve_designated.assert_not_called()
+    rail.seat_layout_is_reference.return_value = False
+
     bob = runtime.identity.register(
         "bobby", "a long secure passphrase", runtime.identity.create_invite()
     )

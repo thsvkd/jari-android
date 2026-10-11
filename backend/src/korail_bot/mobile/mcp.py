@@ -397,7 +397,19 @@ def _seat_map(result, arguments):
     cars = [car for car in cars if car["freeSeats"]]
     failed = result.get("failedCars", [])
     notes = []
-    if failed:
+    if result.get("layoutReference") or any(
+        inventory.get("layoutReference") for inventory in result.get("inventories", [])
+    ):
+        # Korail listed no car in this class, so the server drew the same train number on a
+        # nearby date. Its free seats are that day's: offering them as free here sent an agent
+        # to reserve seats that were not on sale.
+        cars = []
+        notes.append(
+            "이 열차의 이 등급은 지금 매진이에요. 좌석표는 가까운 날짜의 같은 열차 편성을 "
+            "참고로 읽은 것이라 예약할 수 있는 좌석이 없어요. 빈자리가 나기를 기다리려면 "
+            "start_watch 로 감시를 시작해요."
+        )
+    elif failed:
         notes.append("일부 호차는 조회하지 못했어요. 그 호차에 좌석이 없다는 뜻은 아니에요.")
     elif not cars:
         notes.append("예약 가능한 좌석이 없어요.")

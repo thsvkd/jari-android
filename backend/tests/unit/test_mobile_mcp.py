@@ -375,6 +375,23 @@ def test_get_seat_map_lists_the_free_seats_per_car(env, reader):
     assert "7A" in tool_text(result)
 
 
+def test_a_seat_map_drawn_from_another_date_offers_no_free_seats(env, reader):
+    # 코레일이 이 등급의 호차를 하나도 안 주면(매진) 서버가 가까운 날짜의 편성으로 좌석표를 그려요.
+    # 그 빈자리는 그날의 것이라 이 열차에서는 예약할 수 없어요.
+    env.gateway.seat_inventories.return_value = {
+        "inventories": [{**inventory(2, [seat(2, "8C")]), "layoutReference": True}],
+        "failedCars": [],
+        "layoutReference": True,
+    }
+    result = call_tool(
+        env, reader, "get_seat_map", {"trainKey": "T1", "seatClass": "special", "passengers": 1}
+    )
+    assert not result.get("isError")
+    assert result["structuredContent"]["cars"] == []
+    assert "8C" not in tool_text(result)
+    assert "매진" in tool_text(result)
+
+
 def test_an_empty_seat_map_says_nothing_can_be_booked(env, reader):
     env.gateway.seat_inventories.return_value = {
         "inventories": [],
