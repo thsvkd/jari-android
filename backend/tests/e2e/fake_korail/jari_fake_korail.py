@@ -381,6 +381,14 @@ class FakeKorail:
             pnr_no=pnr, payment_deadline_date=limit_date, payment_deadline_time=limit_time
         )
 
+    def reserve_any_seat(self, train, *, passenger_count, seat_class):
+        limit_date, limit_time = _deadline()
+        pnr = _next_id("E2E")
+        _log("reserve_any_seat", pnr=pnr, train_no=train.train_no, seat_class=seat_class)
+        return ReservationHoldResponse(
+            pnr_no=pnr, payment_deadline_date=limit_date, payment_deadline_time=limit_time
+        )
+
     def release_unpaid_hold(self, hold) -> None:
         _log("release", pnr=getattr(hold, "pnr_no", None) or getattr(hold, "rsv_id", None))
 

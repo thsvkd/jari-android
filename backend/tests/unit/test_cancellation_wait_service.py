@@ -124,8 +124,6 @@ def test_picked_sold_seats_on_a_train_with_free_seats_wait_instead_of_taking_a_f
 
 
 def test_a_train_taken_whole_is_booked_like_a_plain_search_in_its_class():
-    from korail2 import ReserveOption
-
     raw = payload("consecutive")
     raw["trains"].append({"trainNo": "019", "seatClass": "any", "targets": []})
     sold_out = SimpleNamespace(train_no="015")
@@ -134,17 +132,19 @@ def test_a_train_taken_whole_is_booked_like_a_plain_search_in_its_class():
     )
     wait, rail = service(raw, [target("1A", 1, possible="N"), target("1B", 2, possible="N")])
     rail.search_selectable_trains.return_value = [sold_out, open_train]
-    rail.reserve_train.return_value = SimpleNamespace(rsv_id="plain-hold")
+    rail.reserve_any_seat.return_value = SimpleNamespace(pnr_no="plain-hold")
 
     capture = wait.poll_once()
 
     assert capture.train is open_train
     assert capture.targets == ()
-    assert capture.seat_class == "any"
+    # "any" is booked general first, and the capture names the class it got.
+    assert capture.seat_class == "general"
     rail.reserve_designated.assert_not_called()
-    assert rail.reserve_train.call_args.kwargs == {
-        "option": ReserveOption.GENERAL_FIRST,
+    rail.reserve_train.assert_not_called()
+    assert rail.reserve_any_seat.call_args.kwargs == {
         "passenger_count": 2,
+        "seat_class": "general",
     }
 
     # The class the card was chosen for is the class it is booked in, and a
@@ -152,11 +152,85 @@ def test_a_train_taken_whole_is_booked_like_a_plain_search_in_its_class():
     raw["trains"][1]["seatClass"] = "special"
     wait, rail = service(raw, [], trains=[open_train])
     assert wait.poll_once() is None
-    rail.reserve_train.assert_not_called()
+    rail.reserve_any_seat.assert_not_called()
     open_train.special_reservation_code = "11"
-    rail.reserve_train.return_value = "DUPLICATE"
+    rail.reserve_any_seat.return_value = "DUPLICATE"
     assert wait.poll_once() is None
-    assert rail.reserve_train.call_args.kwargs["option"] == ReserveOption.SPECIAL_ONLY
+    assert rail.reserve_any_seat.call_args.kwargs["seat_class"] == "special"
+
+
+def test_a_train_taken_whole_is_reserved_through_the_api_its_search_came_from():
+    # search_selectable_trains answers with the current API's TrainSummary.
+    # korail2's Korail.reserve first asks it has_seat(), which it lacks, and
+    # reserve_train swallowed that into "no seat" on every pass: a whole-train
+    # wait never booked. Real library classes on both sides, so a mismatch
+    # between them shows here.
+    from korail2 import Korail
+    from korail_mobile_api import KorailReservationJobType, KorailSeatClass
+    from korail_mobile_api.errors import KorailReservationRefusedError, KorailSoldOutError
+    from korail_mobile_api.models import TrainSummary
+    from korail_mobile_api.mutation_models import ReservationHoldResponse
+
+    from korail_bot.services.korail_service import KorailService
+
+    train = TrainSummary(
+        train_no="019",
+        departure_date="20260920",
+        departure_time="090000",
+        arrival_time="113000",
+        departure_station_code="0001",
+        arrival_station_code="0020",
+        departure_station_name="서울",
+        arrival_station_name="부산",
+        run_date="20260920",
+        train_class_name="KTX",
+        train_group_name="KTX",
+        train_class_code="00",
+        general_reservation_code="13",
+        special_reservation_code="11",
+        general_availability_name="매진",
+        special_availability_name="예약가능",
+        wait_reservation_flag="-1",
+    )
+    hold = ReservationHoldResponse(
+        pnr_no="R9", payment_deadline_date="20260920", payment_deadline_time="080000"
+    )
+    rail = KorailService()
+    rail._logged_in = True
+    rail._modern_client = Mock()
+    rail._modern_client.reserve.return_value = hold
+    # A korail2 session that never reaches the network, as the old path used it.
+    rail._korail_instance = Korail.__new__(Korail)
+    rail._korail_instance._session = Mock()
+    rail.seat_windows = Mock()
+    rail.search_selectable_trains = Mock(return_value=[train])
+    raw = payload("consecutive")
+    raw["trains"] = [{"trainNo": "019", "seatClass": "any", "targets": []}]
+    wait = CancellationWaitService(rail, CancellationWaitPlan.from_payload(raw), {})
+
+    capture = wait.poll_once()
+
+    assert capture == DesignatedCapture(hold, train, "special", ())
+    assert rail.reservation_id(capture.hold) == "R9"
+    [args, kwargs] = rail._modern_client.reserve.call_args
+    assert args == (train,)
+    assert kwargs["job_type"] is KorailReservationJobType.IMMEDIATE
+    assert kwargs["seat_class"] is KorailSeatClass.SPECIAL
+    assert kwargs["seats"] is None
+    assert kwargs["passengers"].adult == 2
+    rail.seat_windows.took.assert_called_once_with(train)
+
+    # This account already holding the train, and the seat gone before the
+    # request landed, are both "not this pass" rather than a failed read.
+    rail._modern_client.reserve.side_effect = KorailReservationRefusedError(
+        "WRR800029", "동일한 예약 내역이 있습니다."
+    )
+    assert wait.poll_once() is None
+    rail._modern_client.reserve.side_effect = KorailSoldOutError(
+        "ERR211161", "잔여석이 부족하여 서비스를 제공할 수 없습니다."
+    )
+    assert wait.poll_once() is None
+    rail.seat_windows.lost.assert_called_once_with(train)
 
 
 def test_consecutive_capture_requires_the_whole_block_to_be_sellable():

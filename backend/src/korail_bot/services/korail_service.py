@@ -43,6 +43,7 @@ from korail_mobile_api.errors import (
     KorailNoResultsError,
     KorailProtocolError,
     KorailServiceUnavailableError,
+    KorailSoldOutError,
     KorailTransportError,
 )
 
@@ -133,6 +134,8 @@ _TRAIN_FIELD_WIDTHS = {
 }
 
 _NO_REMAINING_SEATS_CODE = "ERI411321"
+# "동일한 예약 내역이 있습니다": this account already holds the train.
+_DUPLICATE_RESERVATION_CODE = "WRR800029"
 
 # The second unit of a coupled train carries a class code like "0A" (pit5,
 # 2026-09-22: KTX-산천 9069 beside 069's "07"). The pinned korail_mobile_api
@@ -897,22 +900,65 @@ class KorailService(RailService):
                 raise ValueError("좌석 정보가 바뀌었습니다. 좌석표를 다시 불러와 주세요.")
             assignments.append(KorailSeatAssignment.from_inventory(inventory, physical))
 
+        return self._reserve_current(
+            client,
+            train,
+            passenger_count=passenger_count,
+            seat_class=seat_class,
+            job_type=KorailReservationJobType.SEAT_DESIGNATED,
+            seats=assignments,
+        )
+
+    def reserve_any_seat(self, train, *, passenger_count: int, seat_class: str):
+        """
+        Hold a current-API train in one class and let Korail seat the party.
+
+        reserve_train cannot take this train: korail2 asks its own train class
+        (has_seat), which a TrainSummary is not. Answers like reserve_train:
+        the hold, None when the class sold out before the request landed, and
+        "DUPLICATE" when this account already holds the train.
+        """
+        client = self._modern_client
+        if not self._logged_in or client is None:
+            raise ValueError("좌석을 예약하려면 먼저 로그인해 주세요.")
+        try:
+            return self._reserve_current(
+                client,
+                train,
+                passenger_count=passenger_count,
+                seat_class=seat_class,
+                job_type=KorailReservationJobType.IMMEDIATE,
+            )
+        except KorailAppError as exc:
+            if exc.code == _DUPLICATE_RESERVATION_CODE:
+                logger.warning("⚠️ Duplicate reservation detected - will continue searching")
+                return "DUPLICATE"
+            if self._lost_race(exc):
+                return None
+            raise
+
+    def _reserve_current(self, client, train, *, passenger_count, seat_class, job_type, seats=None):
         try:
             hold = client.reserve(
                 train,
                 consent=MutationConsent(allow_reserve=True, dry_run=False),
                 passengers=KorailPassengerCounts(adult=passenger_count),
                 seat_class=self._seat_class(seat_class),
-                job_type=KorailReservationJobType.SEAT_DESIGNATED,
-                seats=assignments,
+                job_type=job_type,
+                seats=seats,
             )
         except KorailAppError as exc:
-            if self._is_no_remaining_seats(exc) and self.seat_windows is not None:
+            if self._lost_race(exc) and self.seat_windows is not None:
                 self.seat_windows.lost(train)
             raise
         if self.seat_windows is not None:
             self.seat_windows.took(train)
         return hold
+
+    @classmethod
+    def _lost_race(cls, exc: KorailAppError) -> bool:
+        """Korail's "no seat left" answer to a reservation, in either wording."""
+        return isinstance(exc, KorailSoldOutError) or cls._is_no_remaining_seats(exc)
 
     def release_unpaid_hold(self, hold):
         """Release a modern unpaid hold when the app cannot safely persist it."""
