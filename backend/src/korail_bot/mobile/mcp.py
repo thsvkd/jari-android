@@ -21,7 +21,7 @@ from korail_bot.config.settings import settings
 from korail_bot.mobile.identity import AuthError
 from korail_bot.mobile.oauth import BOOK, MCP_PATH, PRM_PATH, SCOPES
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
-from korail_bot.services.mini_app_gateway import MiniAppError
+from korail_bot.services.mini_app_gateway import SEARCH_RUNNING, MiniAppError
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,8 @@ VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"]
 SEOUL = ZoneInfo("Asia/Seoul")
 ISO_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})")
 MAX_RESULT_BYTES = 100 * 1024
+# The app calls a watch quiet this long after its last check "확인 지연" (src/model.ts STALE_AFTER_MS).
+STALE_AFTER = datetime.timedelta(seconds=120)
 NOT_READ = "조회하지 못했어요(좌석이 없다는 뜻이 아니에요)."
 TOO_MANY = "요청이 너무 많아요. 잠시 후 다시 시도해 주세요."
 RAIL_TOO_MANY = "요청이 너무 많아요. 코레일 조회는 1분에 10번까지예요. 1분쯤 뒤에 다시 해 주세요."
@@ -42,7 +44,7 @@ INSTRUCTIONS = (
     "조회에 실패한 것과 좌석이 없는 것은 다른 결과예요: 실패하면 그대로 알리고 매진이라고 말하지 마세요. "
     "예약은 결제 대기까지만 진행돼요. 결제는 사용자가 결제 기한 안에 앱이나 코레일에서 직접 해야 해요. "
     "실패한 예약을 성공했다고 말하지 마세요. "
-    "감시 시작·좌석 예약·예약 취소 전에는 사용자에게 확인을 받아 주세요. "
+    "감시 시작·감시 멈추기·좌석 예약·예약 취소 전에는 사용자에게 확인을 받아 주세요. "
     "start_watch 의 trains 에는 find_trains 결과의 trainNo 를 그대로 넣어 주세요. "
     "trainKey 가 만료됐다는 오류가 나면 그때 find_trains 를 다시 불러 주세요."
 )
@@ -53,7 +55,13 @@ HEALTH_NOTES = {
     "stale": "최근 조회가 계속 실패하고 있어요. 좌석이 없다는 뜻이 아니에요.",
     "unavailable": "감시가 멈춰 있어요. 사용자에게 앱에서 확인해 달라고 알려 주세요.",
     "unknown": "감시 상태를 아직 확인하지 못했어요. 잠시 뒤 다시 확인해 주세요.",
+    "late": "감시는 돌고 있지만 한동안 코레일 조회 결과가 없어요. 좌석이 없다는 뜻이 아니에요. "
+    "사용자에게 앱에서 확인해 달라고 알려 주세요.",
 }
+SEARCH_RUNNING_NOTE = (
+    "이미 감시 중이라 열차를 새로 찾을 수 없어요. 감시 중인 열차는 get_status 로 볼 수 있어요. "
+    "새로 찾으려면 감시를 멈춰야 하고, stop_watch 는 사용자에게 확인을 받은 뒤에만 불러 주세요."
+)
 SEAT_CLASS_NOTES = {
     "GENERAL_FIRST": "일반실 우선(없으면 특실)",
     "GENERAL_ONLY": "일반실만",
@@ -129,7 +137,8 @@ TOOLS = {
             "find_trains",
             "열차 찾기",
             "날짜·구간·시간대로 코레일 열차와 남은 좌석 여부를 찾아요. "
-            "trainKey 는 get_seat_map·reserve_seat 에, trainNo 는 start_watch 에 써요.",
+            "trainKey 는 get_seat_map·reserve_seat 에, trainNo 는 start_watch 에 써요. "
+            "start_watch 에는 같은 date·from·to·earliest·latest·train_type 을 그대로 넣어야 해요.",
             SCOPES[0],
             _schema(TRIP, ("date", "from", "to")),
             True,
@@ -207,6 +216,7 @@ TOOLS = {
             BOOK,
             _schema({}),
             False,
+            confirm=True,
             destructiveHint=False,
             idempotentHint=True,
         ),
@@ -348,7 +358,16 @@ def _clock(raw):
 
 
 def _trains(result):
+    notes = [
+        "soldOut 은 일반실·특실이 모두 매진일 때만 true 예요. "
+        "등급별 남은 자리는 generalAvailable·specialAvailable 로 봐요."
+    ]
+    if result.get("truncated"):
+        notes.append(
+            "열차가 많아 일부만 보여요. earliest·latest 로 시간대를 좁혀 다시 찾아 주세요."
+        )
     return {
+        "notes": notes,
         "trains": [
             {
                 "trainKey": train.get("trainKey"),
@@ -442,6 +461,63 @@ def _reserved(result):
     }
 
 
+def _now():
+    return datetime.datetime.now(datetime.UTC)
+
+
+def _quiet(running):
+    """A running search whose last check is older than the app tolerates, or that never made one."""
+    now = _now()
+    for key in ("lastCheckedAt", "startedAt"):
+        raw = running.get(key)
+        if not isinstance(raw, str):
+            continue
+        try:
+            stamp = datetime.datetime.fromisoformat(raw)
+        except ValueError:
+            return False
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=datetime.UTC)
+        # The check time when there is one; otherwise how long the first pass has been under way.
+        return now - stamp > STALE_AFTER
+    return False
+
+
+def _started(result):
+    if result.get("waitlisted"):
+        return {
+            **result,
+            "notes": [
+                "코레일 예약 대기를 신청했어요. 감시는 시작하지 않았고 get_status 에도 나오지 않아요. "
+                "배정 결과는 사용자가 앱이나 코레일에서 확인해야 해요."
+            ],
+        }
+    return result
+
+
+def _stopped(result):
+    if result.get("stopped") or result.get("unscheduled"):
+        return result
+    return {
+        **result,
+        "notes": ["멈출 감시를 찾지 못했거나 멈추지 못했어요. get_status 로 확인해 주세요."],
+    }
+
+
+def _cancelled(result):
+    left = result.get("pending") or []
+    if not left:
+        return result
+    return {
+        **result,
+        "pending": [{**item, "paymentUrl": settings.KORAIL_PAYMENT_URL} for item in left],
+        "notes": [
+            f"일부만 취소했어요. 결제를 기다리는 예약이 {len(left)}건 남아 있어요. "
+            "남은 예약은 결제 기한 안에 결제하지 않으면 취소돼요."
+        ],
+    }
+
+
 def _status(result):
     """What the app's status says, with where to pay and a Korean reading of the codes."""
     pending = [
@@ -450,7 +526,12 @@ def _status(result):
     notes = []
     running = result.get("running")
     if running:
-        notes.append(HEALTH_NOTES.get(running.get("health"), HEALTH_NOTES["unknown"]))
+        health = running.get("health")
+        if health in ("healthy", "running") and _quiet(running):
+            # The server calls a search healthy while its heartbeat exists; the app, which draws
+            # what the user reads, calls it "확인 지연" once the last check is this old.
+            health = "late"
+        notes.append(HEALTH_NOTES.get(health, HEALTH_NOTES["unknown"]))
         seat_class, count = running.get("specialInfoShow"), running.get("passengerCount")
         strategy = running.get("seatStrategy")
         # A value the status left out is left out of the sentence too, never read as "None".
@@ -468,6 +549,9 @@ def _status(result):
             f"결제를 기다리는 예약이 {len(pending)}건 있어요. "
             "결제 기한 안에 사용자가 직접 결제해야 해요."
         )
+        wanted = (running or {}).get("passengerCount")
+        if isinstance(wanted, int) and wanted > len(pending):
+            notes.append(f"{wanted}석 중 {len(pending)}석을 잡았고 나머지는 감시가 찾고 있어요.")
     return {
         **result,
         "pending": pending,
@@ -482,7 +566,11 @@ def _korean_times(value):
     if isinstance(value, list):
         return [_korean_times(item) for item in value]
     if isinstance(value, str) and ISO_TIME.fullmatch(value):
-        return datetime.datetime.fromisoformat(value).astimezone(SEOUL).isoformat()
+        try:
+            return datetime.datetime.fromisoformat(value).astimezone(SEOUL).isoformat()
+        except ValueError:
+            # A user's own text (a favourite's name) can look like a time without being one.
+            return value
     return value
 
 
@@ -510,7 +598,7 @@ def prepare(name, arguments):
     if name == "start_watch":
         payload = {"conditions": conditions(arguments), "trains": arguments["trains"]}
         if "start_at" not in arguments:
-            return lambda gateway, user: gateway.start_search(user, payload)
+            return lambda gateway, user: _started(gateway.start_search(user, payload))
         try:
             start_at = datetime.datetime.fromisoformat(arguments["start_at"])
         except ValueError as exc:
@@ -520,7 +608,7 @@ def prepare(name, arguments):
         payload["start_at"] = arguments["start_at"]
         return lambda gateway, user: gateway.schedule_search(user, payload)
     if name == "stop_watch":
-        return lambda gateway, user: gateway.cancel_search(user)
+        return lambda gateway, user: _stopped(gateway.cancel_search(user))
     if name == "reserve_seat":
         payload = {
             "trainKey": arguments["trainKey"],
@@ -530,7 +618,7 @@ def prepare(name, arguments):
             "seats": arguments["seats"],
         }
         return lambda gateway, user: _reserved(gateway.reserve_designated(user, payload))
-    return lambda gateway, user: gateway.cancel_pending(user)
+    return lambda gateway, user: _cancelled(gateway.cancel_pending(user))
 
 
 def unlisted(gateway, storage_id, arguments):
@@ -544,15 +632,19 @@ def unlisted(gateway, storage_id, arguments):
 
 def _failure(name, exc):
     message = str(exc)
-    if exc.status in (404, 410):
-        # The trainKey is gone (the list was replaced or it expired) or never existed.
+    if message == SEARCH_RUNNING:
+        return SEARCH_RUNNING_NOTE
+    if exc.status in (404, 410) and name in ("get_seat_map", "reserve_seat"):
+        # The trainKey expired (30 minutes) or never existed.
         return "열차 정보가 없거나 만료됐어요. find_trains 를 다시 불러 주세요."
     if exc.status in (401, 502, 503, 504):
         # A login that failed is a read that failed too: never a sold-out train.
         if name in ("find_trains", "get_seat_map"):
             return f"{NOT_READ} {message}"
         if exc.status != 401:
-            return f"{message} 코레일에 닿지 못했어요. 결과는 get_status 로 확인해 주세요."
+            # Not "unreachable": a refusal and a failed save come through here too. What the
+            # agent needs to know is that the booking may or may not have happened.
+            return f"{message} 예약이 됐을 수도 있으니 get_status 로 확인해 주세요."
     return message
 
 
@@ -598,8 +690,9 @@ def install(app, identity, gateway, store, locks):
                     raise Disconnected
                 if scope == BOOK and agent["scope"] != BOOK:
                     return _result(error=BOOK_REFUSED)
-                # ponytail: the app and its agents share one train list per user, so
-                # a search on either side replaces the other's trainKeys (410 says so).
+                # ponytail: the app and its agents share one train list per user, so a search on
+                # either side replaces the other's trainOptions and draft. trainKeys stay valid
+                # for their 30 minutes, but start_watch refuses numbers the last list lacks.
                 return _result(run(gateway, user))
         except Disconnected:
             raise

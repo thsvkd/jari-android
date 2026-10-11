@@ -113,6 +113,9 @@ def _summary_suffix(remaining: int) -> str:
     return f"… 외 {remaining}편" if remaining else "…"
 
 
+SEARCH_RUNNING = "이미 검색 중이에요. 먼저 검색을 중지한 뒤 새로 시작해 주세요."
+
+
 class MiniAppError(Exception):
     """
     Something the person holding the phone has to be told.
@@ -635,9 +638,7 @@ class MiniAppGateway:
 
         session = self.storage.get_user_session(chat_id) or UserSession(chat_id=chat_id)
         if session.last_action == UserProgress.FINDING_TICKET:
-            raise MiniAppError(
-                "이미 검색 중이에요. 먼저 검색을 중지한 뒤 새로 시작해 주세요.", status=409
-            )
+            raise MiniAppError(SEARCH_RUNNING, status=409)
 
         previous = session.train_info
         selected = list(previous.get("selectedTrains") or [])

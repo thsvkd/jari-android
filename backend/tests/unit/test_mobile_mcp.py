@@ -17,8 +17,10 @@ import pytest
 
 from korail_bot.config.settings import settings
 from korail_bot.mobile import api as api_module
+from korail_bot.mobile import mcp
+from korail_bot.mobile.mcp import SEARCH_RUNNING_NOTE
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
-from korail_bot.services.mini_app_gateway import MiniAppError
+from korail_bot.services.mini_app_gateway import SEARCH_RUNNING, MiniAppError
 
 from .agent_support import (
     BOOK_HINT,
@@ -1355,3 +1357,50 @@ def test_choice_and_range_errors_say_what_is_allowed(env, booker, tool, argument
     result = call_tool(env, booker, tool, arguments)
     assert result["isError"] is True
     assert message in tool_text(result)
+
+
+def test_a_missing_pending_reservation_is_not_an_expired_train_key(env, booker):
+    env.gateway.cancel_pending.side_effect = MiniAppError("결제를 기다리는 예약이 없어요.", 404)
+    text = tool_text(call_tool(env, booker, "cancel_reservation"))
+    assert "결제를 기다리는 예약이 없어요." in text
+    assert "만료" not in text
+
+
+def test_a_refused_booking_does_not_claim_korail_was_unreachable(env, booker):
+    env.gateway.cancel_pending.side_effect = MiniAppError("예약을 취소하지 못했어요.", 502)
+    text = tool_text(call_tool(env, booker, "cancel_reservation"))
+    assert "닿지 못했어요" not in text
+    assert "get_status" in text
+
+
+def test_listing_trains_during_a_watch_says_what_to_do_instead_of_stopping_it(env, reader):
+    env.gateway.list_trains.side_effect = MiniAppError(SEARCH_RUNNING, 409)
+    text = tool_text(call_tool(env, reader, "find_trains", TRIP))
+    assert text == SEARCH_RUNNING_NOTE
+    assert "확인을 받은 뒤에만" in text
+
+
+def test_stopping_a_watch_asks_for_the_users_confirmation(env, reader):
+    listed = rpc(env, reader, "tools/list").get_json()["result"]["tools"]
+    tools = {tool["name"]: tool for tool in listed}
+    assert tools["stop_watch"]["_meta"] == {"anthropic/requiresUserInteraction": True}
+
+
+def test_a_watch_quiet_for_two_minutes_is_not_called_watching(env, reader, monkeypatch):
+    checked = datetime.datetime(2026, 10, 7, 0, 0, tzinfo=datetime.UTC)
+    monkeypatch.setattr(mcp, "_now", lambda: checked + datetime.timedelta(minutes=5))
+    env.gateway.status.return_value = {
+        "running": {"health": "healthy", "lastCheckedAt": checked.isoformat()},
+        "scheduled": None,
+        "pending": [],
+    }
+    text = tool_text(call_tool(env, reader, "get_status"))
+    assert "한동안 코레일 조회 결과가 없어요" in text
+    assert "코레일을 계속 조회하고 있어요" not in text
+
+
+def test_a_favourite_named_like_a_broken_time_does_not_fail_the_list(env, reader):
+    env.gateway.favourites.return_value = [{"id": "f1", "name": "2026-13-01T07:00Z"}]
+    result = call_tool(env, reader, "list_favourites")
+    assert not result.get("isError")
+    assert "2026-13-01T07:00Z" in tool_text(result)

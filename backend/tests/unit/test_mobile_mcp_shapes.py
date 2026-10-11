@@ -10,6 +10,7 @@ import datetime
 import pytest
 
 from korail_bot.config.settings import settings
+from korail_bot.mobile import mcp
 
 from .agent_support import (
     BOOK_HINT,
@@ -40,6 +41,20 @@ UNKNOWN_HEALTH = "감시 상태를 아직 확인하지 못했어요. 잠시 뒤 
 NOTHING_GOING = "진행 중인 감시도, 결제를 기다리는 예약도 없어요."
 PARTLY_READ = "일부 호차는 조회하지 못했어요. 그 호차에 좌석이 없다는 뜻은 아니에요."
 NO_SEATS = "예약 가능한 좌석이 없어요."
+SOLD_OUT_NOTE = (
+    "soldOut 은 일반실·특실이 모두 매진일 때만 true 예요. "
+    "등급별 남은 자리는 generalAvailable·specialAvailable 로 봐요."
+)
+TRUNCATED_NOTE = "열차가 많아 일부만 보여요. earliest·latest 로 시간대를 좁혀 다시 찾아 주세요."
+WAITLISTED = (
+    "코레일 예약 대기를 신청했어요. 감시는 시작하지 않았고 get_status 에도 나오지 않아요. "
+    "배정 결과는 사용자가 앱이나 코레일에서 확인해야 해요."
+)
+NOTHING_TO_STOP = "멈출 감시를 찾지 못했거나 멈추지 못했어요. get_status 로 확인해 주세요."
+PARTLY_CANCELLED = (
+    "일부만 취소했어요. 결제를 기다리는 예약이 1건 남아 있어요. "
+    "남은 예약은 결제 기한 안에 결제하지 않으면 취소돼요."
+)
 
 
 def seat(car, label, column=None, free=True, family=""):
@@ -112,6 +127,7 @@ SHAPES = [
                 }
             ],
             "truncated": True,
+            "notes": [SOLD_OUT_NOTE, TRUNCATED_NOTE],
         },
         id="find_trains-full",
     ),
@@ -135,6 +151,7 @@ SHAPES = [
                 }
             ],
             "truncated": False,
+            "notes": [SOLD_OUT_NOTE],
         },
         id="find_trains-missing-fields",
     ),
@@ -252,6 +269,7 @@ SHAPES = [
                 "좌석 조건: 일반실만, 2명, 연속 좌석",
                 "정한 시각에 감시를 시작해요.",
                 "결제를 기다리는 예약이 1건 있어요. 결제 기한 안에 사용자가 직접 결제해야 해요.",
+                "2석 중 1석을 잡았고 나머지는 감시가 찾고 있어요.",
             ],
         },
         id="get_status-full",
@@ -320,7 +338,7 @@ SHAPES = [
         {**TRIP, "trains": ["00101"], "waitlist": True},
         "start_search",
         {"started": False, "waitlisted": True, "trainNo": "00101"},
-        {"started": False, "waitlisted": True, "trainNo": "00101"},
+        {"started": False, "waitlisted": True, "trainNo": "00101", "notes": [WAITLISTED]},
         id="start_watch-waitlist",
     ),
     pytest.param(
@@ -330,6 +348,14 @@ SHAPES = [
         {"stopped": True, "unscheduled": True},
         {"stopped": True, "unscheduled": True},
         id="stop_watch",
+    ),
+    pytest.param(
+        "stop_watch",
+        {},
+        "cancel_search",
+        {"stopped": False, "unscheduled": False},
+        {"stopped": False, "unscheduled": False, "notes": [NOTHING_TO_STOP]},
+        id="stop_watch-nothing-stopped",
     ),
     pytest.param(
         "reserve_seat",
@@ -354,9 +380,21 @@ SHAPES = [
         "cancel_reservation",
         {},
         "cancel_pending",
-        {"cancelled": True, "pending": [PENDING]},
-        {"cancelled": True, "pending": [{**PENDING, "expiresAt": "2026-10-10T10:10:00+09:00"}]},
+        {"cancelled": True, "pending": []},
+        {"cancelled": True, "pending": []},
         id="cancel_reservation",
+    ),
+    pytest.param(
+        "cancel_reservation",
+        {},
+        "cancel_pending",
+        {"cancelled": True, "pending": [PENDING]},
+        {
+            "cancelled": True,
+            "pending": [{**PENDING, "expiresAt": "2026-10-10T10:10:00+09:00", "paymentUrl": URL}],
+            "notes": [PARTLY_CANCELLED],
+        },
+        id="cancel_reservation-partly",
     ),
 ]
 
@@ -364,6 +402,9 @@ SHAPES = [
 @pytest.fixture(autouse=True)
 def _cheap_setup(monkeypatch):
     cheap_setup(monkeypatch)
+    # RUNNING's last check is 2026-10-07T09:01+09:00: thirty seconds earlier than "now".
+    now = datetime.datetime(2026, 10, 7, 0, 1, 30, tzinfo=datetime.UTC)
+    monkeypatch.setattr(mcp, "_now", lambda: now)
 
 
 @pytest.fixture
