@@ -26,6 +26,9 @@ from flask import Response, jsonify, redirect, request
 
 from korail_bot.mobile.identity import AuthError, digest, timestamp
 from korail_bot.mobile.pages import _STYLE, APP_NAME
+from korail_bot.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 READ, BOOK = "jari.read", "jari.book"
 MCP_PATH = "/mcp"
@@ -121,9 +124,10 @@ def client_address():
 class AgentStore:
     """Clients, authorization codes, connections (grants) and tokens, in the IdentityStore database."""
 
-    def __init__(self, identity, issuer):
+    def __init__(self, identity, issuer, on_connect=None):
         self.identity = identity
         self.issuer = issuer
+        self.on_connect = on_connect
         self.resource = issuer + MCP_PATH
 
     def _sweep(self, db, now):
@@ -215,8 +219,11 @@ class AgentStore:
         with self.identity.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT oauth_codes.*, oauth_grants.scope, oauth_grants.user_id AS owner"
+                "SELECT oauth_codes.*, oauth_grants.scope, oauth_grants.user_id AS owner,"
+                " users.storage_id, oauth_clients.name"
                 " FROM oauth_codes JOIN oauth_grants ON oauth_grants.id=oauth_codes.grant_id"
+                " JOIN users ON users.id=oauth_grants.user_id"
+                " JOIN oauth_clients ON oauth_clients.id=oauth_codes.client_id"
                 " WHERE hash=?",
                 (digest(form["code"]),),
             ).fetchone()
@@ -241,7 +248,27 @@ class AgentStore:
                 issued = self._issue(db, row["grant_id"], row["scope"], now)
         if issued is None:
             raise OAuthError("invalid_grant")
+        self._alert(row)
         return issued
+
+    def _alert(self, row):
+        """
+        Tells the account a connection just started, after it is committed: someone
+        sent a sign-in link from their own client (phishing) shows up here.
+        """
+        if self.on_connect is None:
+            return
+        who = describe_client(row["name"], row["redirect_uri"])
+        text = (
+            f"새 에이전트가 연결됐어요: {who['name']} "
+            f"({LOCAL_PROGRAM if who['local'] else who['host']}). "
+            "직접 연결한 게 아니라면 설정 → 에이전트 연결에서 끊어 주세요."
+        )
+        try:
+            self.on_connect(row["storage_id"], text)
+        except Exception as exc:
+            # The tokens are already issued; no exception text, which may carry the inbox's data.
+            logger.error("Agent connection alert failed (%s)", type(exc).__name__)
 
     def refresh(self, form):
         if not form.get("refresh_token") or not form.get("client_id"):
@@ -378,9 +405,12 @@ def _form_origin(redirect_uri):
     return f"{parts.scheme}://{parts.netloc}"
 
 
-def install(app, identity, public_url):
-    """The OAuth routes at the root of the public URL. Returns the store the app routes use."""
-    store = AgentStore(identity, public_url)
+def install(app, identity, public_url, on_connect=None):
+    """
+    The OAuth routes at the root of the public URL. Returns the store the app routes use.
+    on_connect(storage_id, text) hears of each new connection.
+    """
+    store = AgentStore(identity, public_url, on_connect)
     secure = public_url.startswith("https://")
     # __Host- requires Secure, which a browser drops for plain-http test servers.
     cookie = "__Host-jari_oauth" if secure else "jari_oauth"

@@ -169,6 +169,18 @@ test.describe("에이전트 연결", () => {
     await expectCleanLayout(page, "에이전트 연결(로컬 프로그램)");
   });
 
+  test("새 연결이 생기면 알림 화면에 에이전트 알림이 와요 @layout", async ({ signedIn: page, user }) => {
+    // 남이 보낸 인가 링크에 로그인했어도(피싱) 앱 알림으로 바로 알고 끊을 수 있어요.
+    await connectInBrowser(user, "Claude");
+    await page.locator("[data-view='notifications']").first().click();
+    const notice = page.locator(".notification", { hasText: "새 에이전트가 연결됐어요" });
+    await expect(notice).toHaveCount(1);
+    await expect(notice.locator(".notification-icon")).toHaveAttribute("aria-label", "에이전트");
+    await expect(notice.locator(".notification-head b")).toHaveText("에이전트 연결");
+    await expect(notice.locator(".notification-text")).toContainText("Claude (claude.ai)");
+    await expectCleanLayout(page, "알림(새 에이전트 연결)");
+  });
+
   test("에이전트 이름은 글자 그대로만 보여요", async ({ signedIn: page, user }) => {
     await connectInBrowser(user, "<b>굵은</b> 에이전트");
     await openAgents(page);
@@ -292,6 +304,10 @@ test.describe("체험 모드의 에이전트 연결", () => {
     await expect(page.getByText("Claude").first()).toBeVisible();
     await expect(page.getByRole("button", { name: "연결 끊기" })).toHaveCount(1);
     await expectCleanLayout(page, "에이전트 연결(체험 중)");
+    // 체험 알림에도 새 연결 알림이 하나 있어요.
+    await page.locator("[data-view='notifications']").first().click();
+    await expect(page.locator(".notification-icon[aria-label='에이전트']")).toHaveCount(1);
+    await expectCleanLayout(page, "알림(체험 중)");
   });
 });
 

@@ -188,6 +188,8 @@ const NOTICE_KINDS: Record<string, { name: string; title: string; tone: Tone; ic
   payment: { name: "결제", title: "결제 알림", tone: "warning", icon: '<rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 14.5h3"/>' },
   error: { name: "문제", title: "문제가 생겼어요", tone: "danger", icon: '<path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4.2M12 17h.01"/>' },
   search: { name: "찾기", title: "자리 찾기", tone: "muted", icon: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/>' },
+  // 새 에이전트 연결. 본인이 만든 연결이 아니면 끊어야 해서 주의 색이에요.
+  agent: { name: "에이전트", title: "에이전트 연결", tone: "warning", icon: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4.5V8M9.5 13.5h.01M14.5 13.5h.01"/>' },
 };
 // 서버 알림 글은 "🎉 제목\n열차 한 줄\n\n본문" 모양이에요. 제목 앞 그림 글자는 떼고 세 부분으로 나눠 그려요.
 // 한 줄짜리(결제 재촉 등)는 종류 이름을 제목으로 두고 글을 본문으로 내려요. 긴 문장이 굵은 제목이 되지 않게요.

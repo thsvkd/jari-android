@@ -81,7 +81,12 @@ def create_app(
     # so two simultaneous taps cannot launch competing search subprocesses.
     locks = [threading.RLock() for _ in range(128)]
     # Agent connections exist only where agents can reach this API from outside.
-    agents = public_url and oauth.install(app, identity, public_url)
+    agents = public_url and oauth.install(
+        app,
+        identity,
+        public_url,
+        notifications and (lambda owner, text: notifications.publish(owner, text, kind="agent")),
+    )
 
     @app.errorhandler(AuthError)
     @app.errorhandler(MiniAppError)

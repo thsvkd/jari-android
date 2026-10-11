@@ -111,6 +111,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     { id: "demo-event-4", text: "예약한 좌석의 결제 시간이 약 12분 남았어요. 코레일 앱에서 결제해 주세요.", createdAt: ago(3), kind: "payment" },
     { id: "demo-event-3", text: "🎉 좌석을 잡았어요\nKTX 015 서울 → 부산 · 07:27→10:12\n\n결제 기한 안에 코레일에서 결제해 주세요. 결제하면 앱이 확인해 알려드려요.", createdAt: ago(18), kind: "reservation" },
     { id: "demo-event-2", text: "⚠️ 코레일 조회가 잠시 막혔어요\n서울 → 부산 · 07:00~12:00\n\n잠시 뒤 자동으로 다시 찾아요.", createdAt: ago(95), kind: "error" },
+    { id: "demo-event-agent", text: "새 에이전트가 연결됐어요: Claude (claude.ai). 직접 연결한 게 아니라면 설정 → 에이전트 연결에서 끊어 주세요.", createdAt: ago(60 * 5), kind: "agent" },
     { id: "demo-event-1", text: "데모 화면이에요. 실제로 열차를 조회하거나 예약하지 않아요.", createdAt: ago(60 * 26), kind: "search" },
   ];
 

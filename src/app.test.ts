@@ -2500,6 +2500,20 @@ it("draws a notification's kind as a picture and splits the server's text into t
   expect(item.querySelector(".notification-text")?.textContent).toBe("결제 기한 안에 코레일에서 결제해 주세요.");
 });
 
+it("draws a new agent connection notice with its own picture and a warning tone", async () => {
+  const text = "새 에이전트가 연결됐어요: Claude (claude.ai). 직접 연결한 게 아니라면 설정 → 에이전트 연결에서 끊어 주세요.";
+  const { app, root } = await mountLive({
+    notifications: async () => ({ items: [{ id: "n3", text, createdAt: new Date().toISOString(), kind: "agent" }], pushAvailable: false }),
+  });
+  app.navigate("notifications");
+  await vi.waitFor(() => expect(root.querySelector(".notification")).not.toBeNull());
+  const item = root.querySelector(".notification")!;
+  expect(item.getAttribute("data-tone")).toBe("warning");
+  expect(item.querySelector(".notification-icon")?.getAttribute("aria-label")).toBe("에이전트");
+  expect(item.querySelector(".notification-head b")?.textContent).toBe("에이전트 연결");
+  expect(item.querySelector(".notification-text")?.textContent).toBe(text);
+});
+
 it("keeps a plain search notice's title in the text colour (the tone never borrows a global utility class)", async () => {
   const { app, root } = await mountLive({
     notifications: async () => ({ items: [{ id: "n2", text: "검색을 중지했어요.", createdAt: new Date().toISOString(), kind: "search" }], pushAvailable: false }),

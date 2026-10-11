@@ -13,7 +13,9 @@ import pytest
 
 from korail_bot.mobile import identity as identity_module
 from korail_bot.mobile.config import MobileConfig
-from korail_bot.mobile.identity import AuthError
+from korail_bot.mobile.identity import AuthError, IdentityStore
+from korail_bot.mobile.notifications import Notifications
+from korail_bot.mobile.oauth import LOCAL_PROGRAM
 
 from .agent_support import (
     CLAUDE_CALLBACK,
@@ -21,6 +23,7 @@ from .agent_support import (
     PASSWORD,
     PUBLIC,
     RESOURCE,
+    Clock,
     Pending,
     allow_booking_for,
     app_headers,
@@ -1655,3 +1658,67 @@ def test_restarting_on_a_database_from_the_device_code_flow_keeps_connections(tm
     assert mcp_status(again, tokens["access_token"]) == 200
     assert refresh(again, tokens).status_code == 200
     assert len(connections(again, user)) == 1
+
+
+# ----------------------------------------------------------------- 새 연결 알림
+
+
+def alerted_env(tmp_path, **kwargs):
+    identity = IdentityStore(tmp_path / "app.sqlite3", clock=Clock())
+    inbox = Notifications(identity, secret="a" * 40, **kwargs)
+    return make_env(tmp_path, identity=identity, clock=identity.clock, notifications=inbox), inbox
+
+
+def agent_alerts(env, inbox, user):
+    owner = env.identity.find_user(user["user"]["username"])["storage_id"]
+    return [item["text"] for item in inbox.items(owner) if item["kind"] == "agent"]
+
+
+@pytest.mark.parametrize(
+    ("redirect_uri", "where"), [(CLAUDE_CALLBACK, "claude.ai"), (LOOPBACK_CALLBACK, LOCAL_PROGRAM)]
+)
+def test_a_new_connection_tells_only_its_owner(tmp_path, redirect_uri, where):
+    # 피싱 대응: 남의 클라이언트로 시작한 링크에 로그인했어도 앱 알림으로 바로 안다.
+    env, inbox = alerted_env(tmp_path)
+    alice, bob = signup(env, "alice"), signup(env, "bob")
+    pending, code = authorization_code(env, alice, redirect_uri=redirect_uri)
+    assert exchange(env, pending, code).status_code == 200
+    [text] = agent_alerts(env, inbox, alice)
+    assert f"Claude ({where})" in text
+    assert "설정 → 에이전트 연결" in text
+    assert agent_alerts(env, inbox, bob) == []
+
+
+def test_refreshing_or_failing_an_exchange_tells_nobody(tmp_path):
+    env, inbox = alerted_env(tmp_path)
+    alice = signup(env, "alice")
+    pending, code = authorization_code(env, alice)
+    assert exchange(env, pending, code, code_verifier="w" * 64).status_code == 400
+    assert agent_alerts(env, inbox, alice) == []
+    tokens = {**exchange(env, pending, code).json, "client_id": pending.client_id}
+    assert refresh(env, tokens).status_code == 200
+    # 코드를 다시 쓰면 연결이 끊길 뿐 새 연결 알림은 없다.
+    assert exchange(env, pending, code).status_code == 400
+    assert len(agent_alerts(env, inbox, alice)) == 1
+
+
+def test_a_failing_alert_still_issues_the_tokens(tmp_path, monkeypatch):
+    env, inbox = alerted_env(tmp_path)
+    alice = signup(env, "alice")
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("inbox down")
+
+    monkeypatch.setattr(inbox, "publish", broken)
+    tokens = connect(env, alice)
+    assert mcp_status(env, tokens["access_token"]) == 200
+
+
+def test_the_alert_is_queued_for_push(tmp_path):
+    env, inbox = alerted_env(tmp_path, push_enabled=True)
+    alice = signup(env, "alice")
+    owner = env.identity.find_user("alice")["storage_id"]
+    inbox.register_device(owner, "alice-phone")
+    connect(env, alice)
+    with env.identity.connect() as db:
+        assert db.execute("SELECT count(*) FROM outbox").fetchone()[0] == 1
