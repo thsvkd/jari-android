@@ -20,7 +20,7 @@ from korail2 import Korail as K2MKorail
 # cancellation endpoint: the client's own cancel() cannot be called (see
 # cancel_reservation below). TicketReservation is wrapped the same way, to
 # slip a seat-location code into a payload korail2 otherwise hard-codes.
-from korail2.korail2 import KORAIL_CANCEL, KORAIL_MOBILE, KORAIL_TICKETRESERVATION
+from korail2.korail2 import KORAIL_CANCEL, KORAIL_MOBILE, KORAIL_TICKETRESERVATION, Reservation
 from korail_mobile_api import (
     KorailClient,
     KorailConfig,
@@ -31,6 +31,7 @@ from korail_mobile_api import (
     MutationConsent,
     SeatCarListResponse,
     SeatInventoryResponse,
+    TicketReservationDetailRequest,
     TrainSearchQuery,
     TrainSummary,
 )
@@ -140,7 +141,7 @@ _TRAIN_FIELD_WIDTHS = {
 
 _NO_REMAINING_SEATS_CODE = "ERI411321"
 # "동일한 예약 내역이 있습니다": this account already holds the train.
-_DUPLICATE_RESERVATION_CODE = "WRR800029"
+DUPLICATE_RESERVATION_CODE = "WRR800029"
 
 # The second unit of a coupled train carries a class code like "0A" (pit5,
 # 2026-09-22: KTX-산천 9069 beside 069's "07"). The pinned korail_mobile_api
@@ -1109,7 +1110,7 @@ class KorailService(RailService):
                 job_type=KorailReservationJobType.IMMEDIATE,
             )
         except KorailAppError as exc:
-            if exc.code == _DUPLICATE_RESERVATION_CODE:
+            if exc.code == DUPLICATE_RESERVATION_CODE:
                 logger.warning("⚠️ Duplicate reservation detected - will continue searching")
                 return "DUPLICATE"
             if self._lost_race(exc):
@@ -1139,8 +1140,64 @@ class KorailService(RailService):
         """Korail's "no seat left" answer to a reservation, in either wording."""
         return isinstance(exc, KorailSoldOutError) or cls._is_no_remaining_seats(exc)
 
+    def unpaid_reservations(self) -> list | None:
+        """
+        This account's reservations waiting for payment (korail2 Reservation).
+
+        Read-only. None when Korail could not be asked, which is not the same
+        as having none.
+        """
+        if not self._logged_in or not self._korail_instance:
+            return None
+        try:
+            return list(self._korail_instance.reservations())
+        except NoResultsError:
+            return []
+        except Exception as exc:
+            logger.warning("Could not list unpaid reservations (%s)", type(exc).__name__)
+            return None
+
+    def reserved_seats(self, reservation) -> frozenset[tuple[int, str, str]] | None:
+        """
+        (car, seat label, class) Korail gave an unpaid reservation, like
+        (3, "5A", "general"). A class this app does not book keeps Korail's code.
+
+        One PNR-keyed read (certification.ReservationList). None when it
+        could not be read or named no seat, so a caller never matches on it.
+        """
+        client = self._modern_client
+        rsv_id = self.reservation_id(reservation)
+        if client is None or not rsv_id:
+            return None
+        try:
+            detail = client.get_ticket_reservation_detail(
+                TicketReservationDetailRequest(pnr_no=rsv_id)
+            )
+            classes = {
+                KorailSeatClass.GENERAL.value: "general",
+                KorailSeatClass.SPECIAL.value: "special",
+            }
+            seats = frozenset(
+                (
+                    int(str(seat.car_no)),
+                    str(seat.seat_no).strip(),
+                    classes.get(str(seat.room_class_code or ""), str(seat.room_class_code or "")),
+                )
+                for journey in detail.journeys
+                for seat in journey.seats
+            )
+        except Exception as exc:
+            logger.warning("Could not read the seats of an unpaid hold (%s)", type(exc).__name__)
+            return None
+        return seats or None
+
     def release_unpaid_hold(self, hold):
         """Release a modern unpaid hold when the app cannot safely persist it."""
+        if isinstance(hold, Reservation):
+            # Read back from the unpaid list after its answer was lost.
+            if not self.cancel_reservation(hold.rsv_id):
+                raise RuntimeError("Korail did not confirm releasing the unpaid hold")
+            return True
         client = self._modern_client
         if not self._logged_in or client is None:
             raise ValueError("예약을 취소하려면 먼저 로그인해 주세요.")

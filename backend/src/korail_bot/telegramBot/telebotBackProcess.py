@@ -57,6 +57,12 @@ logger = get_logger(__name__)
 PAY_WITHIN_DEADLINE = "결제 기한 안에 코레일에서 결제해 주세요."
 # 잘못 잡은 표는 결제 전에만 수수료 없이 돌려줄 수 있어요. 날짜가 가장 자주 틀려요.
 WRONG_TRAIN_HINT = "날짜나 열차가 다르면 결제하기 전에 내 예약에서 취소해 주세요. 수수료가 없어요."
+# 취소표 대기가 이 계정의 기존 예약 때문에 열차를 못 잡을 때, 감시마다 한 번 보내요.
+WAIT_DUPLICATE_NOTICE = (
+    "이 계정에 같은 열차 예약이 이미 있어서 취소표를 잡지 못하고 있어요.\n\n"
+    "{train}\n\n"
+    "코레일 앱의 내 예약을 확인해 주세요."
+)
 
 # Set recursion limit
 sys.setrecursionlimit(settings.RECURSION_LIMIT)
@@ -653,6 +659,24 @@ class BackgroundReservationProcess:
         plan = self.seat_plan
         if plan is None:
             return
+        duplicate_noticed = False
+
+        def notice_duplicate(train) -> None:
+            nonlocal duplicate_noticed
+            train_no = str(getattr(train, "train_no", "") or "")
+            if duplicate_noticed or any(
+                item.train_no == train_no
+                and item.status in (ReservationPaymentStatus.PENDING, ReservationPaymentStatus.PAID)
+                for item in captured
+            ):
+                # Once per watch, and never over a seat this watch holds itself.
+                return
+            duplicate_noticed = True
+            try:
+                self._announce_search_status(WAIT_DUPLICATE_NOTICE.format(train=train_label(train)))
+            except Exception as exc:
+                logger.warning("기존 예약 알림을 보내지 못했습니다: %s", exc)
+
         service = CancellationWaitService(
             self.rail,
             plan,
@@ -664,6 +688,7 @@ class BackgroundReservationProcess:
                 "max_dep_time": self.max_dep_time,
                 "train_type": self.train_type,
             },
+            on_duplicate=notice_duplicate,
         )
         existing = self.storage.get_multi_reservation_status(self.chat_id)
         # A leftover record can be a completely different search - the same
@@ -750,25 +775,21 @@ class BackgroundReservationProcess:
             self._leave_mark(self.storage.mark_search_held_seat)
 
             deadline = self._payment_deadline(capture.hold)
-            hints = self._train_hints(capture.hold)
-            if not hints["train_no"]:
-                # A designated hold (ReservationHoldResponse) names no train; the
-                # searched one does. Without these a resumed search could not tie
-                # the seat to this plan, and the seat keys would exclude nothing.
-                train = capture.train
-                hints = {
-                    "train_no": str(getattr(train, "train_no", "") or ""),
-                    "dep_date": str(
-                        getattr(train, "dep_date", None)
-                        or getattr(train, "departure_date", "")
-                        or ""
-                    ),
-                    "dep_time": str(
-                        getattr(train, "dep_time", None)
-                        or getattr(train, "departure_time", "")
-                        or ""
-                    ),
-                }
+            # Filed under the searched train, never the hold: a designated hold
+            # (ReservationHoldResponse) names no train, and one read back from
+            # the unpaid list names its running date, which is not the
+            # departure date for a train that passes midnight first. Without
+            # these a resumed search could not tie the seat to this plan.
+            train = capture.train
+            hints = {
+                "train_no": str(getattr(train, "train_no", "") or ""),
+                "dep_date": str(
+                    getattr(train, "dep_date", None) or getattr(train, "departure_date", "") or ""
+                ),
+                "dep_time": str(
+                    getattr(train, "dep_time", None) or getattr(train, "departure_time", "") or ""
+                ),
+            }
             train_info = train_label(capture.train)
             labels = [f"{target.car_no}호차 {target.label}" for target in capture.targets]
             info = SingleReservationInfo(
@@ -816,7 +837,7 @@ class BackgroundReservationProcess:
             message = (
                 f"취소표 {secured}/{plan.passenger_count}석을 잡았어요.\n\n"
                 f"{train_info}\n"
-                f"좌석: {', '.join(labels)}\n\n"
+                f"좌석: {', '.join(labels) or self._operator_seated(capture.seat_class)}\n\n"
                 f"{PAY_WITHIN_DEADLINE}\n{WRONG_TRAIN_HINT}"
             )
             self._send_callback(
@@ -828,6 +849,11 @@ class BackgroundReservationProcess:
             )
             if complete:
                 return
+
+    @staticmethod
+    def _operator_seated(seat_class: str) -> str:
+        """A hold taken without picked seats: Korail chose them, in this class."""
+        return f"코레일 배정 · {'특실' if seat_class == 'special' else '일반실'}"
 
     def _save_designated_multi(
         self, reservations: list[SingleReservationInfo], plan: CancellationWaitPlan
