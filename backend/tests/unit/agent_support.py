@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+from werkzeug.security import generate_password_hash
+
 from korail_bot.mobile import identity as identity_module
 from korail_bot.mobile.api import create_app
 from korail_bot.mobile.identity import IdentityStore
@@ -68,6 +70,12 @@ def cheap_setup(monkeypatch):
       여러 연결이 동시에 읽고 쓸 때의 동작뿐인데 이 테스트들은 그것을 다루지 않는다.
     """
     monkeypatch.setattr(identity_module, "PASSWORD_METHOD", "pbkdf2:sha256:1")
+    # 없는 계정의 로그인도 같은 시간을 쓰려고 미리 만든 해시와 대조한다. 그것도 싸게 바꾼다.
+    monkeypatch.setattr(
+        identity_module,
+        "_DUMMY_HASH",
+        generate_password_hash("no such account", method="pbkdf2:sha256:1"),
+    )
     connect = sqlite3.connect
 
     def scratch(*args, **kwargs):

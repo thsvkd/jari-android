@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 전체 검증. 에뮬레이터 기기 단계까지 모두 통과하면 지금 스테이징된 내용(트리 해시)을 기기 검증 기록에 남기고,
-// 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 그 기록을 봐요. 커밋 훅은 빠른 검사만 해요.
+// 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 그 기록을 봐요. 커밋 훅은 바뀐 파일에 맞춘 모듈·통합 검사만 해요.
 //
 //   npm run verify            에뮬레이터 e2e → 유닛·모듈 → 통합(실서버+가짜 코레일) → 헤드리스 e2e·레이아웃·스크린샷 → 기록
 //   npm run verify -- --ci    기기 없이(GitHub Actions). 기록은 남기지 않아요.
@@ -182,7 +182,7 @@ const steps = [
     ? [["Android 빌드 스크립트", () => run("powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-build-android.ps1")]]
     : []),
   ["백엔드 린트", () => run("uv run --frozen ruff check src tests && uv run --frozen ruff format --check src tests", { cwd: BACKEND })],
-  ["백엔드 유닛·모듈 (pytest)", () => run("uv run --frozen pytest tests/unit -q", { cwd: BACKEND })],
+  ["백엔드 유닛·모듈 (pytest)", () => run("uv run --frozen pytest tests/unit -q -n auto", { cwd: BACKEND })],
   ["통합: 실서버 + 가짜 코레일 (pytest)", () => run("uv run --frozen pytest tests/e2e -q", { cwd: BACKEND })],
   ["e2e·레이아웃·스크린샷: 헤드리스", () => run("npx playwright test --project=phone-light --project=phone-dark --project=phone-narrow")],
 ];

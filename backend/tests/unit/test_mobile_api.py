@@ -12,6 +12,14 @@ from korail_bot.mobile.identity import IdentityStore
 from korail_bot.services.mini_app_service import MiniAppDataError, MiniAppSubmission
 from korail_bot.utils.timezone import utc_now
 
+from .agent_support import cheap_setup
+
+
+@pytest.fixture(autouse=True)
+def _cheap_setup(monkeypatch):
+    # 가입·로그인마다 scrypt 를 쓰면 이 파일이 Windows 에서 2분 가까이 걸렸다. 저장 방식은 test_mobile_auth.py 가 지킨다.
+    cheap_setup(monkeypatch)
+
 
 @pytest.fixture
 def api(tmp_path):

@@ -61,6 +61,7 @@ dev = [
     "types-waitress",
     "pre-commit>=4.0",
     "fakeredis>=2.31",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.uv]

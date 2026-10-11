@@ -1,14 +1,32 @@
 #!/bin/sh
-# 커밋 전 빠른 검사(30초 안팎): 타입·vitest·ruff.
-# 무거운 검증(서버 유닛·통합·헤드리스 e2e·스크린샷·에뮬레이터 기기 단계)은 푸시하면 GitHub Actions(.github/workflows/verify.yml)가,
-# 에뮬레이터 기기 검증 기록은 릴리스 태그(v*)를 푸시할 때 .githooks/pre-push 가 확인해요.
-# 스테이징 여부와 상관없이 지금 작업 트리를 검사해요.
+# 커밋 전 모듈·통합 검사. 이 커밋에서 바뀐(스테이징된) 파일로 무엇을 돌릴지 골라요.
+#   backend/ 가 바뀌면: ruff, 서버 유닛·모듈(병렬), 서버 통합(실서버 + 가짜 코레일, 가짜 Redis 라 Docker 불필요). 2~3분
+#   그 밖의 코드가 바뀌면: 타입(앱·e2e·monitor), vitest. 30초 안팎
+#   문서(*.md, docs/)만 바뀌면: 건너뛰어요.
+# e2e·에뮬레이터 기기 단계는 브랜치를 푸시하면 GitHub Actions(.github/workflows/verify.yml)가 돌고,
+# 릴리스 태그(v*)를 푸시할 때는 .githooks/pre-push 가 로컬 npm run verify 기록을 확인해요.
+# 검사는 스테이징 여부와 상관없이 지금 작업 트리를 대상으로 해요.
 set -e
-echo "커밋 전 빠른 검사(타입·vitest·ruff)..." >&2
-npx tsc --noEmit -p .
-npx tsc --noEmit -p e2e/tsconfig.json
-npx tsc --noEmit -p monitor/tsconfig.json
-npx vitest run --reporter=dot
-cd backend
-uv run --frozen ruff check src tests
-uv run --frozen ruff format --check src tests
+code="$(git diff --cached --name-only | grep -vE '\.md$|^docs/|^LICENSE$' || true)"
+backend="$(printf '%s\n' "$code" | grep -E '^backend/' || true)"
+other="$(printf '%s\n' "$code" | grep -vE '^backend/|^$' || true)"
+
+if [ -z "$code" ]; then
+  echo "커밋 전 검사: 문서만 바뀌어 건너뛰어요." >&2
+  exit 0
+fi
+if [ -n "$other" ]; then
+  echo "커밋 전 검사: 타입·vitest..." >&2
+  npx tsc --noEmit -p .
+  npx tsc --noEmit -p e2e/tsconfig.json
+  npx tsc --noEmit -p monitor/tsconfig.json
+  npx vitest run --reporter=dot
+fi
+if [ -n "$backend" ]; then
+  echo "커밋 전 검사: ruff·서버 유닛·통합..." >&2
+  cd backend
+  uv run --frozen ruff check src tests
+  uv run --frozen ruff format --check src tests
+  uv run --frozen pytest tests/unit -q -p no:cacheprovider -n auto
+  uv run --frozen pytest tests/e2e -q -p no:cacheprovider
+fi
