@@ -499,6 +499,17 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
     assert "매진" in refused.json["error"]
     rail.reserve_designated.assert_not_called()
     rail.seat_layout_is_reference.return_value = False
+    # 모르는 등급은 이전처럼 409 예요(참고 좌석표 검사가 500 으로 새지 않아요).
+    rail.seat_layout_is_reference.side_effect = ValueError(
+        "좌석 등급은 일반실 또는 특실이어야 합니다."
+    )
+    unknown = http.post(
+        "/api/mobile/reservations/designated",
+        headers=headers,
+        json={**designated, "seatClass": "premium"},
+    )
+    assert unknown.status_code == 409
+    rail.seat_layout_is_reference.side_effect = None
 
     bob = runtime.identity.register(
         "bobby", "a long secure passphrase", runtime.identity.create_invite()

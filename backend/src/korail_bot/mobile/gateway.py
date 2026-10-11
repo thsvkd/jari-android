@@ -325,7 +325,11 @@ class MobileGateway(MiniAppGateway):
             raise MiniAppError(str(exc), 422) from exc
         train = self._seat_train(chat_id, train_key)
         rail = self._logged_in_rail(chat_id)
-        if rail.seat_layout_is_reference(train, seat_class, count) is True:
+        try:
+            drawn_from_another_date = rail.seat_layout_is_reference(train, seat_class, count)
+        except ValueError as exc:
+            raise MiniAppError(str(exc), 409) from exc
+        if drawn_from_another_date is True:
             # The seat map was drawn from another date because this class is sold out. Its
             # seats are not on sale on this train, and reading "the current car" would read
             # that date's.
