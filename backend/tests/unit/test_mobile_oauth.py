@@ -217,14 +217,12 @@ def test_browser_and_external_origins_reach_oauth_but_not_mcp(env):
         ["https://claude.com/api/mcp/auth_callback"],
         ["http://localhost:53682/callback"],
         ["http://127.0.0.1:33418/oauth/callback"],
-        ["http://[::1]:8080/cb"],
         ["http://localhost/callback"],
         [
             CLAUDE_CALLBACK,
             "http://localhost:1/a",
             "http://localhost:2/b",
             "http://127.0.0.1/c",
-            "http://[::1]/d",
         ],
     ],
 )
@@ -258,6 +256,12 @@ def test_registered_client_ids_are_unique(env):
         "http://localhost.evil.example/callback",
         "http://10.0.0.1/callback",
         "http://user@localhost/callback",
+        # CSP form-action 출처로 쓸 수 없어 받지 않는다.
+        "http://[::1]:8080/cb",
+        # urlsplit 은 탭·줄바꿈을 지우고 읽으니, 검사한 주소와 리다이렉트할 주소가 달라진다.
+        "http://localhost/cb\r\nX-Injected: 1",
+        "http://localhost/c\tb",
+        "http://localhost/c b",
         "javascript:alert(1)",
         "",
     ],
@@ -592,6 +596,14 @@ def test_a_form_without_the_csrf_field_is_refused_even_with_the_cookie(env, alic
     assert "Location" not in response.headers
 
 
+@pytest.mark.parametrize("site", ["cross-site", "same-site"])
+def test_a_form_sent_from_another_site_is_refused_even_with_the_right_csrf(env, alice, site):
+    pending = start(env)
+    response = submit(env, pending.page, "alice", headers={"Sec-Fetch-Site": site})
+    assert response.status_code == 400
+    assert grant_count(env) == 0
+
+
 def test_a_csrf_value_from_another_page_is_refused(env, alice):
     first, second = start(env), start(env)
     response = submit(env, first.page, "alice", csrf=form_fields(second.page)["csrf"])
@@ -614,8 +626,6 @@ def test_each_page_gets_a_fresh_csrf_value_in_cookie_and_form(env):
         (LOOPBACK_CALLBACK, LOOPBACK_CALLBACK, "http://localhost:53682"),
         (LOOPBACK_CALLBACK, "http://localhost:61999/callback", "http://localhost:61999"),
         ("http://127.0.0.1/cb", "http://127.0.0.1:8123/cb", "http://127.0.0.1:8123"),
-        # CSP 출처에는 IPv6 주소를 쓸 수 없다. 그래서 http: 전체를 연다(리다이렉트는 서버가 이미 검사했다).
-        ("http://[::1]/cb", "http://[::1]:8123/cb", "http:"),
     ],
 )
 def test_csp_form_action_lets_the_redirect_back_to_the_client_through(

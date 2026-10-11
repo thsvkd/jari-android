@@ -40,7 +40,8 @@ CLAUDE_CALLBACKS = {
     "https://claude.ai/api/mcp/auth_callback",
     "https://claude.com/api/mcp/auth_callback",
 }
-LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+# No [::1]: a CSP form-action source cannot name an IPv6 literal, and the redirect must be named.
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1"}
 CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43}")
 VERIFIER = re.compile(r"[A-Za-z0-9._~-]{43,128}")
 SCOPE = re.compile(r"[\x21\x23-\x5b\x5d-\x7e]+( [\x21\x23-\x5b\x5d-\x7e]+)*")
@@ -75,7 +76,9 @@ def redirect_target(uri):
     so the port is left out and everything else must match.
     ponytail: another hosted client's https callback is added to CLAUDE_CALLBACKS.
     """
-    if not isinstance(uri, str):
+    # urlsplit drops tabs and newlines before parsing, so the URI it checks is not the one
+    # the redirect would carry: refuse control characters and spaces outright.
+    if not isinstance(uri, str) or any(ord(c) <= 32 or ord(c) == 127 for c in uri):
         return None
     if uri in CLAUDE_CALLBACKS:
         return uri
@@ -372,9 +375,6 @@ def _page(nonce, body):
 def _form_origin(redirect_uri):
     """What the page's CSP form-action names so the redirect after the POST may leave."""
     parts = urlsplit(redirect_uri)
-    # CSP host sources cannot name an IPv6 literal; the redirect is still one this server checked.
-    if parts.hostname == "::1":
-        return "http:"
     return f"{parts.scheme}://{parts.netloc}"
 
 
@@ -563,7 +563,14 @@ def install(app, identity, public_url):
     def authorize_decision():
         form = request.form
         sent, kept = form.get("csrf", ""), request.cookies.get(cookie, "")
-        if not sent or not hmac.compare_digest(sent.encode(), kept.encode()):
+        # Besides the cookie, the browser's own word that the form came from this site.
+        # A client that sends no Sec-Fetch-Site (an old browser, a test) relies on the cookie.
+        site = request.headers.get("Sec-Fetch-Site", "same-origin")
+        if (
+            site not in {"same-origin", "none"}
+            or not sent
+            or not hmac.compare_digest(sent.encode(), kept.encode())
+        ):
             text = "이 페이지로는 연결할 수 없어요. 에이전트에서 연결을 다시 시작해 주세요."
             return html(f"<p>{text}</p>", 400)
         client, ended = checked(form)
