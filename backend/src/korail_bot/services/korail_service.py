@@ -1305,6 +1305,10 @@ class KorailService(RailService):
                     f"✅ Search complete: {len(trains)} trains available "
                     f"({src_locate}→{dst_locate} on {dep_date})"
                 )
+            if not trains and self.search_cut_short:
+                # A later page failed and what the first ones had was filtered away (sold out, not
+                # chosen): the failed page may have held the train, so this is not "no seat".
+                raise SearchUnavailableError("later search page failed")
             return trains
 
         except NoResultsError:

@@ -16,6 +16,7 @@ from korail_mobile_api.models import TrainSummary
 from korail_bot.mobile.storage import MobileStorage
 from korail_bot.services import rail_service as rail_service_module
 from korail_bot.services.korail_service import KorailService
+from korail_bot.services.rail_service import SearchUnavailableError
 from korail_bot.services.seat_windows import SeatWindows, summarize
 
 
@@ -402,3 +403,20 @@ def test_a_failed_page_is_not_a_missing_watched_train(monkeypatch):
 
     with pytest.raises(ConnectionError):
         _search(service, wanted={"012"})
+
+
+def test_a_failed_page_after_a_sold_out_first_page_is_a_failed_search_not_no_seat(monkeypatch):
+    class Flaky(_Pager):
+        def search_train(self, dep, arr, date, start, **kwargs):
+            if self.asked:
+                raise ConnectionError("timeout")
+            return super().search_train(dep, arr, date, start, **kwargs)
+
+    sold_out = [
+        SimpleNamespace(train_no=f"{n:03d}", dep_time=f"{5 + n:02d}0000", has_seat=lambda: False)
+        for n in range(10)
+    ]
+    service, _ = _service(monkeypatch, Flaky(sold_out))
+
+    with pytest.raises(SearchUnavailableError):
+        service.search_trains("20261013", "서울", "부산", "000000", "2400", include_no_seats=False)
