@@ -471,3 +471,39 @@ def test_the_departure_field_is_read_first_even_when_korail_sends_a_number():
 
 def test_an_unreadable_line_is_zero_not_a_crash():
     assert KorailService()._extract_departure_time(_Described("???")) == 0
+
+
+def test_a_real_waiting_list_train_is_not_dropped_by_the_end_of_the_window():
+    # 운영의 서울→부산 13편: 매진이지만 예약 대기가 되는 열차. 실제 korail2 Train 으로 만든 줄이에요.
+    train = Train(
+        {
+            "h_trn_clsf_cd": "100",
+            "h_trn_clsf_nm": "KTX",
+            "h_trn_gp_cd": "100",
+            "h_trn_no": "013",
+            "h_dpt_rs_stn_nm": "서울",
+            "h_dpt_rs_stn_cd": "0001",
+            "h_dpt_dt": "20261014",
+            "h_dpt_tm": "072700",
+            "h_arv_rs_stn_nm": "부산",
+            "h_arv_rs_stn_cd": "0020",
+            "h_arv_dt": "20261014",
+            "h_arv_tm": "100300",
+            "h_run_dt": "20261014",
+            "h_rsv_psb_flg": "N",
+            "h_rsv_psb_nm": "매진",
+            "h_spe_rsv_cd": "13",
+            "h_gen_rsv_cd": "13",
+            "h_wait_rsv_flg": "9",
+        }
+    )
+    assert "예약 대기(일반)" in str(train)
+    service = KorailService()
+    service._logged_in = True
+    service._korail_instance = _Legacy([train])
+
+    found = service.search_trains(
+        "20261013", "서울", "부산", "000000", "1200", include_no_seats=True, verbose=False
+    )
+
+    assert [t.train_no for t in found] == ["013"]
