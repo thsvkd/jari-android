@@ -436,3 +436,38 @@ def test_a_watched_train_in_the_minute_a_legacy_page_ends_is_still_found(monkeyp
     again = _search(service, wanted={"100", "300"})
 
     assert "300" in {t.train_no for t in again}
+
+
+class _Described:
+    """A train that only has the line korail2 prints for it."""
+
+    def __init__(self, line, dep_time=None):
+        self.line = line
+        if dep_time is not None:
+            self.dep_time = dep_time
+
+    def __str__(self):
+        return self.line
+
+
+def test_a_sold_out_train_taking_a_waiting_list_still_has_its_departure_read():
+    # "...(07:27~10:03) 예약 대기(일반) ...": the last bracket of the line is the seat class, not the time.
+    service = KorailService()
+    waiting = _Described("[KTX] 10월 14일, 서울~부산(07:27~10:03) 예약 대기(일반) 53,900원 5%적립")
+    assert service._extract_departure_time(waiting) == 727
+
+
+def test_station_names_with_brackets_do_not_hide_the_departure():
+    service = KorailService()
+    train = _Described("[KTX] 10월 14일, 서울~울산(통도사)(09:44~12:50) 일반실 40,000원")
+    assert service._extract_departure_time(train) == 944
+
+
+def test_the_departure_field_is_read_first_even_when_korail_sends_a_number():
+    service = KorailService()
+    assert service._extract_departure_time(_Described("no times here", dep_time=73500)) == 735
+    assert service._extract_departure_time(_Described("no times here", dep_time="072700")) == 727
+
+
+def test_an_unreadable_line_is_zero_not_a_crash():
+    assert KorailService()._extract_departure_time(_Described("???")) == 0

@@ -2013,13 +2013,18 @@ class KorailService(RailService):
         Returns:
             Departure time as integer (e.g., 944 for 09:44), 0 if extraction fails
         """
-        try:
-            # str(train) format: "[KTX] 4월 8일, 용산~광주송정(09:44~12:50), ..."
-            # Use rsplit to handle station names with parentheses e.g. 울산(통도사)~서울(09:44~12:50)
-            train_str = str(train)
-            time_part = train_str.rsplit("(", 1)[1].split("~")[0]  # "09:44"
-            time_str = "".join(time_part.split(":"))  # "0944"
-            return int(time_str)
-        except (IndexError, ValueError) as e:
-            logger.error(f"Failed to extract departure time from train: {train}, error: {e}")
-            return 0
+        # The departure itself, when the train carries it: Korail may send it as a number (73500).
+        raw = getattr(train, "dep_time", None)
+        clock = str(raw or "").zfill(6)
+        if raw not in (None, "") and clock[:4].isdigit():
+            return int(clock[:4])
+        # Otherwise str(train): "[KTX] 4월 8일, 용산~광주송정(09:44~12:50) 일반실 ..." or, for a
+        # sold-out train that takes a waiting list, "...(07:27~10:03) 예약 대기(일반) ...". The
+        # times are the "(HH:MM~HH:MM)" group; the last bracket of the line is not necessarily it,
+        # and station names carry brackets too (울산(통도사)).
+        found = re.findall(r"\((\d{1,2}):(\d{2})~", str(train))
+        if found:
+            hour, minute = found[-1]
+            return int(hour) * 100 + int(minute)
+        logger.error(f"Failed to extract departure time from train: {train}")
+        return 0
