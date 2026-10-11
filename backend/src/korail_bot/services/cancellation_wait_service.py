@@ -75,7 +75,9 @@ class CancellationWaitService:
         """Run one read pass and reserve at most one matching hold."""
         passenger_count = 1 if self.plan.strategy == "independent" else self.plan.passenger_count
         trains = self.rail.search_selectable_trains(
-            **self.search_kwargs, passenger_count=passenger_count
+            **self.search_kwargs,
+            passenger_count=passenger_count,
+            wanted=[item.train_no for item in self.plan.trains],
         )
         trains_by_number = {str(getattr(train, "train_no", "") or ""): train for train in trains}
         consecutive = self.plan.strategy == "consecutive"

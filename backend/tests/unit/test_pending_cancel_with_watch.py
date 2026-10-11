@@ -108,9 +108,11 @@ def test_a_party_still_being_filled_is_not_cancelled_under_the_search(runtime):
     hold_half_a_party(runtime)
     watch_another_trip(runtime)
 
-    with pytest.raises(MiniAppError):
+    with pytest.raises(MiniAppError) as refused:
         runtime.gateway.cancel_pending(OWNER)
 
+    # 코레일에 닿지 못한 것이 아니라 사용자가 먼저 할 일이 있는 거절이에요.
+    assert refused.value.status == 409
     runtime.rail.cancel_reservation.assert_not_called()
 
 

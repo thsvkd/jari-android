@@ -6,6 +6,11 @@ from functools import wraps
 from time import monotonic
 
 from korail2 import TrainType
+from korail_mobile_api.errors import (
+    KorailReservationRefusedError,
+    KorailSeatUnavailableError,
+    KorailSoldOutError,
+)
 
 from korail_bot.config.settings import settings
 from korail_bot.handlers.conversation_handler import ConversationHandler
@@ -130,7 +135,9 @@ class MobileGateway(MiniAppGateway):
                 "열차 목록을 불러오지 못했어요. 잠시 후 다시 조회해 주세요.", 502
             ) from exc
 
-        truncated = len(trains) > self.conversation.MAX_TRAIN_OPTIONS
+        truncated = (
+            len(trains) > self.conversation.MAX_TRAIN_OPTIONS or rail.search_cut_short is True
+        )
         trains = trains[: self.conversation.MAX_TRAIN_OPTIONS]
         options = []
         for train in trains:
@@ -157,6 +164,9 @@ class MobileGateway(MiniAppGateway):
         The train numbers list_trains last offered for this trip (date and route),
         or [] if the last list was for another trip or there is none. Agents check
         their picks against it; the app picks from the list itself.
+
+        Only the ones a watch with these conditions can see: the worker searches from this
+        submission's earliest time to its latest, and a KTX watch never meets an ITX.
         """
         submission = self._submission(payload)
         session = self.storage.get_user_session(chat_id)
@@ -164,7 +174,22 @@ class MobileGateway(MiniAppGateway):
         trip = (submission.dep_date, submission.src_station, submission.dst_station)
         if (info.get("depDate"), info.get("srcLocate"), info.get("dstLocate")) != trip:
             return []
-        return [str(option.get("no")) for option in info.get("trainOptions") or []]
+        ktx_only = submission.train_type == "1"
+        return [
+            str(option.get("no"))
+            for option in info.get("trainOptions") or []
+            if self._watchable(option, submission, ktx_only)
+        ]
+
+    @staticmethod
+    def _watchable(option, submission, ktx_only):
+        if ktx_only and not str(option.get("name") or "").startswith("KTX"):
+            return False
+        clock = str(option.get("dep_time") or "")[:4]
+        # A departure time that cannot be read is left to the worker's own filter.
+        return not clock.isdigit() or (
+            int(submission.dep_time) <= int(clock) < int(submission.max_dep_time)
+        )
 
     @serialized_operation
     def seat_cars(self, chat_id, train_key, seat_class, passenger_count):
@@ -348,6 +373,19 @@ class MobileGateway(MiniAppGateway):
             )
         except ValueError as exc:
             raise MiniAppError(str(exc), 409) from exc
+        except (
+            KorailSoldOutError,
+            KorailSeatUnavailableError,
+            KorailReservationRefusedError,
+        ) as exc:
+            # Korail answered: the seat is not for sale (any more). Not an outage.
+            logger.warning(
+                "Korail refused designated seats for chat_id=%s (%s)", chat_id, type(exc).__name__
+            )
+            raise MiniAppError(
+                "코레일이 이 좌석을 받아 주지 않았어요. 이미 팔렸을 수 있으니 좌석표를 새로 불러와 주세요.",
+                409,
+            ) from exc
         except Exception as exc:
             logger.error(
                 "Could not reserve designated seats for chat_id=%s (%s)",

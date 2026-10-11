@@ -547,6 +547,13 @@ class MiniAppGateway:
         if not self.pending_payments.pending(chat_id):
             raise MiniAppError("결제를 기다리는 예약이 없어요.", status=404)
 
+        if self.pending_payments.still_booking(chat_id):
+            # Giving a seat back now would be followed by the search taking another.
+            raise MiniAppError(
+                "자리 찾기가 아직 좌석을 잡는 중이에요. 먼저 찾기를 멈춘 뒤 취소해 주세요.",
+                status=409,
+            )
+
         if not self.pending_payments.cancel(chat_id):
             # The service has already said in the chat which of the several
             # reasons it was - mid-booking, login refused, railway refused.

@@ -107,6 +107,9 @@ DEFAULT_SCENARIO = {
     # 이 가짜는 KorailService 통째로 바꾸므로 채우는 로직(KorailService._with_unlisted_cars)은 여기서 돌지 않아요.
     # 그쪽은 단위 테스트(test_korail_seat_map.py)가 검증하고, 이 시나리오는 그 결과를 그리는 앱 화면을 검증해요.
     "sold_out_cars": [],
+    # 코레일이 호차를 하나도 안 줘서 다른 날짜의 편성으로 좌석표를 그린 좌석 등급(general | special).
+    # 실제 서버는 이때 seat_layout_is_reference 가 참이 되고 좌석표의 빈자리는 그날의 것이에요.
+    "reference_layout": [],
     "trains": DEFAULT_TRAINS,
 }
 
@@ -204,6 +207,7 @@ class FakeKorail:
         max_dep_time,
         train_type,
         passenger_count,
+        wanted=None,
     ) -> list:
         mode = scenario()["list"]
         _log("list_trains", dep_date=dep_date, src=src_locate, dst=dst_locate, mode=mode)
@@ -313,7 +317,7 @@ class FakeKorail:
         )
 
     def seat_layout_is_reference(self, train, seat_class, passenger_count=1) -> bool:
-        return False
+        return seat_class in scenario()["reference_layout"]
 
     def seat_inventory(
         self, train, car_no, seat_class, passenger_count=1, *, allow_layout_reference=False

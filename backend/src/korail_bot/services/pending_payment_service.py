@@ -247,7 +247,7 @@ class PendingPaymentService:
             self.telegram.send_message(chat_id, Messages.PAYMENT_CANCEL_NOTHING)
             return
 
-        if self._still_booking(chat_id):
+        if self.still_booking(chat_id):
             self.telegram.send_message(chat_id, Messages.PAYMENT_CANCEL_MID_RUN)
             return
 
@@ -281,7 +281,7 @@ class PendingPaymentService:
             self.telegram.send_message(chat_id, Messages.PAYMENT_CANCEL_NOTHING)
             return False
 
-        if self._still_booking(chat_id):
+        if self.still_booking(chat_id):
             self.telegram.send_message(chat_id, Messages.PAYMENT_CANCEL_MID_RUN)
             return False
 
@@ -327,7 +327,7 @@ class PendingPaymentService:
             return status
         return None
 
-    def _still_booking(self, chat_id: int) -> bool:
+    def still_booking(self, chat_id: int) -> bool:
         """
         Whether a random-seating run is still taking seats.
 

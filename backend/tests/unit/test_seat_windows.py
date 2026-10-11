@@ -8,7 +8,7 @@ would only show against the real objects.
 from types import SimpleNamespace
 
 import fakeredis
-from korail2 import SoldOutError
+from korail2 import NoResultsError, SoldOutError
 from korail2.korail2 import Train
 from korail_mobile_api.models import TrainSummary
 
@@ -303,3 +303,60 @@ def test_mobile_storage_keeps_windows_newest_first_and_capped(monkeypatch):
         storage.record_seat_window(_window(at, at + 3, 1))
 
     assert [e["closed_before"] for e in storage.get_seat_windows()] == [3, 2]
+
+
+class _Pager:
+    """korail2 answering ten rows a page, starting from the time it is asked for."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.asked = []
+
+    def search_train(self, dep, arr, date, start, **kwargs):
+        self.asked.append(start)
+        page = [t for t in self.rows if t.dep_time >= start][:10]
+        if not page:
+            raise NoResultsError()
+        return page
+
+
+def _paged(count):
+    return [
+        SimpleNamespace(train_no=f"{n:03d}", dep_time=f"{5 + n:02d}0000", has_seat=lambda: True)
+        for n in range(count)
+    ]
+
+
+def _search(service, **extra):
+    return service._search_legacy_pages(
+        "서울", "부산", "20261013", "000000", None, [], "2400", extra.get("wanted", set())
+    )
+
+
+def test_the_watch_search_asks_for_the_next_page_of_ten(monkeypatch):
+    pager = _Pager(_paged(14))
+    service, _ = _service(monkeypatch, pager)
+
+    rows = _search(service)
+
+    assert [t.train_no for t in rows] == [f"{n:03d}" for n in range(14)]
+    # The second page starts at the last row of the first; that row is not counted twice.
+    assert pager.asked == ["000000", "140000"]
+
+
+def test_the_watch_search_stops_once_every_wanted_train_is_found(monkeypatch):
+    pager = _Pager(_paged(14))
+    service, _ = _service(monkeypatch, pager)
+
+    rows = _search(service, wanted={"002"})
+
+    assert len(rows) == 10
+    assert len(pager.asked) == 1
+
+
+def test_a_short_page_is_the_end_of_the_day_and_costs_no_second_request(monkeypatch):
+    pager = _Pager(_paged(6))
+    service, _ = _service(monkeypatch, pager)
+
+    assert len(_search(service)) == 6
+    assert len(pager.asked) == 1

@@ -627,7 +627,10 @@ def unlisted(gateway, storage_id, arguments):
     if all(number in listed for number in arguments["trains"]):
         return None
     numbers = ", ".join(listed) or "없음(먼저 같은 날짜·구간으로 find_trains 를 불러 주세요)"
-    return f"find_trains 결과의 trainNo 를 그대로 넣어 주세요. 가능한 번호: {numbers}"
+    return (
+        "find_trains 결과의 trainNo 를 그대로 넣어 주세요. 같은 date·from·to·earliest·latest·"
+        f"train_type 으로 찾은 열차만 감시할 수 있어요. 가능한 번호: {numbers}"
+    )
 
 
 def _failure(name, exc):

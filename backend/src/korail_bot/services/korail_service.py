@@ -6,6 +6,7 @@ trains, and reserving one. The search loop that drives those calls is in
 """
 
 import re
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -66,6 +67,10 @@ _SOLD_OUT_LOOKUP_OFFSETS = (7, 6, 5, 4, 3, 2, 1)
 # 목록은 왔는데 호차가 빠졌을 수 있어 편성만 채울 때는 같은 요일의 일주일·이주일 뒤를 봐요. 그 날의 목록도
 # 잔여석 있는 호차뿐이라 둘의 합집합을 쓰고, 열차마다 한 번이라 좌석표를 열 때의 대기를 검색 둘로 막아요.
 _FORMATION_LOOKUP_OFFSETS = (7, 14)
+# Korail answers a train search ten rows at a time. A day has more KTX than one page, so a list or a
+# watch has to ask for the next page until its window is covered; this many pages is the longest day.
+_SEARCH_MAX_PAGES = 5
+_KORAIL_PAGE_ROWS = 10
 
 # A login that failed on these never reached a verdict on the credentials:
 # the round trip failed (a timeout, a refused connection, an HTTP 5xx - all
@@ -264,6 +269,8 @@ class KorailService(RailService):
         self._modern_client: KorailClient | None = None
         self._modern_seat_context: tuple | None = None
         self._seat_layout_references: dict[tuple, object] = {}
+        # Whether the last search_waitlist_trains stopped at the page limit with more trains behind it.
+        self.search_cut_short = False
         # 코레일이 호차 목록에서 뺀 호차를 다른 날짜의 같은 열차 편성에서 채운 기록. 편성 조회는 열차·등급마다
         # 한 번만 하고(찾지 못했다면 None), 채운 호차는 목록을 읽을 때마다 새로 계산해요.
         # 열차·등급 → {호차 번호: (그 호차를 담은 참고 열차, 호차)}. 비어 있으면 찾지 못한 것이에요.
@@ -481,22 +488,47 @@ class KorailService(RailService):
         max_dep_time: str,
         train_type: TrainType,
         passenger_count: int,
+        wanted: Iterable[str] | None = None,
     ) -> list:
-        """List trains with the same current API used to submit standby."""
+        """
+        List trains with the same current API used to submit standby.
+
+        Follows Korail's pages until the window is covered, every `wanted` train number has shown up,
+        or the page limit is reached (then `search_cut_short` is set). A window with no train at all
+        is an empty list, not a failure.
+        """
         client = self._modern_client
         if not self._logged_in or client is None:
             raise ValueError("Must login before searching trains")
 
-        result = client.search_trains(
-            TrainSearchQuery(
-                departure_station_code=src_locate,
-                arrival_station_code=dst_locate,
-                departure_date=dep_date,
-                departure_time=dep_time,
-                passengers=passenger_count,
-            )
+        query = TrainSearchQuery(
+            departure_station_code=src_locate,
+            arrival_station_code=dst_locate,
+            departure_date=dep_date,
+            departure_time=dep_time,
+            passengers=passenger_count,
         )
-        trains = [self._padded_train(train) for train in result.trains]
+        wanted = set(wanted or ())
+        rows: list = []
+        continuation = None
+        for _ in range(_SEARCH_MAX_PAGES):
+            try:
+                result = client.search_trains(query, continuation=continuation)
+            except KorailNoResultsError:
+                # The first page: nothing runs in this window. A later page: the day ran out.
+                continuation = None
+                break
+            rows.extend(result.trains)
+            continuation = result.next_page()
+            if (
+                continuation is None
+                or self._window_covered(result.trains, max_dep_time)
+                or (wanted and wanted <= {str(train.train_no) for train in rows})
+            ):
+                continuation = None
+                break
+        self.search_cut_short = continuation is not None
+        trains = [self._padded_train(train) for train in rows]
         if self.seat_windows is not None:
             self.seat_windows.observe(trains, passenger_count)
         if train_type == TrainType.KTX:
@@ -509,6 +541,57 @@ class KorailService(RailService):
                 and int(str(train.departure_time)[:4]) < int(max_dep_time)
             ]
         return trains
+
+    def _search_legacy_pages(
+        self, src, dst, dep_date, dep_time, train_type, passengers, max_dep_time, wanted
+    ) -> list:
+        """
+        korail2 answers one page of ten rows. Ask for the next one, starting at the last row's
+        departure, while a full page came back and neither the window nor the wanted trains are
+        covered. The first page's NoResultsError is the caller's to handle, as it always was.
+        """
+        rows: list = []
+        seen: set = set()
+        start = dep_time
+        for _ in range(_SEARCH_MAX_PAGES):
+            try:
+                page = self._korail_instance.search_train(
+                    src,
+                    dst,
+                    dep_date,
+                    start,
+                    train_type=train_type,
+                    passengers=passengers,
+                    include_no_seats=True,
+                )
+            except NoResultsError:
+                if not rows:
+                    raise
+                break
+            fresh = [t for t in page if (t.train_no, t.dep_time) not in seen]
+            if not fresh:
+                break
+            seen.update((t.train_no, t.dep_time) for t in fresh)
+            rows.extend(fresh)
+            last = str(rows[-1].dep_time or "")
+            if (
+                len(page) < _KORAIL_PAGE_ROWS
+                or (wanted and wanted <= {t.train_no for t in rows})
+                or not last[:4].isdigit()
+                or last[:4] >= "2359"
+                or (max_dep_time != "2400" and int(last[:4]) >= int(max_dep_time))
+            ):
+                break
+            start = last
+        return rows
+
+    @staticmethod
+    def _window_covered(page, max_dep_time: str) -> bool:
+        """Whether this page already reaches the window's last minute, so the next one is outside it."""
+        if max_dep_time == "2400" or not page:
+            return False
+        last = str(page[-1].departure_time or "")[:4]
+        return last.isdigit() and int(last) >= int(max_dep_time)
 
     @staticmethod
     def describe_train_row(train) -> str:
@@ -855,7 +938,11 @@ class KorailService(RailService):
         # bookable car. Start at the far edge of this short window so the UI
         # can offer a useful formation while still matching the train number.
         for offset in _SOLD_OUT_LOOKUP_OFFSETS:
-            reference = self._reference_train(train, offset)
+            try:
+                reference = self._reference_train(train, offset)
+            except KorailNoResultsError:
+                # 예약 가능 기간 밖이거나 그날 운행이 없어요. 다음 날짜를 봐요.
+                continue
             if reference is None:
                 continue
             try:
@@ -1054,14 +1141,15 @@ class KorailService(RailService):
             # Always every train: korail2 drops the sold-out ones only after
             # the answer arrives, so asking for them costs no request, and the
             # seat windows need the trains that are full as much as the free.
-            trains = self._korail_instance.search_train(
+            trains = self._search_legacy_pages(
                 src_locate,
                 dst_locate,
                 dep_date,
                 dep_time,
-                train_type=train_type,
-                passengers=passengers,
-                include_no_seats=True,
+                train_type,
+                passengers,
+                max_dep_time,
+                set(train_numbers or ()),
             )
             if self.seat_windows is not None:
                 self.seat_windows.observe(trains, passenger_count)

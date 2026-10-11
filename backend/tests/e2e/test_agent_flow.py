@@ -368,3 +368,27 @@ def test_a_seat_must_be_free_and_named_as_on_the_map(stack, client):
     assert pending["paymentUrl"].startswith("https://")
     assert pending["expiresAt"].endswith("+09:00")
     assert not agent.tool("cancel_reservation").get("isError")
+
+
+def test_a_sold_out_class_drawn_from_another_date_offers_no_seat_to_book(stack, client):
+    # 코레일이 특실 호차를 하나도 안 주면 서버는 다른 날짜 편성으로 좌석표를 그려요. 그 빈자리는 이 열차의 것이 아니라
+    # 에이전트에게 빈자리로 내놓지 않고, 예약하려 해도 코레일에 가기 전에 거절해요(전에는 502 로만 보였어요).
+    agent = connect(stack, client, allow_booking=True)
+    train = agent.tool("find_trains", trip())["structuredContent"]["trains"][0]
+    args = {"trainKey": train["trainKey"], "seatClass": "special", "passengers": 1}
+    client.scenario(reference_layout=["special"])
+    try:
+        seats = agent.tool("get_seat_map", args)
+        assert not seats.get("isError"), seats
+        assert seats["structuredContent"]["cars"] == []
+        assert "매진" in text_of(seats)
+
+        reserved = agent.tool(
+            "reserve_seat",
+            {**args, "carNo": 4, "seats": [{"carNo": 4, "seatNo": "040101", "label": "1A"}]},
+        )
+        assert reserved["isError"] is True
+        assert "매진" in text_of(reserved)
+        assert not any(call["event"] == "reserve_designated" for call in client.korail_log())
+    finally:
+        client.scenario(reference_layout=[])

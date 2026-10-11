@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import fakeredis
 import pytest
 from korail_mobile_api import PhysicalSeat, SeatCar, SeatCarListResponse, SeatInventoryResponse
+from korail_mobile_api.errors import KorailSoldOutError
 
 from korail_bot.mobile.config import MobileConfig
 from korail_bot.mobile.runtime import MobileRuntime
@@ -511,6 +512,13 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
     assert unknown.status_code == 409
     rail.seat_layout_is_reference.side_effect = None
 
+    # 코레일이 좌석을 받아 주지 않은 것은 코레일에 닿지 못한 것(502)이 아니에요.
+    rail.reserve_designated.side_effect = KorailSoldOutError("ERI000", "매진")
+    taken = http.post("/api/mobile/reservations/designated", headers=headers, json=designated)
+    assert taken.status_code == 409
+    assert "받아 주지 않았어요" in taken.json["error"]
+    rail.reserve_designated.side_effect = None
+
     bob = runtime.identity.register(
         "bobby", "a long secure passphrase", runtime.identity.create_invite()
     )
@@ -541,7 +549,8 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
     assert status.reservation_id == "R1"
     assert status.seat_labels == ["3호차 5A"]
     assert runtime.notifications.items(owner)[0]["kind"] == "payment"
-    assert rail.seat_inventory.call_count == 2
+    # 좌석표 조회 1회, 코레일이 거절한 예약 시도 1회, 성공한 예약 시도 1회.
+    assert rail.seat_inventory.call_count == 3
     runtime.storage.close()
 
 

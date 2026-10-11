@@ -311,6 +311,34 @@ def test_a_date_korail_refuses_does_not_stop_the_next_date_from_being_read():
     assert [car.car_no for car in service.seat_cars(train, "general", 1).cars] == [5, 7]
 
 
+def test_a_reference_date_korail_refuses_does_not_fail_a_sold_out_seat_map():
+    # 매진 등급의 좌석표는 가까운 날짜 편성으로 그려요. 그 날짜가 예약 가능 기간 밖이라 "결과 없음"이어도
+    # 다음 날짜를 봐요(전에는 이 예외가 좌석표 조회 전체를 실패시켰어요).
+    service = service_with_modern_client()
+    train = nearly_sold_out_train()
+    reference = SimpleNamespace(
+        train_no="009",
+        train_class_code="00",
+        departure_date="20260915",
+        departure_time="063300",
+    )
+    cars = SeatCarListResponse(cars=(SeatCar(3, "일반실", 1, ()),))
+    service._modern_client.get_seat_cars.side_effect = [
+        KorailAppError("ERI411321", "잔여석이 없습니다."),
+        cars,
+    ]
+
+    def search(query):
+        if query.departure_date == "20260921":
+            raise KorailNoResultsError("ERI000", "결과가 없습니다.")
+        return SimpleNamespace(trains=[reference])
+
+    service._modern_client.search_trains.side_effect = search
+
+    assert service.seat_cars(train, "general", 1) is cars
+    assert service.seat_layout_is_reference(train, "general", 1)
+
+
 def test_a_failing_formation_lookup_does_not_fail_the_car_list_and_is_tried_again():
     service = service_with_modern_client()
     train = nearly_sold_out_train()
