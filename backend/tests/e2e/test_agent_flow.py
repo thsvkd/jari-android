@@ -215,6 +215,12 @@ def trip() -> dict:
     return {"date": day.isoformat(), "from": "서울", "to": "부산", "earliest": "07:00"}
 
 
+def reserving(train: dict, car: int, label: str) -> str:
+    """The sentence an agent writes for reserve_seat: the day, the train, the car and the seat."""
+    day = datetime.date.fromisoformat(trip()["date"])
+    return f"{day.month}월 {day.day}일 {train['trainNo']}편 {car}호차 {label} 좌석을 예약해요"
+
+
 def test_an_mcp_client_without_a_token_finds_where_to_authorize(stack):
     reply = post_json(stack["api"] + "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"})
     assert reply.status == 401
@@ -364,6 +370,7 @@ def test_a_seat_must_be_free_and_named_as_on_the_map(stack, client):
                 "seats": [
                     {"carNo": car["carNo"], "seatNo": seat["seatNo"], "label": seat["label"]}
                 ],
+                "summary": reserving(train, car["carNo"], seat["label"]),
             },
         )
 
@@ -401,7 +408,12 @@ def test_a_sold_out_class_drawn_from_another_date_offers_no_seat_to_book(stack, 
 
         reserved = agent.tool(
             "reserve_seat",
-            {**args, "carNo": 4, "seats": [{"carNo": 4, "seatNo": "040101", "label": "1A"}]},
+            {
+                **args,
+                "carNo": 4,
+                "seats": [{"carNo": 4, "seatNo": "040101", "label": "1A"}],
+                "summary": reserving(train, 4, "1A"),
+            },
         )
         assert reserved["isError"] is True
         assert "매진" in text_of(reserved)

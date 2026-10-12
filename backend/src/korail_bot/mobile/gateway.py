@@ -492,6 +492,17 @@ class MobileGateway(MiniAppGateway):
                 type(exc).__name__,
             )
 
+    def reserved_train(self, chat_id, train_key):
+        """Which train a trainKey is, for checking what an agent says it books; None if unknown."""
+        try:
+            train = self.seat_maps.get_train(chat_id, train_key)
+        except (SeatMapExpiredError, SeatMapNotFoundError):
+            return None
+        return {
+            "trainNo": str(getattr(train, "train_no", "") or ""),
+            "depDate": str(getattr(train, "departure_date", "") or ""),
+        }
+
     def _seat_train(self, chat_id, train_key):
         try:
             return self.seat_maps.get_train(chat_id, train_key)

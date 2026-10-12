@@ -111,3 +111,13 @@ def test_a_ktx_watch_follows_the_train_group_the_worker_filters_on(runtime):
         ("003", "KTX 이름의 다른 그룹", "0700", "ITX"),
     )
     assert runtime.gateway.listed_trains(OWNER, TRIP) == ["001"]
+
+
+def test_a_train_key_says_which_train_it_is(runtime, monkeypatch):
+    train = MagicMock(train_no="043", departure_date="20261013")
+    monkeypatch.setattr(runtime.gateway.seat_maps, "get_train", lambda owner, key: train)
+    assert runtime.gateway.reserved_train(OWNER, "k") == {"trainNo": "043", "depDate": "20261013"}
+
+
+def test_an_unknown_train_key_names_no_train(runtime):
+    assert runtime.gateway.reserved_train(OWNER, "never-issued") is None

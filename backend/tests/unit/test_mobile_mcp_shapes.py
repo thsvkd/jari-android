@@ -378,7 +378,11 @@ SHAPES = [
         {},
         "cancel_search",
         {"stopped": True, "unscheduled": True},
-        {"stopped": True, "unscheduled": True, "notes": [STOPPED]},
+        {
+            "stopped": True,
+            "unscheduled": True,
+            "notes": [STOPPED, "시작 예정이던 감시를 취소했어요."],
+        },
         id="stop_watch",
     ),
     pytest.param(
