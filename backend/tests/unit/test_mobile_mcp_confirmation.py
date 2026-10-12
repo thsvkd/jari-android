@@ -328,7 +328,7 @@ def test_a_watch_sentence_may_be_written_several_ways(env, booker, said):
 
 @pytest.mark.parametrize(
     ("to", "said"),
-    [("울산(통도사)", "서울→울산"), ("여수EXPO", "서울→여수엑스포"), ("판교(경기)", "서울→판교")],
+    [("울산(통도사)", "서울→울산"), ("여수EXPO", "서울→여수엑스포")],
 )
 def test_a_station_may_be_said_without_its_parenthesis_or_by_its_common_name(env, booker, to, said):
     env.gateway.listed_trains.return_value = ["013"]
@@ -466,3 +466,113 @@ def test_a_watch_with_missing_parts_is_read_without_none_or_dangling_arrows(env,
     }
     notes = call_tool(env, booker, "get_status")["structuredContent"]["notes"]
     assert "감시 내용: 10월 19일" in notes
+
+
+# ---------------------------------------------------------------- 문장 속 숫자가 열차 번호를 가리지 않는다
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "11월 1일 서울→부산 KTX 013 일반실 취소표를 감시해요",
+        "11월 1일 서울→부산 KTX 013 일반석 감시해요",
+        "11월 1일 서울→부산 KTX 013 월요일 출발 감시해요",
+        "11월 1일 서울→부산 KTX 013/015 취소표를 감시해요",
+    ],
+)
+def test_words_after_the_train_number_do_not_eat_it(env, booker, said):
+    env.gateway.listed_trains.return_value = ["013", "015"]
+    env.gateway.start_search.return_value = {"started": True}
+    arguments = watch(said)
+    arguments["trains"] = ["013", "015"] if "015" in said else ["013"]
+    result = call_tool(env, booker, "start_watch", arguments, summary=False)
+    assert not result.get("isError"), tool_text(result)
+
+
+@pytest.mark.parametrize(
+    ("trains", "said"),
+    [
+        (["001"], "11월 1일 서울→부산 KTX 003 1석 감시해요"),
+        (["002"], "11월 1일 서울→부산 KTX 005 2명 감시해요"),
+        (["002"], "11월 1일 서울→부산 KTX 015 2편 감시해요"),
+        (["007"], "11월 1일 서울→부산 KTX 013 7시 출발 감시해요"),
+    ],
+)
+def test_counts_and_clock_times_are_not_train_numbers(env, booker, trains, said):
+    arguments = {**watch(said), "trains": trains}
+    result = call_tool(env, booker, "start_watch", arguments, summary=False)
+    assert result["isError"] is True
+    env.gateway.start_search.assert_not_called()
+
+
+def test_a_station_name_with_a_digit_is_not_a_train_number(env, booker):
+    arguments = {**watch("11월 1일 서울→인천공항T1 KTX 003 감시해요"), "to": "인천공항T1"}
+    arguments["trains"] = ["001"]
+    result = call_tool(env, booker, "start_watch", arguments, summary=False)
+    assert result["isError"] is True
+
+
+def test_a_reservation_sentence_needs_the_train_beyond_the_seat_and_head_count(env, booker):
+    env.gateway.reserved_train.return_value = {"trainNo": "009", "depDate": "20261101"}
+    said = "11월 1일 KTX 043 일반실 2호차 8C 1석을 예약해요"
+    result = call_tool(env, booker, "reserve_seat", {**RESERVE, "summary": said}, summary=False)
+    assert result["isError"] is True
+
+
+def test_a_reservation_sentence_with_a_class_word_still_finds_the_train(env, booker):
+    env.gateway.reserved_train.return_value = {"trainNo": "043", "depDate": "20261101"}
+    env.gateway.reserve_designated.return_value = {"reserved": True, "pending": []}
+    said = "11월 1일 KTX 043 일반실 2호차 8C 1석을 예약해요"
+    result = call_tool(env, booker, "reserve_seat", {**RESERVE, "summary": said}, summary=False)
+    assert not result.get("isError"), tool_text(result)
+
+
+def test_a_seat_number_is_not_a_count_of_seats(env, booker):
+    one = {"carNo": 1, "seatNo": "1-1", "label": "1"}
+    arguments = {
+        **RESERVE,
+        "carNo": 1,
+        "seats": [one],
+        "summary": "무궁화호 1호차 3번 좌석 1석을 예약해요",
+    }
+    assert call_tool(env, booker, "reserve_seat", arguments, summary=False)["isError"] is True
+
+
+def test_a_bare_name_that_fits_two_stations_names_neither(env, booker):
+    arguments = {**watch("11월 1일 서울→판교 KTX 013 감시해요"), "to": "판교(충남)"}
+    assert call_tool(env, booker, "start_watch", arguments, summary=False)["isError"] is True
+    env.gateway.listed_trains.return_value = ["013"]
+    env.gateway.start_search.return_value = {"started": True}
+    named = {**watch("11월 1일 서울→판교(충남) KTX 013 감시해요"), "to": "판교(충남)"}
+    assert not call_tool(env, booker, "start_watch", named, summary=False).get("isError")
+
+
+def test_a_stop_that_ran_is_not_an_error_when_the_status_cannot_tell_if_there_was_a_watch(
+    env, booker
+):
+    env.gateway.cancel_search.return_value = {"stopped": False, "unscheduled": False}
+    env.gateway.status.side_effect = RuntimeError("redis down")
+    result = call_tool(env, booker, "stop_watch")
+    assert not result.get("isError"), tool_text(result)
+    assert "멈추지 못했어요" in result["structuredContent"]["notes"][0]
+
+
+def test_a_reservation_without_an_id_is_not_called_cancelled_while_some_are_left(env, booker):
+    nameless = {"trainInfo": "KTX 049", "seatLabels": ["4호차 1C"]}
+    kept = {"reservationId": "B", "trainInfo": "KTX 051", "seatLabels": ["5호차 2A"]}
+    env.gateway.status.return_value = {
+        "running": None,
+        "scheduled": None,
+        "pending": [nameless, kept],
+    }
+    env.gateway.cancel_pending.return_value = {"cancelled": True, "pending": [kept]}
+    notes = call_tool(env, booker, "cancel_reservation")["structuredContent"]["notes"]
+    assert notes[0].startswith("일부만 취소했어요")
+
+
+def test_the_sentence_asks_for_the_parts_it_is_checked_on():
+    reserve = mcp.TOOLS["reserve_seat"][0]["inputSchema"]["properties"]["summary"]["description"]
+    assert "열차 번호" in reserve
+    assert "호차" in reserve
+    watch_text = mcp.TOOLS["start_watch"][0]["inputSchema"]["properties"]["summary"]["description"]
+    assert "출발역→도착역" in watch_text

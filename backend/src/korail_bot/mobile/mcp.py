@@ -96,14 +96,14 @@ PASSENGERS = {"type": "integer", "minimum": 1, "maximum": 9, "description": "승
 SEAT_CLASS = {"type": "string", "enum": ["general", "special"]}
 
 
-def _summary(example):
+def _summary(example, parts="무엇을 하는지"):
     return {
         "type": "string",
         "minLength": 5,
         "maxLength": 300,
         "description": (
             "사용자가 승인 창에서 읽을 한두 문장이에요. JSON 이 아니라 자연어로, 지금 하려는 일을 "
-            f"사실대로 적어요. 예: {example}"
+            f"사실대로 적어요. 여기에 {parts}를 꼭 넣어요(‘내일’ 같은 말 대신 날짜로). 예: {example}"
         ),
     }
 
@@ -223,7 +223,8 @@ TOOLS = {
                 {
                     "summary": _summary(
                         "10월 19일 서울→부산 KTX 013·015 취소표를 감시하고, 좌석이 나면 자동으로 "
-                        "잡아요(결제는 직접)"
+                        "잡아요(결제는 직접)",
+                        "날짜(월·일), 출발역→도착역, 열차 번호",
                     ),
                     **TRIP,
                     "trains": {
@@ -274,7 +275,8 @@ TOOLS = {
             _schema(
                 {
                     "summary": _summary(
-                        "10월 19일 서울→부산 KTX 049 07:00, 특실 4호차 1C 창가 1석을 예약해요(결제 대기)"
+                        "10월 19일 서울→부산 KTX 049 07:00, 특실 4호차 1C 창가 1석을 예약해요(결제 대기)",
+                        "날짜(월·일), 열차 번호, 호차와 좌석 번호",
                     ),
                     "trainKey": {"type": "string", "minLength": 1, "maxLength": 200},
                     "seatClass": SEAT_CLASS,
@@ -626,7 +628,12 @@ def _stopped(result, was_watching):
 def _cancelled(result, before=()):
     left = result.get("pending") or []
     kept = {item.get("reservationId") for item in left if item.get("reservationId")}
-    gone = [_held(item) for item in before if item.get("reservationId") not in kept]
+    # A held reservation with no id cannot be told from a kept one: with some left, leave it out.
+    gone = [
+        _held(item)
+        for item in before
+        if (item.get("reservationId") not in kept) and (item.get("reservationId") or not left)
+    ]
     gone = [text for text in gone if text]
     said = [f"취소한 예약: {'; '.join(gone)}"] if gone else []
     if not left:
@@ -746,8 +753,13 @@ def prepare(name, arguments):
             result = gateway.cancel_search(user)
             watching = False
             if not (result.get("stopped") or result.get("unscheduled")):
-                after = gateway.status(user)
-                watching = bool(after.get("running") or after.get("scheduled"))
+                try:
+                    after = gateway.status(user)
+                    watching = bool(after.get("running") or after.get("scheduled"))
+                except Exception as exc:
+                    # The stop ran; only the telling-apart failed. Assume there was a watch.
+                    logger.warning("stop_watch could not read the status (%s)", type(exc).__name__)
+                    watching = True
             return _stopped(result, watching)
 
         return stop
@@ -764,16 +776,18 @@ def prepare(name, arguments):
     def cancel(gateway, user):
         try:
             before = gateway.status(user).get("pending") or []
-        except Exception:
-            before = []  # naming what was cancelled is a nicety; the cancel must not wait on it
+        except Exception as exc:
+            # Naming what was cancelled is a nicety; the cancel must not wait on it.
+            logger.warning("cancel_reservation could not read the status (%s)", type(exc).__name__)
+            before = []
         return _cancelled(gateway.cancel_pending(user), before)
 
     return cancel
 
 
-# What a sentence says about a day, a clock time or a car is not a train number: strip it first.
+# What a sentence says that is not a train number: a clock time, a car, a head count.
 _NOT_A_TRAIN = re.compile(
-    r"\d{4}-\d{2}-\d{2}|\d+\s*월|\d+\s*일|\d{1,2}:\d{2}|\d+\s*/\s*\d+|\d{1,2}\.\d{1,2}|\d+\s*호차"
+    r"\d{1,2}:\d{2}|\d+\s*호차|\d+\s*(?:명|석|인|매|시|분)|(?<!\d)\d{1,2}[A-Z](?![A-Z])"
 )
 _CAR_MENTION = re.compile(r"(?<!\d)(\d{1,2})\s*호차")
 # A station written the way people say it: without the parenthesis, or by its common name.
@@ -784,25 +798,36 @@ def _said(text):
     return re.sub(r"\s+", " ", text).strip().upper()
 
 
-def _number_in(text, number):
-    """Whether the train number (or the number without its zeros) stands alone in the text."""
-    return re.search(rf"(?<!\d)0*{int(number)}(?!\d)", _NOT_A_TRAIN.sub(" ", text)) is not None
+def _date_forms(date):
+    return (
+        date.isoformat(),
+        rf"(?<!\d)0*{date.month}\s*월\s*0*{date.day}\s*일",
+        rf"(?<!\d)0*{date.month}\s*[/.\-]\s*0*{date.day}(?!\d)",
+    )
 
 
 def _date_in(text, date):
-    month, day = date.month, date.day
-    forms = (
-        rf"{date.isoformat()}",
-        rf"(?<!\d)0*{month}\s*월\s*0*{day}\s*일",
-        rf"(?<!\d)0*{month}\s*[/.\-]\s*0*{day}(?!\d)",
-    )
-    return any(re.search(form, text) for form in forms)
+    return any(re.search(form, text) for form in _date_forms(date))
+
+
+def _number_in(text, number, date=None):
+    """
+    Whether the train number (or the number without its zeros) stands alone in the text.
+
+    The stations, this call's own date, clock times, cars, head counts and seat labels go
+    first: their digits are not the train's ("서울→인천공항T1" is not train 1).
+    """
+    text = _STATION_NAMES.sub(" ", text)
+    for form in _date_forms(date) if date else ():
+        text = re.sub(form, " ", text)
+    text = _NOT_A_TRAIN.sub(" ", text)
+    return re.search(rf"(?<!\d)0*{int(number)}(?!\d)", text) is not None
 
 
 def _seat_in(segment, label):
     """The seat label standing alone: 8C in "8C" but not in "18C"; a bare number needs 번/석."""
     spelled = r"\s*".join(re.escape(part) for part in label.upper().split())
-    tail = r"\s*(?:번|석)" if label.strip().isdigit() else r"(?![0-9A-Z])"
+    tail = r"\s*번" if label.strip().isdigit() else r"(?![0-9A-Z])"
     return re.search(rf"(?<![0-9A-Z]){spelled}{tail}", segment) is not None
 
 
@@ -835,7 +860,14 @@ def _station_forms(name):
 _STATION_FORMS: dict[str, set[str]] = {}
 for _station in FALLBACK_STATIONS:
     for _form in _station_forms(_station):
-        _STATION_FORMS.setdefault(_form, set()).add(_station)
+        if _form:
+            _STATION_FORMS.setdefault(_form, set()).add(_station)
+# 판교 is two stations, 판교(경기) and 판교(충남): a bare name that fits two names neither.
+_STATION_FORMS = {
+    form: stations
+    for form, stations in _STATION_FORMS.items()
+    if len(stations) == 1 or form in {station.upper() for station in stations}
+}
 # Longest first: 서대전 is a station of its own, not 대전 with a letter in front.
 _STATION_NAMES = re.compile(
     "|".join(re.escape(form) for form in sorted(_STATION_FORMS, key=len, reverse=True))
@@ -848,7 +880,9 @@ def _stations_missing(text, source, target):
     for n, stations in enumerate(named):
         if source in stations and any(target in later for later in named[n + 1 :]):
             return []
-    return [source, target]
+    absent = [place for place in (source, target) if not any(place in found for found in named)]
+    # Both named, but the wrong way round: say the order, not a name that was written.
+    return absent or [f"{source}→{target} 순서"]
 
 
 def _confirmed(name, arguments):
@@ -874,7 +908,9 @@ def _confirmed(name, arguments):
             missing.append(f"{date.month}월 {date.day}일")
         missing += _stations_missing(text, arguments["from"], arguments["to"])
         if len(arguments["trains"]) <= 5:
-            missing += [number for number in arguments["trains"] if not _number_in(text, number)]
+            missing += [
+                number for number in arguments["trains"] if not _number_in(text, number, date)
+            ]
         waits = "예약 대기" in text or "예약대기" in text.replace(" ", "")
         if arguments.get("waitlist") and not waits:
             missing.append("예약 대기")
@@ -904,14 +940,13 @@ def unconfirmed_train(gateway, storage_id, arguments):
         return None  # expired or unknown: the booking itself says so
     text = _said(arguments["summary"])
     missing = []
-    if train.get("trainNo") and not _number_in(text, train["trainNo"]):
-        missing.append(f"열차 번호 {train['trainNo']}")
     raw = str(train.get("depDate") or "")
-    if (
-        len(raw) == 8
-        and raw.isdigit()
-        and not _date_in(text, datetime.date.fromisoformat(f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"))
-    ):
+    iso = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+    day = datetime.date.fromisoformat(iso) if len(raw) == 8 and _is_date(iso) else None
+    number = str(train.get("trainNo") or "")
+    if number.isdigit() and not _number_in(text, number, day):
+        missing.append(f"열차 번호 {number}")
+    if day and not _date_in(text, day):
         missing.append(_day(raw))
     if not missing:
         return None
