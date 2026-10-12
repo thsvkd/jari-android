@@ -54,9 +54,12 @@ SOLD_OUT_CLASS_NOTE = (
     "이 열차의 이 등급은 지금 매진이라 좌석을 잡을 수 없어요. 빈자리가 나기를 기다리려면 "
     "사용자에게 확인을 받고 start_watch 로 감시를 시작할 수 있어요(이미 감시 중이면 get_status 로 확인해요)."
 )
-# Korail opens tickets about a month ahead; a railway failure on a date past that may just be that.
-SALE_HORIZON = datetime.timedelta(days=40)
-NOT_ON_SALE_NOTE = "이 날짜는 코레일이 아직 승차권을 팔지 않는 먼 날짜일 수 있어요(보통 한 달 안팎 앞까지만 열려요)."
+# Korail sells about sixty days ahead (production answered 60 days out and failed from 62); a
+# railway failure on a date past that may just be that.
+SALE_HORIZON = datetime.timedelta(days=60)
+NOT_ON_SALE_NOTE = (
+    "이 날짜는 코레일이 아직 승차권을 팔지 않는 먼 날짜일 수 있어요(보통 두 달 앞까지만 열려요)."
+)
 HEALTH_NOTES = {
     "healthy": "감시 중이에요. 코레일을 계속 조회하고 있어요.",
     "running": "감시 중이에요. 코레일을 계속 조회하고 있어요.",
@@ -103,7 +106,7 @@ def _summary(example, parts="무엇을 하는지"):
         "maxLength": 300,
         "description": (
             "사용자가 승인 창에서 읽을 한두 문장이에요. JSON 이 아니라 자연어로, 지금 하려는 일을 "
-            f"사실대로 적어요. 여기에 {parts}를 꼭 넣어요(‘내일’ 같은 말 대신 날짜로). 예: {example}"
+            f"사실대로 적어요. 꼭 넣을 것: {parts}(‘내일’ 같은 말 대신 날짜로). 예: {example}"
         ),
     }
 
@@ -393,7 +396,7 @@ def conditions(arguments):
     except ValueError as exc:
         raise Invalid("date 값은 실제 있는 날짜(YYYY-MM-DD)예요.") from exc
     if date < _today():
-        raise Invalid("date 값은 오늘 이후 날짜예요.")
+        raise Invalid("date 값은 오늘이거나 그 뒤 날짜예요.")
     latest = arguments.get("latest", "24:00")
     if latest != "24:00" and latest <= arguments.get("earliest", "00:00"):
         raise Invalid("latest 값은 earliest 보다 늦은 시각이에요.")
@@ -541,11 +544,26 @@ def _watching(search):
     labels = search.get("trainLabels") or {}
     trains = [labels.get(no) or no for no in search.get("selectedTrains") or []]
     shown = ", ".join(trains[:5]) + (f" 외 {len(trains) - 5}편" if len(trains) > 5 else "")
-    begins = str(search.get("depTime") or "")
-    window = f"{_clock(begins)}부터" if begins and begins[:4] != "0000" else ""
+    begins, ends = str(search.get("depTime") or "")[:4], str(search.get("maxDepTime") or "")[:4]
+    start = _clock(begins) if begins and begins != "0000" else ""
+    end = _clock(ends) if ends and ends != "2400" else ""
+    window = (
+        f"{start}~{end} 출발"
+        if start and end
+        else f"{start} 이후 출발"
+        if start
+        else f"{end} 이전 출발"
+        if end
+        else ""
+    )
     src, dst = search.get("srcLocate"), search.get("dstLocate")
     where = f"{src}→{dst}" if src and dst else ""
-    return " ".join(part for part in (_day(search.get("depDate")), window, where, shown) if part)
+    parts = (
+        f"{_day(search.get('depDate'))} {where}".strip(),
+        window,
+        f"열차 {shown}" if shown else "",
+    )
+    return " · ".join(part for part in parts if part)
 
 
 def _reserved(result):

@@ -161,7 +161,7 @@ def test_a_search_that_ends_before_it_starts_names_both_fields_and_costs_no_budg
 def test_a_past_date_names_its_field(env, booker):
     past = (TODAY - datetime.timedelta(days=1)).isoformat()
     result = call_tool(env, booker, "find_trains", {**TRIP, "date": past})
-    assert tool_text(result) == "date 값은 오늘 이후 날짜예요."
+    assert tool_text(result) == "date 값은 오늘이거나 그 뒤 날짜예요."
     env.gateway.list_trains.assert_not_called()
 
 
@@ -271,7 +271,7 @@ def test_the_status_reads_the_watch_aloud(env, booker):
         "pending": [],
     }
     notes = call_tool(env, booker, "get_status")["structuredContent"]["notes"]
-    assert "감시 내용: 10월 19일 07:00부터 서울→부산 KTX 013, KTX 015" in notes
+    assert "감시 내용: 10월 19일 서울→부산 · 07:00 이후 출발 · 열차 KTX 013, KTX 015" in notes
     assert "예약된 감시 내용: 10월 20일 서울→대전" in notes
 
 
@@ -605,3 +605,29 @@ def test_a_reversed_stretch_says_it_is_the_order(env, booker):
     arguments = watch("11월 1일 부산→서울 KTX 013 감시해요")
     text = tool_text(call_tool(env, booker, "start_watch", arguments, summary=False))
     assert "서울→부산 순서" in text
+
+
+@pytest.mark.parametrize(("days", "hinted"), [(60, False), (61, True)])
+def test_the_not_on_sale_hint_starts_past_the_days_korail_sells(env, booker, days, hinted):
+    env.gateway.list_trains.side_effect = MiniAppError("열차 목록을 불러오지 못했어요.", 502)
+    day = (TODAY + datetime.timedelta(days=days)).isoformat()
+    text = tool_text(call_tool(env, booker, "find_trains", {**TRIP, "date": day}))
+    assert ("두 달 앞까지만" in text) is hinted
+
+
+@pytest.mark.parametrize(
+    ("window", "said"),
+    [
+        ({"depTime": "0700", "maxDepTime": "0900"}, "07:00~09:00 출발"),
+        ({"depTime": "0700", "maxDepTime": "2400"}, "07:00 이후 출발"),
+        ({"depTime": "0000", "maxDepTime": "0900"}, "09:00 이전 출발"),
+    ],
+)
+def test_the_status_says_the_whole_search_window(env, booker, window, said):
+    env.gateway.status.return_value = {
+        "running": {"depDate": "20261019", "srcLocate": "서울", "dstLocate": "부산", **window},
+        "scheduled": None,
+        "pending": [],
+    }
+    notes = call_tool(env, booker, "get_status")["structuredContent"]["notes"]
+    assert f"감시 내용: 10월 19일 서울→부산 · {said}" in notes
