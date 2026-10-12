@@ -22,6 +22,19 @@ import urllib.request
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 CALLBACK = "http://127.0.0.1:53682/callback"
+# What the agent writes for the approval window: one true sentence about the call.
+SUMMARIES = {
+    "start_watch": lambda a: (
+        f"{int(a['date'][5:7])}월 {int(a['date'][8:10])}일 {a['from']}→{a['to']} "
+        f"{' '.join(a['trains'])} 취소표를 감시해요"
+    ),
+    "stop_watch": lambda a: "진행 중인 감시를 멈춰요",
+    "reserve_seat": lambda a: (
+        ", ".join(f"{seat['carNo']}호차 {seat['label']}" for seat in a["seats"])
+        + " 좌석을 예약해요"
+    ),
+    "cancel_reservation": lambda a: "결제를 기다리는 예약을 취소해요",
+}
 HIDDEN = re.compile(r'<input type="hidden" name="([a-z_]+)" value="([^"]*)">')
 
 
@@ -172,7 +185,10 @@ class Agent:
         )
 
     def tool(self, name: str, arguments: dict | None = None) -> dict:
-        reply = self.rpc("tools/call", {"name": name, "arguments": arguments or {}})
+        arguments = dict(arguments or {})
+        if name in SUMMARIES:
+            arguments.setdefault("summary", SUMMARIES[name](arguments))
+        reply = self.rpc("tools/call", {"name": name, "arguments": arguments})
         assert reply.status == 200, reply.body
         return reply.json()["result"]
 

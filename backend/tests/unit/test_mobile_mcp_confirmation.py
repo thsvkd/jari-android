@@ -1,0 +1,275 @@
+"""
+승인 창에 보이는 문장(summary)과, 그 문장이 실제 호출과 맞는지, 그리고 사용자가 읽는 오류·안내 문구.
+
+승인 창은 인자를 그대로 찍는다. 사람이 읽을 수 있는 건 summary 한 줄뿐이라, 다른 열차나 좌석을
+말하는 summary 는 엉뚱한 일을 승인하게 만든다. 서버가 코레일 예산을 쓰기 전에 거절한다.
+"""
+
+import datetime
+
+import pytest
+
+from korail_bot.mobile import mcp
+from korail_bot.services.mini_app_gateway import SOLD_OUT_CLASS, MiniAppError
+
+from .agent_support import call_tool, cheap_setup, connect, make_env, signup, tool_text
+
+TODAY = datetime.date(2026, 10, 12)
+DATE = (TODAY + datetime.timedelta(days=7)).isoformat()
+TRIP = {"date": DATE, "from": "서울", "to": "부산"}
+RESERVE = {
+    "trainKey": "T1",
+    "seatClass": "special",
+    "passengers": 1,
+    "carNo": 2,
+    "seats": [{"carNo": 2, "seatNo": "2-8C", "label": "8C"}],
+}
+
+
+@pytest.fixture(autouse=True)
+def _cheap_setup(monkeypatch):
+    cheap_setup(monkeypatch)
+    now = datetime.datetime(2026, 10, 12, 3, 0, tzinfo=datetime.UTC)
+    monkeypatch.setattr(mcp, "_now", lambda: now)
+
+
+@pytest.fixture
+def env(tmp_path):
+    return make_env(tmp_path)
+
+
+@pytest.fixture
+def booker(env):
+    return connect(env, signup(env, "alice"), allow_booking=True)["access_token"]
+
+
+@pytest.mark.parametrize(
+    "tool", ["start_watch", "stop_watch", "reserve_seat", "cancel_reservation"]
+)
+def test_a_tool_that_changes_things_asks_for_a_sentence_the_user_can_read(tool):
+    schema = mcp.TOOLS[tool][0]["inputSchema"]
+    assert "summary" in schema["required"]
+    assert next(iter(schema["properties"])) == "summary"
+    assert "자연어" in schema["properties"]["summary"]["description"]
+
+
+@pytest.mark.parametrize(
+    "tool",
+    sorted(set(mcp.TOOLS) - {"start_watch", "stop_watch", "reserve_seat", "cancel_reservation"}),
+)
+def test_a_read_tool_needs_no_summary(tool):
+    assert "summary" not in mcp.TOOLS[tool][0]["inputSchema"]["properties"]
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "gateway_method"),
+    [
+        ("start_watch", {**TRIP, "trains": ["00101"]}, "start_search"),
+        ("stop_watch", {}, "cancel_search"),
+        ("reserve_seat", RESERVE, "reserve_designated"),
+        ("cancel_reservation", {}, "cancel_pending"),
+    ],
+)
+def test_a_call_without_a_sentence_is_refused_before_it_reaches_the_gateway(
+    env, booker, tool, arguments, gateway_method
+):
+    result = call_tool(env, booker, tool, arguments, summary=False)
+    assert result["isError"] is True
+    assert "summary" in tool_text(result)
+    assert not getattr(env.gateway, gateway_method).called
+
+
+def test_a_reservation_sentence_must_name_the_car_and_seat(env, booker):
+    said = "KTX 043 서울→부산 특실 좌석을 예약해요"
+    result = call_tool(env, booker, "reserve_seat", {**RESERVE, "summary": said})
+    assert result["isError"] is True
+    text = tool_text(result)
+    assert "2호차" in text
+    assert "8C" in text
+    env.gateway.reserve_designated.assert_not_called()
+
+
+def test_a_reservation_sentence_that_names_another_seat_is_refused(env, booker):
+    result = call_tool(
+        env, booker, "reserve_seat", {**RESERVE, "summary": "KTX 043 특실 2호차 7A 1석을 예약해요"}
+    )
+    assert result["isError"] is True
+    env.gateway.reserve_designated.assert_not_called()
+
+
+def test_a_true_reservation_sentence_goes_through_however_it_is_spaced(env, booker):
+    env.gateway.reserve_designated.return_value = {"reserved": True, "pending": []}
+    said = "KTX 043 서울→부산 특실 2 호차 8c 1석을 예약해요"
+    result = call_tool(env, booker, "reserve_seat", {**RESERVE, "summary": said})
+    assert not result.get("isError"), tool_text(result)
+    env.gateway.reserve_designated.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("said", "missing"),
+    [
+        ("서울→부산 KTX 013 취소표를 감시해요", "10월 19일"),
+        ("10월 19일 서울→대구 KTX 013 취소표를 감시해요", "부산"),
+        ("10월 19일 서울→부산 취소표를 감시해요", "013"),
+    ],
+)
+def test_a_watch_sentence_must_name_the_day_the_stretch_and_the_trains(env, booker, said, missing):
+    arguments = {**TRIP, "date": "2026-10-19", "trains": ["013"], "summary": said}
+    result = call_tool(env, booker, "start_watch", arguments)
+    assert result["isError"] is True
+    assert missing in tool_text(result)
+    env.gateway.start_search.assert_not_called()
+
+
+def test_a_watch_sentence_can_write_the_date_and_train_the_way_people_do(env, booker):
+    env.gateway.listed_trains.return_value = ["013"]
+    env.gateway.start_search.return_value = {"started": True}
+    arguments = {
+        **TRIP,
+        "date": "2026-10-19",
+        "trains": ["013"],
+        "summary": "10/19 서울에서 부산 가는 KTX 13편 취소표를 감시해요",
+    }
+    result = call_tool(env, booker, "start_watch", arguments)
+    assert not result.get("isError"), tool_text(result)
+
+
+def test_a_waitlist_sentence_says_it_is_a_waitlist(env, booker):
+    arguments = {
+        **TRIP,
+        "trains": ["013"],
+        "waitlist": True,
+        "summary": f"{int(DATE[5:7])}월 {int(DATE[8:])}일 서울→부산 013 열차 취소표를 감시해요",
+    }
+    result = call_tool(env, booker, "start_watch", arguments, summary=False)
+    assert result["isError"] is True
+    assert "예약 대기" in tool_text(result)
+
+
+# ---------------------------------------------------------------- 입력 오류 문구
+
+
+def test_a_search_that_ends_before_it_starts_names_both_fields_and_costs_no_budget(env, booker):
+    for _ in range(11):
+        result = call_tool(
+            env, booker, "find_trains", {**TRIP, "earliest": "15:00", "latest": "13:00"}
+        )
+        assert tool_text(result) == "latest 값은 earliest 보다 늦은 시각이에요."
+    env.gateway.list_trains.assert_not_called()
+
+
+def test_a_past_date_names_its_field(env, booker):
+    past = (TODAY - datetime.timedelta(days=1)).isoformat()
+    result = call_tool(env, booker, "find_trains", {**TRIP, "date": past})
+    assert tool_text(result) == "date 값은 오늘 이후 날짜예요."
+    env.gateway.list_trains.assert_not_called()
+
+
+def test_today_is_still_a_date_to_search(env, booker):
+    env.gateway.list_trains.return_value = {"trains": [], "truncated": False}
+    result = call_tool(env, booker, "find_trains", {**TRIP, "date": TODAY.isoformat()})
+    assert not result.get("isError"), tool_text(result)
+
+
+def test_a_malformed_train_number_says_what_a_train_number_is(env, booker):
+    arguments = {**TRIP, "trains": ["abc"], "summary": "10월 19일 서울→부산 abc 감시를 시작해요"}
+    text = tool_text(call_tool(env, booker, "start_watch", arguments))
+    assert "숫자 1~5자리" in text
+
+
+# ---------------------------------------------------------------- 실패 문구
+
+
+def test_a_failed_far_date_search_says_the_date_may_not_be_on_sale_yet(env, booker):
+    env.gateway.list_trains.side_effect = MiniAppError("열차 목록을 불러오지 못했어요.", 502)
+    far = (TODAY + datetime.timedelta(days=200)).isoformat()
+    text = tool_text(call_tool(env, booker, "find_trains", {**TRIP, "date": far}))
+    assert "좌석이 없다는 뜻이 아니에요" in text
+    assert "아직 승차권을 팔지 않는 먼 날짜일 수 있어요" in text
+
+
+def test_a_failed_near_date_search_does_not_blame_the_date(env, booker):
+    env.gateway.list_trains.side_effect = MiniAppError("열차 목록을 불러오지 못했어요.", 502)
+    text = tool_text(call_tool(env, booker, "find_trains", TRIP))
+    assert "먼 날짜" not in text
+
+
+def test_a_sold_out_class_sends_the_agent_to_a_watch_not_back_to_the_seat_map(env, booker):
+    env.gateway.reserve_designated.side_effect = MiniAppError(SOLD_OUT_CLASS, 409)
+    text = tool_text(
+        call_tool(env, booker, "reserve_seat", {**RESERVE, "summary": "2호차 8C 예약"})
+    )
+    assert "매진" in text
+    assert "start_watch" in text
+    assert "좌석표를 새로 불러와" not in text
+
+
+def test_the_seat_map_of_a_sold_out_class_asks_before_a_watch(env, booker):
+    env.gateway.seat_inventories.return_value = {"layoutReference": True, "inventories": []}
+    args = {"trainKey": "T1", "seatClass": "special"}
+    text = tool_text(call_tool(env, booker, "get_seat_map", args))
+    assert "사용자에게 확인을 받고 start_watch" in text
+
+
+# ---------------------------------------------------------------- 결과 문구
+
+
+def test_stopping_nothing_says_there_was_nothing_to_stop(env, booker):
+    env.gateway.status.return_value = {"running": None, "scheduled": None, "pending": []}
+    env.gateway.cancel_search.return_value = {"stopped": False, "unscheduled": False}
+    notes = call_tool(env, booker, "stop_watch")["structuredContent"]["notes"]
+    assert notes == ["멈출 감시가 없어요. 진행 중이거나 시작 예정인 감시가 없었어요."]
+
+
+def test_a_watch_that_would_not_stop_is_not_called_absent(env, booker):
+    env.gateway.status.return_value = {"running": {"depDate": "20261019"}, "scheduled": None}
+    env.gateway.cancel_search.return_value = {"stopped": False, "unscheduled": False}
+    notes = call_tool(env, booker, "stop_watch")["structuredContent"]["notes"]
+    assert len(notes) == 1
+    assert "멈추지 못했어요" in notes[0]
+    assert "get_status" in notes[0]
+
+
+def test_a_cancelled_reservation_says_which_one(env, booker):
+    held = {
+        "trainInfo": "KTX 049 서울 → 부산 · 10월 19일(월) 07:00→09:40",
+        "seatLabels": ["4호차 1C"],
+        "seatClass": "special",
+    }
+    env.gateway.status.return_value = {"running": None, "scheduled": None, "pending": [held]}
+    env.gateway.cancel_pending.return_value = {"cancelled": True, "pending": []}
+    notes = call_tool(env, booker, "cancel_reservation")["structuredContent"]["notes"]
+    assert notes[0] == "취소한 예약: KTX 049 서울 → 부산 · 10월 19일(월) 07:00→09:40 특실 4호차 1C"
+
+
+def test_a_booking_note_says_what_was_held(env, booker):
+    held = {"trainInfo": "KTX 043 서울 → 부산", "seatLabels": ["2호차 8C"], "seatClass": "special"}
+    env.gateway.reserve_designated.return_value = {"reserved": True, "pending": [held]}
+    said = "KTX 043 특실 2호차 8C 1석을 예약해요"
+    notes = call_tool(env, booker, "reserve_seat", {**RESERVE, "summary": said})[
+        "structuredContent"
+    ]["notes"]
+    assert notes[0] == "잡은 좌석: KTX 043 서울 → 부산 특실 2호차 8C"
+
+
+def test_the_status_reads_the_watch_aloud(env, booker):
+    env.gateway.status.return_value = {
+        "running": {
+            "depDate": "20261019",
+            "depTime": "0700",
+            "srcLocate": "서울",
+            "dstLocate": "부산",
+            "selectedTrains": ["013", "015"],
+            "trainLabels": {"013": "KTX 013", "015": "KTX 015"},
+            "health": "healthy",
+            "lastCheckedAt": None,
+        },
+        "scheduled": {
+            "startAt": "2026-10-13T07:00:00+09:00",
+            "search": {"depDate": "20261020", "srcLocate": "서울", "dstLocate": "대전"},
+        },
+        "pending": [],
+    }
+    notes = call_tool(env, booker, "get_status")["structuredContent"]["notes"]
+    assert "감시 내용: 10월 19일 07:00부터 서울→부산 KTX 013, KTX 015" in notes
+    assert "예약된 감시 내용: 10월 20일 서울→대전" in notes

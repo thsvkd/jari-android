@@ -114,6 +114,7 @@ def _summary_suffix(remaining: int) -> str:
 
 
 SEARCH_RUNNING = "이미 검색 중이에요. 먼저 검색을 중지한 뒤 새로 시작해 주세요."
+SOLD_OUT_CLASS = "이 열차의 이 등급은 매진이라 좌석을 고를 수 없어요. 좌석표를 새로 불러와 주세요."
 
 
 class MiniAppError(Exception):

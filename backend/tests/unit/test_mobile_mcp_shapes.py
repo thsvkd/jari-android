@@ -50,7 +50,10 @@ WAITLISTED = (
     "코레일 예약 대기를 신청했어요. 감시는 시작하지 않았고 get_status 에도 나오지 않아요. "
     "배정 결과는 사용자가 앱이나 코레일에서 확인해야 해요."
 )
-NOTHING_TO_STOP = "멈출 감시를 찾지 못했거나 멈추지 못했어요. get_status 로 확인해 주세요."
+NOTHING_TO_STOP = "멈출 감시가 없어요. 진행 중이거나 시작 예정인 감시가 없었어요."
+STOPPED = "진행 중이던 감시를 멈췄어요."
+WATCH_TEXT = "감시 내용: 10월 10일 07:00부터 서울→부산 00101"
+CANCELLED = "결제 대기 예약을 취소하고 좌석을 돌려보냈어요."
 PARTLY_CANCELLED = (
     "일부만 취소했어요. 결제를 기다리는 예약이 1건 남아 있어요. "
     "남은 예약은 결제 기한 안에 결제하지 않으면 취소돼요."
@@ -266,6 +269,7 @@ SHAPES = [
             "pending": [{**PENDING, "expiresAt": "2026-10-10T10:10:00+09:00", "paymentUrl": URL}],
             "notes": [
                 WATCHING,
+                WATCH_TEXT,
                 "좌석 조건: 일반실만, 2명, 연속 좌석",
                 "정한 시각에 감시를 시작해요.",
                 "결제를 기다리는 예약이 1건 있어요. 결제 기한 안에 사용자가 직접 결제해야 해요.",
@@ -294,6 +298,7 @@ SHAPES = [
             "pending": [{**PENDING, "expiresAt": "2026-10-10T10:10:00+09:00", "paymentUrl": URL}],
             "notes": [
                 WATCHING,
+                WATCH_TEXT,
                 "좌석 조건: 일반실만, 2명, 연속 좌석",
                 "결제를 기다리는 예약이 1건 있어요. 결제 기한 안에 사용자가 직접 결제해야 해요.",
                 "2석 중 1석을 잡았고 나머지는 감시가 찾고 있어요.",
@@ -373,7 +378,7 @@ SHAPES = [
         {},
         "cancel_search",
         {"stopped": True, "unscheduled": True},
-        {"stopped": True, "unscheduled": True},
+        {"stopped": True, "unscheduled": True, "notes": [STOPPED]},
         id="stop_watch",
     ),
     pytest.param(
@@ -408,7 +413,7 @@ SHAPES = [
         {},
         "cancel_pending",
         {"cancelled": True, "pending": []},
-        {"cancelled": True, "pending": []},
+        {"cancelled": True, "pending": [], "notes": [CANCELLED]},
         id="cancel_reservation",
     ),
     pytest.param(
@@ -446,6 +451,7 @@ def booker(env):
 
 @pytest.mark.parametrize(("tool", "arguments", "method", "answer", "expected"), SHAPES)
 def test_tool_result_shape(env, booker, tool, arguments, method, answer, expected):
+    env.gateway.status.return_value = {"running": None, "scheduled": None, "pending": []}
     getattr(env.gateway, method).return_value = answer
     result = call_tool(env, booker, tool, arguments)
     assert not result.get("isError"), result

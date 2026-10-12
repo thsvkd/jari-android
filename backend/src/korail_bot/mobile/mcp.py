@@ -21,7 +21,7 @@ from korail_bot.config.settings import settings
 from korail_bot.mobile.identity import AuthError
 from korail_bot.mobile.oauth import BOOK, MCP_PATH, PRM_PATH, SCOPES
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
-from korail_bot.services.mini_app_gateway import SEARCH_RUNNING, MiniAppError
+from korail_bot.services.mini_app_gateway import SEARCH_RUNNING, SOLD_OUT_CLASS, MiniAppError
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +45,18 @@ INSTRUCTIONS = (
     "예약은 결제 대기까지만 진행돼요. 결제는 사용자가 결제 기한 안에 앱이나 코레일에서 직접 해야 해요. "
     "실패한 예약을 성공했다고 말하지 마세요. "
     "감시 시작·감시 멈추기·좌석 예약·예약 취소 전에는 사용자에게 확인을 받아 주세요. "
+    "확인을 받을 때는 JSON 이 아니라 열차·날짜·구간·좌석·인원을 자연어로 풀어 보여 주세요. "
+    "이 네 도구에는 summary 가 필요해요: 사용자가 승인 창에서 읽을 한두 문장이고, 실제 호출과 맞아야 해요. "
     "start_watch 의 trains 에는 find_trains 결과의 trainNo 를 그대로 넣어 주세요. "
     "trainKey 가 만료됐다는 오류가 나면 그때 find_trains 를 다시 불러 주세요."
 )
+SOLD_OUT_CLASS_NOTE = (
+    "이 열차의 이 등급은 지금 매진이라 좌석을 잡을 수 없어요. 빈자리가 나기를 기다리려면 "
+    "사용자에게 확인을 받고 start_watch 로 감시를 시작할 수 있어요(이미 감시 중이면 get_status 로 확인해요)."
+)
+# Korail opens tickets about a month ahead; a railway failure on a date past that may just be that.
+SALE_HORIZON = datetime.timedelta(days=30)
+NOT_ON_SALE_NOTE = "이 날짜는 코레일이 아직 승차권을 팔지 않는 먼 날짜일 수 있어요(보통 한 달 안팎 앞까지만 열려요)."
 HEALTH_NOTES = {
     "healthy": "감시 중이에요. 코레일을 계속 조회하고 있어요.",
     "running": "감시 중이에요. 코레일을 계속 조회하고 있어요.",
@@ -85,6 +94,20 @@ TIME = r"([01][0-9]|2[0-3]):[0-5][0-9]"
 HHMM = "HH:MM 형식이에요(예: 07:30)"
 PASSENGERS = {"type": "integer", "minimum": 1, "maximum": 9, "description": "승객 수, 기본 1"}
 SEAT_CLASS = {"type": "string", "enum": ["general", "special"]}
+
+
+def _summary(example):
+    return {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 300,
+        "description": (
+            "사용자가 승인 창에서 읽을 한두 문장이에요. JSON 이 아니라 자연어로, 지금 하려는 일을 "
+            f"사실대로 적어요. 예: {example}"
+        ),
+    }
+
+
 TRIP = {
     "date": {
         "type": "string",
@@ -198,12 +221,20 @@ TOOLS = {
             BOOK,
             _schema(
                 {
+                    "summary": _summary(
+                        "10월 19일 서울→부산 KTX 013·015 취소표를 감시하고, 좌석이 나면 자동으로 "
+                        "예약(결제 대기)해요"
+                    ),
                     **TRIP,
                     "trains": {
                         "type": "array",
                         "minItems": 1,
                         "maxItems": 30,
-                        "items": {"type": "string", "pattern": r"[0-9]{1,5}"},
+                        "items": {
+                            "type": "string",
+                            "pattern": r"[0-9]{1,5}",
+                            "description": "find_trains 결과의 trainNo(숫자 1~5자리)예요",
+                        },
                         "description": "find_trains 결과의 trainNo 를 그대로 넣어요",
                     },
                     "waitlist": {"type": "boolean", "description": "기본 false"},
@@ -213,7 +244,7 @@ TOOLS = {
                         "description": "ISO 8601, 시간대 포함(예: 2026-12-01T07:00:00+09:00)",
                     },
                 },
-                ("date", "from", "to", "trains"),
+                ("summary", "date", "from", "to", "trains"),
             ),
             True,
             confirm=True,
@@ -225,7 +256,10 @@ TOOLS = {
             "감시 멈추기",
             "진행 중이거나 시작 예정인 취소표 감시를 멈춰요.",
             BOOK,
-            _schema({}),
+            _schema(
+                {"summary": _summary("진행 중인 서울→부산 10월 19일 취소표 감시를 멈춰요")},
+                ("summary",),
+            ),
             False,
             confirm=True,
             destructiveHint=False,
@@ -239,6 +273,9 @@ TOOLS = {
             BOOK,
             _schema(
                 {
+                    "summary": _summary(
+                        "10월 19일 서울→부산 KTX 049 07:00, 특실 4호차 1C 창가 1석을 예약해요(결제 대기)"
+                    ),
                     "trainKey": {"type": "string", "minLength": 1, "maxLength": 200},
                     "seatClass": SEAT_CLASS,
                     "passengers": PASSENGERS,
@@ -257,7 +294,7 @@ TOOLS = {
                         ),
                     },
                 },
-                ("trainKey", "seatClass", "carNo", "seats"),
+                ("summary", "trainKey", "seatClass", "carNo", "seats"),
             ),
             True,
             confirm=True,
@@ -268,7 +305,14 @@ TOOLS = {
             "결제 대기 예약 취소",
             "결제를 기다리는 예약을 취소해요. 잡은 좌석은 돌려보내요.",
             BOOK,
-            _schema({}),
+            _schema(
+                {
+                    "summary": _summary(
+                        "결제를 기다리는 KTX 049 특실 4호차 1C 예약을 취소하고 좌석을 돌려보내요"
+                    )
+                },
+                ("summary",),
+            ),
             True,
             confirm=True,
             destructiveHint=True,
@@ -330,6 +374,10 @@ def check(schema, value, name="arguments"):
     if kind == "object":
         unknown = set(value) - set(schema["properties"])
         missing = set(schema["required"]) - set(value)
+        if "summary" in missing:
+            raise Invalid(
+                f"summary 값이 필요해요. {schema['properties']['summary']['description']}"
+            )
         if unknown or missing:
             raise Invalid(f"{name}: 모르는 값 {sorted(unknown)}, 빠진 값 {sorted(missing)}")
         for key, item in value.items():
@@ -342,6 +390,11 @@ def conditions(arguments):
         date = datetime.date.fromisoformat(arguments["date"])
     except ValueError as exc:
         raise Invalid("date 값은 실제 있는 날짜(YYYY-MM-DD)예요.") from exc
+    if date < _today():
+        raise Invalid("date 값은 오늘 이후 날짜예요.")
+    latest = arguments.get("latest", "24:00")
+    if latest != "24:00" and latest <= arguments.get("earliest", "00:00"):
+        raise Invalid("latest 값은 earliest 보다 늦은 시각이에요.")
     seat = arguments.get("seat", "any")
     result = {
         "v": 1,
@@ -441,7 +494,8 @@ def _seat_map(result, arguments):
         notes.append(
             "이 열차의 이 등급은 지금 매진이에요. 좌석표는 가까운 날짜의 같은 열차 편성을 "
             "참고로 읽은 것이라 예약할 수 있는 좌석이 없어요. 빈자리가 나기를 기다리려면 "
-            "start_watch 로 감시를 시작해요."
+            "사용자에게 확인을 받고 start_watch 로 감시를 시작할 수 있어요(이미 감시 중이면 "
+            "get_status 로 확인해요)."
         )
     elif failed:
         notes.append("일부 호차는 조회하지 못했어요. 그 호차에 좌석이 없다는 뜻은 아니에요.")
@@ -465,19 +519,55 @@ def _seat_map(result, arguments):
     return summary
 
 
+def _day(raw):
+    """20261019 as 10월 19일; what is not a date stays as it came."""
+    raw = str(raw or "")
+    if len(raw) == 8 and raw.isdigit():
+        return f"{int(raw[4:6])}월 {int(raw[6:8])}일"
+    return raw
+
+
+def _held(item):
+    """One pending reservation as a sentence: the train, the class and the seats."""
+    klass = {"general": "일반실", "special": "특실"}.get(item.get("seatClass"), "")
+    seats = ", ".join(item.get("seatLabels") or [])
+    return " ".join(part for part in (item.get("trainInfo"), klass, seats) if part)
+
+
+def _watching(search):
+    """A running or scheduled search as a sentence: the day, the stretch and the trains."""
+    labels = search.get("trainLabels") or {}
+    trains = [labels.get(no) or no for no in search.get("selectedTrains") or []]
+    shown = ", ".join(trains[:5]) + (f" 외 {len(trains) - 5}편" if len(trains) > 5 else "")
+    window = f"{_clock(search.get('depTime'))}부터" if search.get("depTime") else ""
+    where = (
+        f"{search.get('srcLocate', '')}→{search.get('dstLocate', '')}"
+        if search.get("srcLocate") or search.get("dstLocate")
+        else ""
+    )
+    return " ".join(part for part in (_day(search.get("depDate")), window, where, shown) if part)
+
+
 def _reserved(result):
+    held = [_held(item) for item in result.get("pending") or []]
     return {
         **result,
         "notes": [
+            *([f"잡은 좌석: {'; '.join(held)}"] if any(held) else []),
             "좌석을 잡았어요(결제 대기). 결제는 직접 해 주세요: 결제 기한 안에 앱이나 "
             f"코레일({result.get('paymentUrl') or settings.KORAIL_PAYMENT_URL})에서 결제하지 않으면 "
-            "예약이 취소돼요."
+            "예약이 취소돼요.",
         ],
     }
 
 
 def _now():
     return datetime.datetime.now(datetime.UTC)
+
+
+def _today():
+    """Today on the railway's clock: the date a ticket can no longer be bought for is before it."""
+    return _now().astimezone(SEOUL).date()
 
 
 def _age(raw):
@@ -521,25 +611,32 @@ def _started(result):
     return result
 
 
-def _stopped(result):
-    if result.get("stopped") or result.get("unscheduled"):
-        return result
-    return {
-        **result,
-        "notes": ["멈출 감시를 찾지 못했거나 멈추지 못했어요. get_status 로 확인해 주세요."],
-    }
+def _stopped(result, was_watching):
+    """Whether it stopped, and, when not, whether there was anything to stop."""
+    if result.get("stopped"):
+        note = "진행 중이던 감시를 멈췄어요."
+    elif result.get("unscheduled"):
+        note = "시작 예정이던 감시를 취소했어요."
+    elif was_watching:
+        note = "감시를 멈추지 못했어요. get_status 로 아직 돌고 있는지 확인해 주세요."
+    else:
+        note = "멈출 감시가 없어요. 진행 중이거나 시작 예정인 감시가 없었어요."
+    return {**result, "notes": [note]}
 
 
-def _cancelled(result):
+def _cancelled(result, before=()):
     left = result.get("pending") or []
+    gone = [_held(item) for item in before]
+    said = [f"취소한 예약: {'; '.join(gone)}"] if any(gone) else []
     if not left:
-        return result
+        return {**result, "notes": [*said, "결제 대기 예약을 취소하고 좌석을 돌려보냈어요."]}
     return {
         **result,
         "pending": [{**item, "paymentUrl": settings.KORAIL_PAYMENT_URL} for item in left],
         "notes": [
+            *said,
             f"일부만 취소했어요. 결제를 기다리는 예약이 {len(left)}건 남아 있어요. "
-            "남은 예약은 결제 기한 안에 결제하지 않으면 취소돼요."
+            "남은 예약은 결제 기한 안에 결제하지 않으면 취소돼요.",
         ],
     }
 
@@ -558,6 +655,8 @@ def _status(result):
             # what the user reads, calls it "확인 지연" once the last check is this old.
             health = "late"
         notes.append(HEALTH_NOTES.get(health, HEALTH_NOTES["unknown"]))
+        if running_text := _watching(running):
+            notes.append(f"감시 내용: {running_text}")
         seat_class, count = running.get("specialInfoShow"), running.get("passengerCount")
         strategy = running.get("seatStrategy")
         # A value the status left out is left out of the sentence too, never read as "None".
@@ -570,6 +669,9 @@ def _status(result):
             notes.append("좌석 조건: " + ", ".join(part for part in parts if part))
     if result.get("scheduled"):
         notes.append("정한 시각에 감시를 시작해요.")
+        later = result["scheduled"].get("search") if isinstance(result["scheduled"], dict) else None
+        if scheduled_text := _watching(later or {}):
+            notes.append(f"예약된 감시 내용: {scheduled_text}")
     if pending:
         notes.append(
             f"결제를 기다리는 예약이 {len(pending)}건 있어요. "
@@ -611,6 +713,8 @@ def prepare(name, arguments):
     result. Raises Invalid.
     """
     check(TOOLS[name][0]["inputSchema"], arguments)
+    if "summary" in arguments:
+        _confirmed(name, arguments)
     if name == "find_trains":
         payload = {"conditions": conditions(arguments)}
         return lambda gateway, user: _trains(gateway.list_trains(user, payload))
@@ -634,7 +738,13 @@ def prepare(name, arguments):
         payload["start_at"] = arguments["start_at"]
         return lambda gateway, user: gateway.schedule_search(user, payload)
     if name == "stop_watch":
-        return lambda gateway, user: _stopped(gateway.cancel_search(user))
+
+        def stop(gateway, user):
+            before = gateway.status(user)
+            watching = bool(before.get("running") or before.get("scheduled"))
+            return _stopped(gateway.cancel_search(user), watching)
+
+        return stop
     if name == "reserve_seat":
         payload = {
             "trainKey": arguments["trainKey"],
@@ -644,7 +754,67 @@ def prepare(name, arguments):
             "seats": arguments["seats"],
         }
         return lambda gateway, user: _reserved(gateway.reserve_designated(user, payload))
-    return lambda gateway, user: _cancelled(gateway.cancel_pending(user))
+
+    def cancel(gateway, user):
+        before = gateway.status(user).get("pending") or []
+        return _cancelled(gateway.cancel_pending(user), before)
+
+    return cancel
+
+
+def _confirmed(name, arguments):
+    """
+    The sentence the user is asked to approve must name what the call does.
+
+    The approval window prints the arguments; the summary is the one line in it a person can
+    read, so a summary that names another train or seat would approve the wrong thing. Raises
+    Invalid, before anything is spent.
+    """
+    said = re.sub(r"\s+", "", arguments["summary"]).upper()
+    missing, how = [], ""
+    if name == "reserve_seat":
+        how = "호차와 좌석 번호(예: 4호차 1C)"
+        for seat in arguments["seats"]:
+            if f"{seat['carNo']}호차" not in said:
+                missing.append(f"{seat['carNo']}호차")
+            if seat["label"].upper() not in said:
+                missing.append(seat["label"])
+    elif name == "start_watch":
+        how = "날짜·구간·열차 번호(예: 10월 19일 서울→부산 KTX 013)"
+        date = (
+            datetime.date.fromisoformat(arguments["date"]) if _is_date(arguments["date"]) else None
+        )
+        if date and not any(
+            form in said
+            for form in (
+                arguments["date"],
+                f"{date.month}월{date.day}일",
+                f"{date.month}/{date.day}",
+                f"{date.month}.{date.day}",
+            )
+        ):
+            missing.append(f"{date.month}월 {date.day}일")
+        missing += [place for place in (arguments["from"], arguments["to"]) if place not in said]
+        if len(arguments["trains"]) <= 5:
+            missing += [
+                number
+                for number in arguments["trains"]
+                if number not in said and (number.lstrip("0") or number) not in said
+            ]
+        if arguments.get("waitlist") and "대기" not in said:
+            missing.append("예약 대기")
+    if missing:
+        raise Invalid(
+            f"summary 에 {how}를 사실대로 적어 주세요. 빠진 것: {', '.join(dict.fromkeys(missing))}"
+        )
+
+
+def _is_date(raw):
+    try:
+        datetime.date.fromisoformat(raw)
+    except ValueError:
+        return False
+    return True
 
 
 def unlisted(gateway, storage_id, arguments):
@@ -659,8 +829,10 @@ def unlisted(gateway, storage_id, arguments):
     )
 
 
-def _failure(name, exc):
+def _failure(name, exc, arguments=None):
     message = str(exc)
+    if exc.status == 409 and message == SOLD_OUT_CLASS:
+        return SOLD_OUT_CLASS_NOTE
     if message == SEARCH_RUNNING:
         return SEARCH_RUNNING_NOTE if name == "find_trains" else WATCH_RUNNING_NOTE
     if exc.status in (404, 410) and name in ("get_seat_map", "reserve_seat"):
@@ -669,12 +841,23 @@ def _failure(name, exc):
     if exc.status in (401, 502, 503, 504):
         # A login that failed is a read that failed too: never a sold-out train.
         if name in ("find_trains", "get_seat_map"):
-            return f"{NOT_READ} {message}"
+            return f"{NOT_READ} {message}{_far_date(name, arguments)}"
         if exc.status != 401:
             # Not "unreachable": a refusal and a failed save come through here too. What the
             # agent needs to know is that the booking may or may not have happened.
             return f"{message} {UNSURE_OUTCOME.get(name, '')}".rstrip()
     return message
+
+
+def _far_date(name, arguments):
+    """A hint for a failed search of a date Korail may not have opened yet."""
+    try:
+        far = name == "find_trains" and (
+            datetime.date.fromisoformat(arguments["date"]) > _today() + SALE_HORIZON
+        )
+    except (KeyError, TypeError, ValueError):
+        return ""
+    return f" {NOT_ON_SALE_NOTE}" if far else ""
 
 
 def _result(value=None, error=None):
@@ -728,7 +911,7 @@ def install(app, identity, gateway, store, locks):
         except Invalid as exc:
             return _result(error=str(exc))
         except (AuthError, MiniAppError) as exc:
-            return _result(error=_failure(name, exc))
+            return _result(error=_failure(name, exc, arguments))
         except Exception as exc:
             # Upstream exception strings can contain railway credentials.
             logger.error("Agent tool %s failed (%s)", name, type(exc).__name__)

@@ -20,7 +20,7 @@ from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.access_service import AccessDecision, AccessLevel, AccessService
 from korail_bot.services.cancellation_wait_service import train_label
 from korail_bot.services.korail_service import KorailService
-from korail_bot.services.mini_app_gateway import MiniAppError, MiniAppGateway
+from korail_bot.services.mini_app_gateway import SOLD_OUT_CLASS, MiniAppError, MiniAppGateway
 from korail_bot.services.mini_app_service import MiniAppDataError, MiniAppSubmission
 from korail_bot.services.seat_map_service import (
     SeatMapExpiredError,
@@ -368,10 +368,7 @@ class MobileGateway(MiniAppGateway):
             # The seat map was drawn from another date because this class is sold out. Its
             # seats are not on sale on this train, and reading "the current car" would read
             # that date's.
-            raise MiniAppError(
-                "이 열차의 이 등급은 매진이라 좌석을 고를 수 없어요. 좌석표를 새로 불러와 주세요.",
-                409,
-            )
+            raise MiniAppError(SOLD_OUT_CLASS, 409)
         try:
             current = rail.seat_inventory(train, car_no, seat_class, count)
             hold = rail.reserve_designated(

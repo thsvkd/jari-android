@@ -9,6 +9,7 @@ IdentityStore 와 MagicMock 게이트웨이로 create_app 을 만들고, 시계�
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import html
 import re
@@ -338,8 +339,34 @@ def rpc(env, access_token, method, params=None, *, id=1, headers=None):
     )
 
 
-def call_tool(env, access_token, name, arguments=None):
-    response = rpc(env, access_token, "tools/call", {"name": name, "arguments": arguments or {}})
+SUMMARIES = {
+    "stop_watch": "진행 중인 감시를 멈춰요",
+    "cancel_reservation": "결제를 기다리는 예약을 취소해요",
+}
+
+
+def summary_for(name, arguments):
+    """A truthful one-line summary of the call, as the agent is asked to write it."""
+    if name == "reserve_seat":
+        seats = ", ".join(f"{seat['carNo']}호차 {seat['label']}" for seat in arguments["seats"])
+        return f"열차를 골라 {seats} 좌석을 예약해요"
+    if name == "start_watch":
+        date = arguments["date"]
+        month, day = int(date[5:7]), int(date[8:10])
+        waitlist = " 예약 대기를" if arguments.get("waitlist") else ""
+        trains = " ".join(arguments["trains"])
+        return f"{month}월 {day}일 {arguments['from']}→{arguments['to']} {trains}{waitlist} 감시를 시작해요"
+    return SUMMARIES[name]
+
+
+def call_tool(env, access_token, name, arguments=None, summary=True):
+    """summary=False sends the arguments as given: for what a missing or wrong one does."""
+    arguments = dict(arguments or {})
+    if summary and name in ("start_watch", "stop_watch", "reserve_seat", "cancel_reservation"):
+        # Arguments too broken to describe go without: the call is meant to be refused.
+        with contextlib.suppress(KeyError, TypeError, ValueError, IndexError, AttributeError):
+            arguments.setdefault("summary", summary_for(name, arguments))
+    response = rpc(env, access_token, "tools/call", {"name": name, "arguments": arguments})
     assert response.status_code == 200, (response.status_code, response.get_data(as_text=True))
     assert "error" not in response.json, response.json
     return response.json["result"]

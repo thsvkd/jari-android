@@ -25,6 +25,7 @@ from korail_bot.services.mini_app_gateway import SEARCH_RUNNING, MiniAppError
 from .agent_support import (
     BOOK_HINT,
     PRM_URL,
+    SUMMARIES,
     app_headers,
     bearer,
     call_tool,
@@ -671,7 +672,12 @@ def test_every_tool_that_reaches_korail_spends_the_railway_budget(
 def test_a_tool_over_the_railway_budget_never_reaches_the_gateway(env, booker):
     for _ in range(10):
         call_tool(env, booker, "cancel_reservation")
-    response = rpc(env, booker, "tools/call", {"name": "cancel_reservation", "arguments": {}})
+    response = rpc(
+        env,
+        booker,
+        "tools/call",
+        {"name": "cancel_reservation", "arguments": {"summary": SUMMARIES["cancel_reservation"]}},
+    )
     assert rate_limited(response)
     assert env.gateway.cancel_pending.call_count == 10
 
@@ -852,7 +858,7 @@ class Held:
                         "jsonrpc": "2.0",
                         "id": 2,
                         "method": "tools/call",
-                        "params": {"name": name, "arguments": {}},
+                        "params": {"name": name, "arguments": {"summary": SUMMARIES[name]}},
                     },
                     headers=bearer(token),
                 )
@@ -1150,7 +1156,12 @@ def test_at_most_nine_seats_per_reservation(env, booker, count, accepted):
 
 
 def test_a_bad_list_item_names_its_field(env, booker):
-    result = call_tool(env, booker, "reserve_seat", {**BOOK_CALLS[2][1], "seats": ["7A"]})
+    result = call_tool(
+        env,
+        booker,
+        "reserve_seat",
+        {**BOOK_CALLS[2][1], "seats": ["7A"], "summary": "7A 좌석을 예약해요"},
+    )
     assert result["isError"] is True
     assert "seats" in tool_text(result)
 
