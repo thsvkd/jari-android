@@ -787,7 +787,7 @@ def prepare(name, arguments):
 
 # What a sentence says that is not a train number: a clock time, a car, a head count.
 _NOT_A_TRAIN = re.compile(
-    r"\d{1,2}:\d{2}|\d+\s*호차|\d+\s*(?:명|석|인|매|시|분)|(?<!\d)\d{1,2}[A-Z](?![A-Z])"
+    r"\d{1,2}:\d{2}|\d+\s*호차|\d+(?:명|석|인|매|시|분)|(?<!\d)\d{1,2}[A-Z](?![A-Z])"
 )
 _CAR_MENTION = re.compile(r"(?<!\d)(\d{1,2})\s*호차")
 # A station written the way people say it: without the parenthesis, or by its common name.
@@ -818,7 +818,8 @@ def _number_in(text, number, date=None):
     first: their digits are not the train's ("서울→인천공항T1" is not train 1).
     """
     text = _STATION_NAMES.sub(" ", text)
-    for form in _date_forms(date) if date else ():
+    # With no date to go by (the key's had none), any "M월 D일" goes.
+    for form in _date_forms(date) if date else (r"\d{1,2}\s*월\s*\d{1,2}\s*일",):
         text = re.sub(form, " ", text)
     text = _NOT_A_TRAIN.sub(" ", text)
     return re.search(rf"(?<!\d)0*{int(number)}(?!\d)", text) is not None

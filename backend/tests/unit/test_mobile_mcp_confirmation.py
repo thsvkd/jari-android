@@ -576,3 +576,32 @@ def test_the_sentence_asks_for_the_parts_it_is_checked_on():
     assert "호차" in reserve
     watch_text = mcp.TOOLS["start_watch"][0]["inputSchema"]["properties"]["summary"]["description"]
     assert "출발역→도착역" in watch_text
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "11월 1일 서울→부산 KTX 013 매진이라 취소표를 감시해요",
+        "11월 1일 서울→부산 KTX 013 시간대를 넓혀 감시해요",
+        "11월 1일 서울→부산 KTX 013 석이 나면 감시해요",
+        "11월 1일 서울→부산 KTX 013 인원 2명 감시해요",
+    ],
+)
+def test_a_word_that_starts_like_a_unit_does_not_eat_the_train_number(env, booker, said):
+    env.gateway.listed_trains.return_value = ["013"]
+    env.gateway.start_search.return_value = {"started": True}
+    result = call_tool(env, booker, "start_watch", watch(said), summary=False)
+    assert not result.get("isError"), tool_text(result)
+
+
+def test_a_key_with_no_date_still_finds_the_train_past_the_sentence_date(env, booker):
+    env.gateway.reserved_train.return_value = {"trainNo": "001", "depDate": ""}
+    said = "11월 1일 KTX 043 2호차 8C 1석을 예약해요"
+    result = call_tool(env, booker, "reserve_seat", {**RESERVE, "summary": said}, summary=False)
+    assert result["isError"] is True
+
+
+def test_a_reversed_stretch_says_it_is_the_order(env, booker):
+    arguments = watch("11월 1일 부산→서울 KTX 013 감시해요")
+    text = tool_text(call_tool(env, booker, "start_watch", arguments, summary=False))
+    assert "서울→부산 순서" in text
