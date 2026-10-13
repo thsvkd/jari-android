@@ -20,7 +20,12 @@ from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.access_service import AccessDecision, AccessLevel, AccessService
 from korail_bot.services.cancellation_wait_service import train_label
 from korail_bot.services.korail_service import KorailService
-from korail_bot.services.mini_app_gateway import SOLD_OUT_CLASS, MiniAppError, MiniAppGateway
+from korail_bot.services.mini_app_gateway import (
+    SOLD_OUT_CLASS,
+    MiniAppError,
+    MiniAppGateway,
+    login_failure,
+)
 from korail_bot.services.mini_app_service import MiniAppDataError, MiniAppSubmission
 from korail_bot.services.seat_map_service import (
     SeatMapExpiredError,
@@ -50,6 +55,9 @@ RAIL_SESSION_SECONDS = 1800
 # Korail's refusals that say this account already holds the train (the Korail app sends the person
 # to the reservation list for the last two): not "someone else took the seat".
 ALREADY_BOOKED_CODES = {"WRR800029", "ERR911531", "ERR911051"}
+LOGIN_REFUSED = (
+    "코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요."
+)
 
 
 def serialized_operation(method):
@@ -535,10 +543,7 @@ class MobileGateway(MiniAppGateway):
         self._forget_rail(chat_id)
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(account.korail_id, account.korail_pw):
-            raise MiniAppError(
-                "코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요.",
-                428,
-            )
+            raise login_failure(rail, LOGIN_REFUSED, 428)
         self._rails[chat_id] = (rail, monotonic() + RAIL_SESSION_SECONDS, account.korail_id)
         return rail
 
@@ -577,10 +582,7 @@ class MobileGateway(MiniAppGateway):
 
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(credentials.korail_id, credentials.korail_pw):
-            raise MiniAppError(
-                "코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요.",
-                428,
-            )
+            raise login_failure(rail, LOGIN_REFUSED, 428)
         try:
             registered = rail.request_waitlist(
                 dep_date=submission.dep_date,

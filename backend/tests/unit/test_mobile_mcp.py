@@ -20,7 +20,12 @@ from korail_bot.mobile import api as api_module
 from korail_bot.mobile import mcp
 from korail_bot.mobile.mcp import SEARCH_RUNNING_NOTE
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
-from korail_bot.services.mini_app_gateway import SEARCH_RUNNING, MiniAppError
+from korail_bot.services.mini_app_gateway import (
+    SEARCH_RUNNING,
+    KorailLoginUnavailable,
+    MiniAppError,
+    login_failure,
+)
 
 from .agent_support import (
     BOOK_HINT,
@@ -1385,6 +1390,53 @@ def test_a_refused_booking_does_not_claim_korail_was_unreachable(env, booker):
     text = tool_text(call_tool(env, booker, "cancel_reservation"))
     assert "닿지 못했어요" not in text
     assert "get_status" in text
+
+
+def _korail_in_maintenance():
+    rail = SimpleNamespace(
+        login_unavailable=True, login_unavailable_notice="01시 30분 ~ 04시 30분 점검"
+    )
+    return login_failure(rail, "코레일에 로그인하지 못했어요. 계정을 다시 연결해 주세요.", 428)
+
+
+def test_a_watch_korail_would_not_log_in_for_says_maintenance_not_account_or_maybe(env, booker):
+    # Live on 2026-10-14 01:40 KST: Korail's maintenance window read as "계정을 다시 연결" and as a
+    # watch that may have started.
+    env.gateway.listed_trains.return_value = ["013"]
+    env.gateway.start_search.side_effect = _korail_in_maintenance()
+    text = tool_text(call_tool(env, booker, "start_watch", {**TRIP, "trains": ["013"]}))
+    assert "점검" in text and "01시 30분" in text
+    assert "다시 연결" not in text
+    assert "get_status" not in text
+
+
+def test_a_search_korail_would_not_log_in_for_is_a_failed_read(env, reader):
+    env.gateway.list_trains.side_effect = _korail_in_maintenance()
+    text = tool_text(call_tool(env, reader, "find_trains", TRIP))
+    assert text.startswith(mcp.NOT_READ)
+    assert "점검" in text
+
+
+def test_a_far_search_korail_would_not_log_in_for_is_not_blamed_on_the_sale_date(env, reader):
+    env.gateway.list_trains.side_effect = _korail_in_maintenance()
+    far = (mcp._today() + datetime.timedelta(days=70)).isoformat()
+    text = tool_text(call_tool(env, reader, "find_trains", {**TRIP, "date": far}))
+    assert "점검" in text
+    assert mcp.NOT_ON_SALE_NOTE not in text
+
+
+def test_a_login_korail_turned_down_still_says_to_check_the_account():
+    rail = SimpleNamespace(login_unavailable=False, login_unavailable_notice=None)
+    error = login_failure(rail, "회원번호와 비밀번호를 다시 확인해 주세요.", 401)
+    assert (error.message, error.status) == ("회원번호와 비밀번호를 다시 확인해 주세요.", 401)
+    assert not isinstance(error, KorailLoginUnavailable)
+
+
+def test_korail_down_without_a_notice_says_it_is_not_the_account():
+    rail = SimpleNamespace(login_unavailable=True, login_unavailable_notice=None)
+    error = login_failure(rail, "계정을 다시 연결해 주세요.", 428)
+    assert error.status == 502
+    assert "계정 문제는 아니니" in error.message
 
 
 def test_listing_trains_during_a_watch_says_what_to_do_instead_of_stopping_it(env, reader):

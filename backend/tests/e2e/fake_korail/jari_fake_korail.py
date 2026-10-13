@@ -110,6 +110,9 @@ DEFAULT_SCENARIO = {
     # 코레일이 호차를 하나도 안 줘서 다른 날짜의 편성으로 좌석표를 그린 좌석 등급(general | special).
     # 실제 서버는 이때 seat_layout_is_reference 가 참이 되고 좌석표의 빈자리는 그날의 것이에요.
     "reference_layout": [],
+    # 코레일이 취소를 거절하는 예약번호. 번호는 예약이 잡힌 뒤에야 알 수 있어, 테스트가 /status 에서 읽어 넣어요.
+    # 거절한 호출도 기록에 "cancel" 로 남고(refused: true), 예약은 그대로 결제 대기예요.
+    "cancel_refused": [],
     "trains": DEFAULT_TRAINS,
 }
 
@@ -402,8 +405,9 @@ class FakeKorail:
         return ReservationOutcome[scenario()["outcome"]]
 
     def cancel_reservation(self, rsv_id: str) -> bool:
-        _log("cancel", rsv_id=rsv_id)
-        return True
+        refused = rsv_id in scenario()["cancel_refused"]
+        _log("cancel", rsv_id=rsv_id, refused=refused)
+        return not refused
 
     def request_waitlist(
         self, *, dep_date, src_locate, dst_locate, dep_time, train_no, passenger_count

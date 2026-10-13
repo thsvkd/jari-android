@@ -462,3 +462,82 @@ def test_a_sold_out_class_drawn_from_another_date_offers_no_seat_to_book(stack, 
         assert not any(call["event"] == "reserve_designated" for call in client.korail_log())
     finally:
         client.scenario(reference_layout=[])
+
+
+def test_a_partly_refused_cancel_names_what_went_back_and_keeps_the_rest_pending(stack, client):
+    # 코레일이 두 예약 중 하나만 취소해 주는 경우는 실제 코레일에서 일부러 만들 수 없어, 가짜 코레일이 거절해요.
+    # 결제 대기 예약이 둘 이상인 경우는 하나의 찾기가 여러 건을 따로 잡을 때뿐이에요(MCP start_watch 는 늘
+    # 연속 좌석 한 건이라 만들지 못해요). 그래서 앱이 쓰는 /search 에 "독립" 좌석 계획(2명, 두 열차에 한 석씩)을
+    # 실어 찾기 워커가 실제로 두 건을 잡게 해요. 저장소를 직접 쓰지 않아요.
+    agent = connect(stack, client, allow_booking=True)
+    conditions = {
+        "v": 1,
+        "action": "prepare_search",
+        "dep_date": trip()["date"].replace("-", ""),
+        "src_station": "서울",
+        "dst_station": "부산",
+        "dep_time": "0700",
+        "max_dep_time": "2400",
+        "train_type": "1",
+        "seat_option": "2",
+        "passenger_count": 2,
+        "seat_strategy": "2",
+        "seat_preference": "",
+    }
+    trains = {
+        train["no"]: train
+        for train in client.call("POST", "/trains", {"conditions": conditions})["trains"]
+    }
+    wanted = []
+    for number, label in (("00101", "1A"), ("00107", "1B")):
+        seats = client.call(
+            "GET",
+            f"/trains/{trains[number]['trainKey']}/cars/1/seats?seatClass=general&passengerCount=1",
+        )["seats"]
+        seat = next(seat for seat in seats if seat["label"] == label and seat["salePossible"])
+        wanted.append(
+            {
+                "trainNo": number,
+                "seatClass": "general",
+                "targets": [
+                    {"carNo": 1, "seatNo": seat["seatNo"], "label": seat["label"]},
+                ],
+            }
+        )
+    plan = {"strategy": "independent", "passengerCount": 2, "trains": wanted}
+    started = client.call(
+        "POST",
+        "/search",
+        {"conditions": {**conditions, "seat_plan": plan}, "trains": ["00101", "00107"]},
+    )
+    assert started["started"] is True
+
+    status = client.wait_for(lambda status: len(status["pending"]) == 2 and not status["running"])
+    by_train = {
+        number: item["reservationId"]
+        for item in status["pending"]
+        for number in ("00101", "00107")
+        if number in item["trainInfo"]
+    }
+    assert sorted(by_train) == ["00101", "00107"], status["pending"]
+    gone_id, kept_id = by_train["00101"], by_train["00107"]
+    client.scenario(cancel_refused=[kept_id])
+
+    said = "결제를 기다리는 00101편, 00107편 예약을 모두 취소해요"
+    result = agent.tool("cancel_reservation", {"summary": said})
+
+    assert not result.get("isError"), result
+    notes = result["structuredContent"]["notes"]
+    assert notes[0].startswith("취소한 예약: ") and "00101" in notes[0] and "00107" not in notes[0]
+    assert notes[1].startswith("일부만 취소했어요. 결제를 기다리는 예약이 1건 남아 있어요")
+    [left] = result["structuredContent"]["pending"]
+    assert left["reservationId"] == kept_id and "00107" in left["trainInfo"]
+    assert left["paymentUrl"].startswith("https://")
+    attempts = [call for call in client.korail_log() if call["event"] == "cancel"]
+    assert sorted((call["rsv_id"], call["refused"]) for call in attempts) == sorted(
+        [(gone_id, False), (kept_id, True)]
+    )
+    # 거절당한 예약은 그대로 결제 대기예요. 취소됐다고 기록되지 않아요.
+    [still] = agent.tool("get_status")["structuredContent"]["pending"]
+    assert still["reservationId"] == kept_id
+    assert [item["reservationId"] for item in client.call("GET", "/status")["pending"]] == [kept_id]

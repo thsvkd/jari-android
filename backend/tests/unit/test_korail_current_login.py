@@ -230,3 +230,80 @@ def test_a_login_korail_turns_down_is_a_refusal(monkeypatch):
     assert service.login("1234567890", "synthetic-password") is False
 
     assert service.login_unavailable is False
+
+
+MAINTENANCE = "시스템 점검 작업으로‘26.10.14. 01시 30분 ~ 04시 30분까지 승차권 예매 서비스를 일시 중지 하오니 이점 양해 부탁드립니다."
+
+
+def _korail_in_maintenance(notice=MAINTENANCE):
+    """Korail's service check answering the way it did live during a maintenance window."""
+
+    def reply(request):
+        if request.url.path.endswith("MobileService.cache"):
+            return httpx.Response(
+                200, json={"strResult": "FAIL", "h_msg_cd": "S100", "h_msg_txt": notice}
+            )
+        raise AssertionError(f"no login is sent in maintenance: {request.url.path}")
+
+    return KorailClient(KorailConfig(enable_dynapath=True), transport=httpx.MockTransport(reply))
+
+
+def test_a_maintenance_window_is_korail_down_with_its_own_notice_not_a_refusal(monkeypatch):
+    service = KorailService()
+    monkeypatch.setattr(service, "_build_modern_client", _korail_in_maintenance)
+
+    assert service.login("1234567890", "synthetic-password") is False
+
+    assert service.login_unavailable is True
+    assert service.login_unavailable_notice == MAINTENANCE
+
+
+def test_a_refusal_after_maintenance_drops_the_old_notice(monkeypatch):
+    service = KorailService()
+    monkeypatch.setattr(service, "_build_modern_client", _korail_in_maintenance)
+    service.login("1234567890", "synthetic-password")
+    refused = httpx.Response(
+        200, json={"strResult": "FAIL", "h_msg_cd": "WRC000392", "h_msg_txt": "비밀번호 오류"}
+    )
+    monkeypatch.setattr(service, "_build_modern_client", lambda: _korail_answering_login(refused))
+
+    assert service.login("1234567890", "synthetic-password") is False
+
+    assert service.login_unavailable is False
+    assert service.login_unavailable_notice is None
+
+
+def test_a_maintenance_window_without_a_sentence_is_still_korail_down(monkeypatch):
+    service = KorailService()
+    monkeypatch.setattr(service, "_build_modern_client", lambda: _korail_in_maintenance(""))
+
+    assert service.login("1234567890", "synthetic-password") is False
+
+    assert service.login_unavailable is True
+    assert service.login_unavailable_notice is None
+
+
+def test_a_long_maintenance_sentence_comes_back_as_one_short_line(monkeypatch):
+    long_notice = "점검\n" + "안내 " * 200
+    service = KorailService()
+    monkeypatch.setattr(
+        service, "_build_modern_client", lambda: _korail_in_maintenance(long_notice)
+    )
+
+    service.login("1234567890", "synthetic-password")
+
+    assert "\n" not in service.login_unavailable_notice
+    assert len(service.login_unavailable_notice) <= 200
+
+
+def test_s100_from_the_login_itself_stays_a_refusal(monkeypatch):
+    # Only the service check, before the password is sent, is read as maintenance.
+    service = KorailService()
+    refused = httpx.Response(
+        200, json={"strResult": "FAIL", "h_msg_cd": "S100", "h_msg_txt": "확인이 필요해요"}
+    )
+    monkeypatch.setattr(service, "_build_modern_client", lambda: _korail_answering_login(refused))
+
+    assert service.login("1234567890", "synthetic-password") is False
+
+    assert service.login_unavailable is False

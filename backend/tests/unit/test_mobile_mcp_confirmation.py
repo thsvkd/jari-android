@@ -419,6 +419,38 @@ def test_a_watch_sentence_cannot_borrow_payment_waiting_for_a_waitlist(env, book
     assert "예약 대기" in tool_text(result)
 
 
+@pytest.mark.parametrize("seat", [None, "general"])
+def test_a_waitlist_is_said_as_the_general_class_it_is_applied_for(env, booker, seat):
+    # Korail's standby goes in for 일반실 (request_waitlist), so that is the true sentence, seat
+    # left out ("any") or not. Refused live on 2026-10-14 when seat was left out.
+    env.gateway.listed_trains.return_value = ["013"]
+    env.gateway.start_search.return_value = {"started": False, "waitlisted": True, "trainNo": "013"}
+    said = "11월 1일 서울→부산 KTX 013 열차에 코레일 예약 대기를 신청해요(1명, 일반실)"
+    arguments = watch(said, waitlist=True, **({"seat": seat} if seat else {}))
+    result = call_tool(env, booker, "start_watch", arguments, summary=False)
+    assert not result.get("isError"), tool_text(result)
+
+
+def test_a_waitlist_for_special_is_refused_before_anything_is_spent(env, booker):
+    env.gateway.listed_trains.return_value = ["013"]
+    said = "11월 1일 서울→부산 KTX 013 특실 예약 대기를 신청해요"
+    result = call_tool(
+        env, booker, "start_watch", watch(said, waitlist=True, seat="special"), summary=False
+    )
+    assert result["isError"] is True
+    assert "일반실로만" in tool_text(result)
+    env.gateway.start_search.assert_not_called()
+
+
+def test_a_waitlist_sentence_does_not_promise_special_as_a_fallback(env, booker):
+    env.gateway.listed_trains.return_value = ["013"]
+    said = "11월 1일 서울→부산 KTX 013 예약 대기를 신청해요(일반실 우선, 없으면 특실)"
+    result = call_tool(env, booker, "start_watch", watch(said, waitlist=True), summary=False)
+    assert result["isError"] is True
+    assert "특실을 빼" in tool_text(result)
+    env.gateway.start_search.assert_not_called()
+
+
 def test_a_watch_sentence_that_says_waitlist_when_it_is_not_one_is_refused(env, booker):
     said = "11월 1일 서울→부산 KTX 013 예약 대기를 신청해요"
     result = call_tool(env, booker, "start_watch", watch(said), summary=False)

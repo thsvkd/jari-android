@@ -98,6 +98,8 @@ class RailService(ABC):
     #: a Korail blip at that moment used to end the search as if the password
     #: were wrong - which is worth one more try, where a password is not.
     login_unavailable: bool = False
+    #: The operator's own sentence when it said it is down for maintenance; None otherwise.
+    login_unavailable_notice: str | None = None
 
     def __init__(
         self,

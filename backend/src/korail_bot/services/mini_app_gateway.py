@@ -131,6 +131,26 @@ class MiniAppError(Exception):
         self.status = status
 
 
+class KorailLoginUnavailable(MiniAppError):
+    """Korail did not take the login at all: nothing that needed it can have happened."""
+
+
+KORAIL_DOWN = "코레일이 지금 로그인을 받지 않아요. 계정 문제는 아니니 잠시 후 다시 시도해 주세요."
+
+
+def login_failure(rail, refused: str, status: int) -> MiniAppError:
+    """
+    Why a login failed, for the person: Korail down (or in a maintenance window) is not a password
+    to check or an account to connect again. 502 is "Korail did not answer".
+    """
+    if getattr(rail, "login_unavailable", False) is not True:
+        return MiniAppError(refused, status=status)
+    notice = getattr(rail, "login_unavailable_notice", None)
+    if isinstance(notice, str) and notice:
+        return KorailLoginUnavailable(f"코레일 시스템 점검 중이에요. 코레일 안내: {notice}", 502)
+    return KorailLoginUnavailable(KORAIL_DOWN, 502)
+
+
 @dataclass(frozen=True)
 class RailState:
     """What the app needs to know about Korail before offering it."""
@@ -339,9 +359,8 @@ class MiniAppGateway:
 
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(normalized, password):
-            raise MiniAppError(
-                "코레일에 로그인하지 못했어요. 회원번호와 비밀번호를 다시 확인해 주세요.",
-                status=401,
+            raise login_failure(
+                rail, "코레일에 로그인하지 못했어요. 회원번호와 비밀번호를 다시 확인해 주세요.", 401
             )
 
         self.conversation._remember_account(chat_id, normalized, password)
@@ -690,10 +709,11 @@ class MiniAppGateway:
             # login() answers False for a timeout as well as for a refused
             # password, so a failure here is no proof the account is stale.
             # Deleting it would cost the user their link over a Korail hiccup.
-            raise MiniAppError(
+            raise login_failure(
+                rail,
                 "코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, "
                 "계속되면 계정을 다시 연결해 주세요.",
-                status=401,
+                401,
             )
 
         session.credentials = account.as_credentials()

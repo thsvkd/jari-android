@@ -91,6 +91,12 @@ _LOGIN_UNAVAILABLE = (
 )
 
 
+# Korail's notice that it has stopped selling for a maintenance window ("시스템 점검 작업으로 …
+# 승차권 예매 서비스를 일시 중지"). It comes from the service check before the login POST, as a plain
+# KorailAppError (seen live on 2026-10-14 01:40 KST), so it is no verdict on the credentials either.
+_KORAIL_MAINTENANCE_CODE = "S100"
+
+
 class _KorailUnreachable(Exception):
     """A login that never got an answer about the credentials; see _LOGIN_UNAVAILABLE."""
 
@@ -108,7 +114,27 @@ def _korail_unreachable(exc: BaseException) -> bool:
         return True
     if isinstance(exc, KorailAuthError) and isinstance(exc.__cause__, _LOGIN_UNAVAILABLE):
         return True
+    if _maintenance_notice(exc) is not None:
+        return True
     return isinstance(exc, _LOGIN_UNAVAILABLE)
+
+
+def _maintenance_notice(exc: BaseException) -> str | None:
+    """
+    Korail's maintenance sentence when that is why a login failed ("" if it gave none), else None.
+
+    Only the service check's own answer counts: it comes before the login POST, so it says
+    nothing about the account and carries nothing of the request. An S100 the login POST itself
+    returned (wrapped in KorailAuthError) is left a refusal.
+    """
+    if isinstance(exc, _KorailUnreachable):
+        exc = exc.__cause__ or exc
+    if isinstance(exc, KorailAuthError) or not isinstance(exc, KorailAppError):
+        return None
+    if getattr(exc, "code", None) != _KORAIL_MAINTENANCE_CODE:
+        return None
+    # One line, and short: it goes into the app's error and an agent's result as it is.
+    return " ".join(str(getattr(exc, "message", None) or "").split())[:200]
 
 
 # PNR-keyed unpaid seat detail. korail2 never calls this; ReservationView
@@ -436,6 +462,7 @@ class KorailService(RailService):
             True if login successful, False otherwise. login_unavailable
             then says whether Korail could not be reached at all.
         """
+        self.login_unavailable_notice = None
         try:
             self._logged_in = self._login_with_current_api(username, password)
             self.login_unavailable = False
@@ -444,6 +471,7 @@ class KorailService(RailService):
                 raise
             self._logged_in = False
             self.login_unavailable = True
+            self.login_unavailable_notice = _maintenance_notice(exc) or None
         if self._logged_in:
             self._username = username
             self._password = password

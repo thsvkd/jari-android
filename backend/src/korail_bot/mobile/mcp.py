@@ -21,7 +21,12 @@ from korail_bot.config.settings import settings
 from korail_bot.mobile.identity import AuthError
 from korail_bot.mobile.oauth import BOOK, MCP_PATH, PRM_PATH, SCOPES
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
-from korail_bot.services.mini_app_gateway import SEARCH_RUNNING, SOLD_OUT_CLASS, MiniAppError
+from korail_bot.services.mini_app_gateway import (
+    SEARCH_RUNNING,
+    SOLD_OUT_CLASS,
+    KorailLoginUnavailable,
+    MiniAppError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +248,10 @@ TOOLS = {
                         },
                         "description": "find_trains 결과의 trainNo 를 그대로 넣어요",
                     },
-                    "waitlist": {"type": "boolean", "description": "기본 false"},
+                    "waitlist": {
+                        "type": "boolean",
+                        "description": "기본 false. 예약 대기는 일반실로 신청돼요",
+                    },
                     "start_at": {
                         "type": "string",
                         "maxLength": 64,
@@ -1050,7 +1058,18 @@ def _confirmed(name, arguments):
     missing, how = [], ""
     if name in ("reserve_seat", "start_watch"):
         _same_party(text, arguments.get("passengers", 1))
-        _same_class(text, arguments.get("seatClass") or arguments.get("seat", "any"))
+        seat_class = arguments.get("seatClass") or arguments.get("seat", "any")
+        if arguments.get("waitlist"):
+            # Korail's standby is applied for in 일반실 whatever seat says (request_waitlist).
+            if seat_class == "special":
+                raise Invalid(
+                    "예약 대기는 일반실로만 신청돼요. seat 를 general 로 넣거나 빼 주세요."
+                )
+            if re.search(_CLASSES["special"], text):
+                # Not even as a fallback ("일반실 우선, 없으면 특실"): there is none.
+                raise Invalid("예약 대기는 일반실로만 신청돼요. summary 에서 특실을 빼 주세요.")
+            seat_class = "general"
+        _same_class(text, seat_class)
     if name == "reserve_seat":
         how = "호차와 좌석 번호(예: 4호차 1C)"
         missing = _seats_missing(text, arguments["seats"])
@@ -1405,7 +1424,12 @@ def _failure(name, exc, arguments=None):
     if exc.status in (401, 502, 503, 504):
         # A login that failed is a read that failed too: never a sold-out train.
         if name in ("find_trains", "get_seat_map"):
-            return f"{NOT_READ} {message}{_far_date(name, arguments)}"
+            # Korail said why (down, or a maintenance window): not a date it does not sell yet.
+            hint = "" if isinstance(exc, KorailLoginUnavailable) else _far_date(name, arguments)
+            return f"{NOT_READ} {message}{hint}"
+        if isinstance(exc, KorailLoginUnavailable):
+            # Korail never took the login, so nothing was booked, started or given back.
+            return message
         if exc.status != 401:
             # Not "unreachable": a refusal and a failed save come through here too. What the
             # agent needs to know is that the booking may or may not have happened.
