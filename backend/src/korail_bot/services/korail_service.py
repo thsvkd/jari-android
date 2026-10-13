@@ -51,6 +51,7 @@ from korail_mobile_api.errors import (
 
 from korail_bot.config.settings import settings
 from korail_bot.models import ReservationOutcome, SeatPreference, SeatTarget
+from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.rail_service import (
     RailService,
     SearchProgress,
@@ -650,7 +651,24 @@ class KorailService(RailService):
         self._remember_wanted(
             place, wanted, [(t.train_no, str(t.dep_time or "").zfill(6)) for t in rows]
         )
-        return rows
+        return [t for t in rows if self._on_the_stretch(t, src, dst)]
+
+    @staticmethod
+    def _on_the_stretch(train, src: str, dst: str) -> bool:
+        """
+        Whether a korail2 row runs the stretch asked for. korail2 reads 서울 as the city: its 서울→부산
+        page holds 703 청량리→부전 and its 서울→강릉 page 851 청량리→강릉 (production, 2026-10-13).
+        The current API, which the train list uses, answers for the station itself, and booking such
+        a row would sell a ticket from another station. A name that is no known station (spelled
+        differently) is kept: dropping a real train is the worse mistake for a watch.
+        """
+        for named, asked in (
+            (getattr(train, "dep_name", None), src),
+            (getattr(train, "arr_name", None), dst),
+        ):
+            if isinstance(named, str) and named != asked and named in FALLBACK_STATIONS:
+                return False
+        return True
 
     def _wanted_start(self, place: tuple, wanted: set, dep_time: str) -> tuple[str, str | None]:
         """Where to start asking, and the departure after which the watched trains cannot be."""

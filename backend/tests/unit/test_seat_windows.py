@@ -507,3 +507,53 @@ def test_a_real_waiting_list_train_is_not_dropped_by_the_end_of_the_window():
     )
 
     assert [t.train_no for t in found] == ["013"]
+
+
+def _row(number, dep, dep_code, arr, arr_code, clock):
+    return Train(
+        {
+            "h_trn_clsf_cd": "16" if number.startswith(("7", "8")) else "100",
+            "h_trn_clsf_nm": "KTX-이음" if number.startswith(("7", "8")) else "KTX",
+            "h_trn_gp_cd": "100",
+            "h_trn_no": number,
+            "h_dpt_rs_stn_nm": dep,
+            "h_dpt_rs_stn_cd": dep_code,
+            "h_dpt_dt": "20261020",
+            "h_dpt_tm": clock,
+            "h_arv_rs_stn_nm": arr,
+            "h_arv_rs_stn_cd": arr_code,
+            "h_arv_dt": "20261020",
+            "h_arv_tm": "235900",
+            "h_run_dt": "20261020",
+            "h_rsv_psb_flg": "Y",
+            "h_rsv_psb_nm": "예약가능",
+            "h_spe_rsv_cd": "11",
+            "h_gen_rsv_cd": "11",
+            "h_wait_rsv_flg": "-1",
+        }
+    )
+
+
+def test_a_legacy_city_search_does_not_hand_the_watch_a_train_from_another_station():
+    # 운영 korail2 의 서울→부산 첫 쪽(2026-10-13): 서울을 도시로 읽어 청량리→부전 703 이 끼어 있었어요.
+    # 그 열차를 잡으면 사용자가 고르지 않은 역의 승차권이 돼요.
+    page = [
+        _row("007", "서울", "0001", "부산", "0020", "060300"),
+        _row("703", "청량리", "0090", "부전", "0028", "062700"),
+        _row("009", "서울", "0001", "부산", "0020", "063300"),
+    ]
+    service = KorailService()
+    service._logged_in = True
+    service._korail_instance = _Legacy(page)
+
+    found = service.search_trains(
+        "20261020", "서울", "부산", "000000", "2400", include_no_seats=True, verbose=False
+    )
+
+    assert [t.train_no for t in found] == ["007", "009"]
+
+
+def test_a_station_spelled_unlike_any_known_one_is_kept():
+    service = KorailService()
+    oddly = _row("013", "서울역", "0001", "부산", "0020", "072700")
+    assert service._on_the_stretch(oddly, "서울", "부산")
