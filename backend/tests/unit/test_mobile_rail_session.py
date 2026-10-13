@@ -6,7 +6,12 @@ from unittest.mock import MagicMock
 
 import fakeredis
 import pytest
-from korail_mobile_api.errors import KorailAuthError, KorailSessionExpiredError
+from korail_mobile_api.errors import (
+    KorailAppError,
+    KorailAuthError,
+    KorailSessionExpiredError,
+    KorailSoldOutError,
+)
 
 from korail_bot.mobile import gateway as gateway_module
 from korail_bot.mobile.config import MobileConfig
@@ -309,3 +314,124 @@ def test_a_train_list_and_one_car_are_read_again_after_an_expiry(tmp_path, monke
     )
     assert listed["trains"] == []
     assert rail.search_selectable_trains.call_count == 2
+
+
+AUTH_GONE = KorailAppError("[3]인증정보에 문제가 있습니다.", "[3]인증정보에 문제가 있습니다.")
+
+
+def test_a_booking_after_a_long_idle_that_korail_calls_an_auth_problem_is_asked_again(
+    tmp_path, monkeypatch
+):
+    # Production, 2026-10-14 05:31 KST: 29.5 idle minutes after the seat map, the booking's
+    # seat read came back FAIL "[3]인증정보에 문제가 있습니다." (not P058) and the booking failed.
+    runtime, owner, rails = _expiring_user(tmp_path, monkeypatch)
+    train = SimpleNamespace(
+        train_no="207",
+        departure_date=(utc_now() + timedelta(days=3)).strftime("%Y%m%d"),
+        departure_time="090400",
+        arrival_time="100800",
+        departure_station_name="서울",
+        arrival_station_name="대전",
+        train_class_name="KTX",
+    )
+    key = runtime.gateway.seat_maps.remember_train(owner, train)
+    runtime.gateway.seat_cars(owner, key, "general", 1)
+    rail = rails[0]
+    rail.seat_layout_is_reference.return_value = False
+    rail.seat_inventory.side_effect = [AUTH_GONE, MagicMock()]
+    rail.reserve_designated.return_value = SimpleNamespace(pnr_no="PRIVATE")
+    rail.reservation_id.return_value = "R1"
+    rail.payment_due.return_value = (train.departure_date, "101500")
+
+    booked = runtime.gateway.reserve_designated(
+        owner,
+        {
+            "trainKey": key,
+            "seatClass": "general",
+            "passengerCount": 1,
+            "carNo": 1,
+            "seats": [{"carNo": 1, "seatNo": "53", "label": "14A"}],
+        },
+    )
+
+    assert booked["reserved"] is True
+    assert rail.login.call_count == 2
+    assert rail.reserve_designated.call_count == 1
+
+
+def test_other_korail_refusals_are_not_mistaken_for_a_gone_login(tmp_path, monkeypatch):
+    runtime, owner, rails = _expiring_user(tmp_path, monkeypatch)
+    key = runtime.gateway.seat_maps.remember_train(owner, SimpleNamespace(train_no="015"))
+    runtime.gateway.seat_cars(owner, key, "general", 1)
+    rail = rails[0]
+    rail.seat_cars.side_effect = KorailSoldOutError("ERR211161", "잔여석이 없습니다")
+
+    with pytest.raises(MiniAppError):
+        runtime.gateway.seat_cars(owner, key, "general", 1)
+
+    assert rail.login.call_count == 1
+    assert rail.seat_cars.call_count == 2
+
+
+def test_an_auth_problem_on_a_booking_that_names_a_reservation_is_not_booked_again(
+    tmp_path, monkeypatch
+):
+    runtime, owner, rails = _expiring_user(tmp_path, monkeypatch)
+    key = runtime.gateway.seat_maps.remember_train(owner, SimpleNamespace(train_no="207"))
+    runtime.gateway.seat_cars(owner, key, "general", 1)
+    rail = rails[0]
+    rail.seat_layout_is_reference.return_value = False
+    rail.reserve_designated.side_effect = KorailAppError(
+        "[3]인증정보에 문제가 있습니다.",
+        "[3]인증정보에 문제가 있습니다.",
+        raw={"strResult": "FAIL", "h_pnr_no": "320261018000000"},
+    )
+
+    with pytest.raises(MiniAppError) as failure:
+        runtime.gateway.reserve_designated(
+            owner,
+            {
+                "trainKey": key,
+                "seatClass": "general",
+                "passengerCount": 1,
+                "carNo": 1,
+                "seats": [{"carNo": 1, "seatNo": "53", "label": "14A"}],
+            },
+        )
+
+    assert failure.value.status == 502
+    assert rail.login.call_count == 1
+    assert rail.reserve_designated.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [("[3]인증정보에 문제가 있습니다.", None), (None, "[3]인증정보에 문제가 있습니다.")],
+)
+def test_the_auth_problem_is_read_from_either_its_code_or_its_message(
+    tmp_path, monkeypatch, code, message
+):
+    runtime, owner, rails = _expiring_user(tmp_path, monkeypatch)
+    key = runtime.gateway.seat_maps.remember_train(owner, SimpleNamespace(train_no="015"))
+    runtime.gateway.seat_cars(owner, key, "general", 1)
+    rail = rails[0]
+    rail.seat_cars.side_effect = [KorailAppError(code, message), SimpleNamespace(cars=())]
+
+    assert runtime.gateway.seat_cars(owner, key, "general", 1)["cars"] == []
+    assert rail.login.call_count == 2
+
+
+def test_an_auth_problem_that_comes_back_after_a_fresh_login_is_a_failed_read(
+    tmp_path, monkeypatch
+):
+    runtime, owner, rails = _expiring_user(tmp_path, monkeypatch)
+    key = runtime.gateway.seat_maps.remember_train(owner, SimpleNamespace(train_no="015"))
+    runtime.gateway.seat_cars(owner, key, "general", 1)
+    rails[0].seat_cars.side_effect = AUTH_GONE
+
+    with pytest.raises(MiniAppError) as failure:
+        runtime.gateway.seat_cars(owner, key, "general", 1)
+
+    assert failure.value.status == 502
+    assert rails[0].login.call_count == 2
+    assert rails[0].seat_cars.call_count == 3

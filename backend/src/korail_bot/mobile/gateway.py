@@ -7,6 +7,7 @@ from time import monotonic
 
 from korail2 import TrainType
 from korail_mobile_api.errors import (
+    KorailAppError,
     KorailAuthContinuationRequired,
     KorailAuthError,
     KorailReservationRefusedError,
@@ -61,6 +62,18 @@ UNSURE_BOOKING = "예약이 됐는지 확인하지 못했어요. 코레일 앱�
 LOGIN_REFUSED = (
     "코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요."
 )
+
+
+# Korail's answer to a request on a login it has since dropped, when it is not P058: after ~30
+# idle minutes a seat read came back FAIL with "[3]인증정보에 문제가 있습니다." as its code and
+# message (production, 2026-10-14 05:31 KST), a plain KorailAppError.
+_LOGIN_GONE_TEXT = "인증정보에 문제"
+
+
+def _login_gone(exc):
+    """Whether Korail turned a request away because the login behind it is gone."""
+    said = f"{getattr(exc, 'code', '') or ''} {getattr(exc, 'message', '') or ''}"
+    return _LOGIN_GONE_TEXT in said
 
 
 def serialized_operation(method):
@@ -584,10 +597,12 @@ class MobileGateway(MiniAppGateway):
 
         Korail drops an idle login sooner than RAIL_SESSION_SECONDS keeps it (production: gone
         after 28 idle minutes, KorailSessionExpiredError P058), so a booking made a while after
-        the seat map failed once. The client also forgets a login a swallowed P058 ended, and
-        then refuses before sending anything (KorailAuthError). The same rail logs in again rather
-        than a new one: it keeps the reference formation its train keys were drawn with, and only
-        the server-side seat context is set up afresh.
+        the seat map failed once. After a longer idle Korail answered a seat read FAIL with
+        "인증정보에 문제" instead (a plain KorailAppError, _login_gone). The client also forgets a
+        login a swallowed P058 ended, and then refuses before sending anything
+        (KorailAuthError). The same rail logs in again rather than a new one: it keeps the
+        reference formation its train keys were drawn with, and only the server-side seat
+        context is set up afresh.
 
         A booking is asked again only when the expiry carries no reservation number: Korail
         checks the session first, but an answer that names a reservation means something may
@@ -597,7 +612,9 @@ class MobileGateway(MiniAppGateway):
             return call()
         except KorailAuthContinuationRequired:
             raise
-        except KorailAuthError as exc:
+        except (KorailAuthError, KorailAppError) as exc:
+            if isinstance(exc, KorailAppError) and not _login_gone(exc):
+                raise
             raw = getattr(exc, "raw", None)
             if booking and isinstance(raw, dict) and raw.get("h_pnr_no"):
                 logger.critical(
