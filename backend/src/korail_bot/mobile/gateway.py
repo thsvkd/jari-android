@@ -188,8 +188,8 @@ class MobileGateway(MiniAppGateway):
     @staticmethod
     def _watchable(option, submission, ktx_only):
         # The seat-plan worker filters on the train group; the older worker asks Korail for KTX
-        # (korail2 TrainType.KTX), which may or may not mean the same trains for odd ones such as
-        # KTX-이음. The group is the best test the list carries; names are the fallback.
+        # (korail2 TrainType.KTX, group 100). Both APIs put KTX-이음 in group 100 (production,
+        # 2026-10-13), so the group is the test; names are the fallback.
         group = option.get("trainGroup")
         if ktx_only and not (
             group == "KTX" if group else str(option.get("name") or "").startswith("KTX")
@@ -501,6 +501,8 @@ class MobileGateway(MiniAppGateway):
         return {
             "trainNo": str(getattr(train, "train_no", "") or ""),
             "depDate": str(getattr(train, "departure_date", "") or ""),
+            "from": str(getattr(train, "departure_station_name", "") or ""),
+            "to": str(getattr(train, "arrival_station_name", "") or ""),
         }
 
     def _seat_train(self, chat_id, train_key):

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import datetime
 import hashlib
 import html
 import re
@@ -19,6 +20,7 @@ import time
 from dataclasses import dataclass
 from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlencode, urlsplit
+from zoneinfo import ZoneInfo
 
 from werkzeug.security import generate_password_hash
 
@@ -34,6 +36,7 @@ LOOPBACK_CALLBACK = "http://localhost:53682/callback"
 PASSWORD = "a long secure passphrase"
 HIDDEN = re.compile(r'<input type="hidden" name="([a-z_]+)" value="([^"]*)">')
 PROTOCOL = "2025-06-18"
+SEOUL = ZoneInfo("Asia/Seoul")
 BOOK_HINT = "예약까지 맡기기"
 
 
@@ -345,17 +348,46 @@ SUMMARIES = {
 }
 
 
-def summary_for(name, arguments):
-    """A truthful one-line summary of the call, as the agent is asked to write it."""
+def _watch_said(search):
+    day = str((search or {}).get("depDate") or "")
+    parts = [f"{int(day[4:6])}월 {int(day[6:8])}일"] if len(day) == 8 and day.isdigit() else []
+    if search.get("srcLocate") and search.get("dstLocate"):
+        parts.append(f"{search['srcLocate']}→{search['dstLocate']}")
+    return " ".join(parts)
+
+
+def summary_for(name, arguments, status=None):
+    """
+    A truthful one-line summary of the call, as the agent is asked to write it. stop_watch and
+    cancel_reservation name what the status (the gateway mock's) says they stop or give back.
+    """
     if name == "reserve_seat":
         seats = ", ".join(f"{seat['carNo']}호차 {seat['label']}" for seat in arguments["seats"])
-        return f"열차를 골라 {seats} 좌석을 예약해요"
+        klass = "특실 " if arguments.get("seatClass") == "special" else ""
+        return f"열차를 골라 {klass}{seats} 좌석을 예약해요"
     if name == "start_watch":
         date = arguments["date"]
         month, day = int(date[5:7]), int(date[8:10])
         waitlist = " 예약 대기를" if arguments.get("waitlist") else ""
         trains = " ".join(arguments["trains"])
-        return f"{month}월 {day}일 {arguments['from']}→{arguments['to']} {trains}{waitlist} 감시를 시작해요"
+        klass = " 특실" if arguments.get("seat") == "special" else ""
+        begins = ""
+        if "start_at" in arguments:
+            at = datetime.datetime.fromisoformat(arguments["start_at"]).astimezone(SEOUL)
+            begins = f" {at.month}월 {at.day}일 {at.hour:02d}:{at.minute:02d}부터"
+        return (
+            f"{month}월 {day}일 {arguments['from']}→{arguments['to']} {trains}{klass}{waitlist}"
+            f"{begins} 감시를 시작해요"
+        )
+    status = status if isinstance(status, dict) else {}
+    if name == "stop_watch":
+        scheduled = status.get("scheduled")
+        searches = [status.get("running"), isinstance(scheduled, dict) and scheduled.get("search")]
+        said = [_watch_said(search) for search in searches if isinstance(search, dict)]
+        return " ".join([*said, SUMMARIES[name]])
+    if name == "cancel_reservation":
+        held = [str(item.get("trainInfo") or "") for item in status.get("pending") or []]
+        return " ".join([*held, SUMMARIES[name]])
     return SUMMARIES[name]
 
 
@@ -365,7 +397,8 @@ def call_tool(env, access_token, name, arguments=None, summary=True):
     if summary and name in ("start_watch", "stop_watch", "reserve_seat", "cancel_reservation"):
         # Arguments too broken to describe go without: the call is meant to be refused.
         with contextlib.suppress(KeyError, TypeError, ValueError, IndexError, AttributeError):
-            arguments.setdefault("summary", summary_for(name, arguments))
+            status = env.gateway.status.return_value
+            arguments.setdefault("summary", summary_for(name, arguments, status))
     response = rpc(env, access_token, "tools/call", {"name": name, "arguments": arguments})
     assert response.status_code == 200, (response.status_code, response.get_data(as_text=True))
     assert "error" not in response.json, response.json

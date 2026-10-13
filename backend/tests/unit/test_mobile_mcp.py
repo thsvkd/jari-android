@@ -557,7 +557,8 @@ def test_start_watch_can_ask_for_a_waitlist(env, booker):
 
 
 def test_start_watch_with_a_start_time_schedules_instead(env, booker, storage_id):
-    start_at = "2026-12-01T07:00:00+09:00"
+    eve = datetime.date.fromisoformat(DATE) - datetime.timedelta(days=1)
+    start_at = f"{eve.isoformat()}T07:00:00+09:00"
     call_tool(env, booker, "start_watch", {**TRIP, "trains": ["00101"], "start_at": start_at})
     env.gateway.start_search.assert_not_called()
     env.gateway.schedule_search.assert_called_once()
@@ -1072,8 +1073,10 @@ def test_status_notes_explain_seat_strategy_and_class_in_korean(env, reader):
     notes = json.dumps(result["structuredContent"]["notes"], ensure_ascii=False)
     assert "연속" in notes
     assert "일반실" in notes
-    # 내부 값은 그대로 둔다.
-    assert result["structuredContent"]["running"]["seatStrategy"] == "consecutive"
+    # 구조화 필드도 코드가 아니라 읽을 수 있는 말이다.
+    running = result["structuredContent"]["running"]
+    assert running["seatStrategy"] == "연속 좌석"
+    assert "specialInfoShow" not in running
 
 
 def test_seat_map_says_what_each_free_seat_is_like(env, reader):

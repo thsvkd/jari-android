@@ -227,7 +227,9 @@ TOOLS = {
                     "summary": _summary(
                         "10월 19일 서울→부산 KTX 013·015 취소표를 감시하고, 좌석이 나면 자동으로 "
                         "잡아요(결제는 직접)",
-                        "날짜(월·일), 출발역→도착역, 열차 번호",
+                        "날짜(월·일), 출발역→도착역, 열차 번호, 특실이면 특실(seat 가 any 면 "
+                        "'일반실 우선(없으면 특실)'), start_at 을 주면 시작 시각에 '부터'를 붙여"
+                        "(예: 10월 17일 07:00부터)",
                     ),
                     **TRIP,
                     "trains": {
@@ -261,7 +263,12 @@ TOOLS = {
             "진행 중이거나 시작 예정인 취소표 감시를 멈춰요.",
             BOOK,
             _schema(
-                {"summary": _summary("진행 중인 서울→부산 10월 19일 취소표 감시를 멈춰요")},
+                {
+                    "summary": _summary(
+                        "진행 중인 서울→부산 10월 19일 취소표 감시를 멈춰요",
+                        "멈추는 감시의 날짜(월·일)와 출발역→도착역",
+                    )
+                },
                 ("summary",),
             ),
             False,
@@ -279,7 +286,7 @@ TOOLS = {
                 {
                     "summary": _summary(
                         "10월 19일 서울→부산 KTX 049 07:00, 특실 4호차 1C 창가 1석을 예약해요(결제 대기)",
-                        "날짜(월·일), 열차 번호, 호차와 좌석 번호",
+                        "날짜(월·일), 출발역→도착역, 열차 번호, 특실이면 특실, 호차와 좌석 번호",
                     ),
                     "trainKey": {"type": "string", "minLength": 1, "maxLength": 200},
                     "seatClass": SEAT_CLASS,
@@ -313,7 +320,8 @@ TOOLS = {
             _schema(
                 {
                     "summary": _summary(
-                        "결제를 기다리는 KTX 049 특실 4호차 1C 예약을 취소하고 좌석을 돌려보내요"
+                        "결제를 기다리는 KTX 049 특실 4호차 1C 예약을 취소하고 좌석을 돌려보내요",
+                        "취소하는 예약마다 열차 번호(결제를 기다리는 예약은 모두 함께 취소돼요)",
                     )
                 },
                 ("summary",),
@@ -667,6 +675,50 @@ def _cancelled(result, before=()):
     }
 
 
+def _plain_watch(search):
+    """
+    A watch in start_watch's own words (date·from·to·earliest·latest·trains·passengers) instead
+    of the app's field names and codes ("20261019", "0700", "GENERAL_FIRST").
+    """
+    if not isinstance(search, dict):
+        return search
+    day = _trip_day(search.get("depDate"))
+    begins, ends = str(search.get("depTime") or "")[:4], str(search.get("maxDepTime") or "")[:4]
+    seat_class, strategy = search.get("specialInfoShow"), search.get("seatStrategy")
+    plain = {
+        "date": day.isoformat() if day else search.get("depDate"),
+        "from": search.get("srcLocate"),
+        "to": search.get("dstLocate"),
+        "earliest": _clock(begins) if begins.isdigit() else None,
+        "latest": _clock(ends) if ends.isdigit() else None,
+        "trainType": search.get("trainTypeShow"),
+        "trains": search.get("selectedTrains"),
+        "trainLabels": search.get("trainLabels"),
+        "seat": SEAT_CLASS_NOTES.get(seat_class, seat_class),
+        "passengers": search.get("passengerCount"),
+        "seatStrategy": STRATEGY_NOTES.get(strategy, strategy),
+        "seatPreference": search.get("seatPreference"),
+    }
+    rest = {key: value for key, value in search.items() if key not in _APP_WATCH_FIELDS}
+    return {**{key: value for key, value in plain.items() if value is not None}, **rest}
+
+
+_APP_WATCH_FIELDS = {
+    "depDate",
+    "srcLocate",
+    "dstLocate",
+    "depTime",
+    "maxDepTime",
+    "trainTypeShow",
+    "selectedTrains",
+    "trainLabels",
+    "specialInfoShow",
+    "passengerCount",
+    "seatStrategy",
+    "seatPreference",
+}
+
+
 def _status(result):
     """What the app's status says, with where to pay and a Korean reading of the codes."""
     pending = [
@@ -706,8 +758,13 @@ def _status(result):
         held, wanted = (running or {}).get("seatsHeld"), (running or {}).get("seatsWanted")
         if isinstance(held, int) and isinstance(wanted, int) and wanted > held > 0:
             notes.append(f"{wanted}석 중 {held}석을 잡았고 나머지는 감시가 찾고 있어요.")
+    scheduled = result.get("scheduled")
+    if isinstance(scheduled, dict) and "search" in scheduled:
+        scheduled = {**scheduled, "search": _plain_watch(scheduled["search"])}
     return {
         **result,
+        "running": _plain_watch(running),
+        "scheduled": scheduled,
         "pending": pending,
         "notes": notes or ["진행 중인 감시도, 결제를 기다리는 예약도 없어요."],
     }
@@ -803,10 +860,28 @@ def prepare(name, arguments):
     return cancel
 
 
-# What a sentence says that is not a train number: a clock time, a car, a head count.
+# What a sentence says that is not a train number: a clock time, a car, a head count (a lone
+# digit may stand apart from its unit: "2 명"; "013 석이" stays a train), a seat label ("8 C").
+# Also a bare day ("19일", not "13 일반실"), a count of bookings ("2건") and a numbered seat;
+# "1인" is a head count but "049인 열차" is the train.
 _NOT_A_TRAIN = re.compile(
-    r"\d{1,2}:\d{2}|\d+\s*호차|\d+(?:명|석|인|매|시|분)|(?<!\d)\d{1,2}[A-Z](?![A-Z])"
+    r"\d{1,2}:\d{2}|\d+\s*호차|\d+(?:명|석|매(?!진)|시|분|건|개)|(?<!\d)[1-9]\s*인(?![가-힣])"
+    r"|(?<!\d)[1-9]\s+(?:명|석|건)|(?<!\d)\d{1,2}\s*일(?!반)|\d+\s*번\s*(?:좌석|자리)"
+    r"|\d+\s*번째|(?<!\d)\d{1,2}(?:\s*장(?![가-힣])|자리|좌석)|(?<!\d)\d{1,2}\s+(?:시|분|개)(?![가-힣])"
+    r"|\d{4}-\d{2}-\d{2}|(?<!\d)\d{1,2}\s?[A-Z](?![A-Z])"
 )
+# A head count the sentence states: "1석", "2 명", "1인", "한 명".
+_COUNT = re.compile(
+    r"(?<!\d)(\d{1,2})(?:\s*(?:명|석|장)|자리|좌석|\s*인(?![가-힣])|\s*매(?!진))"
+    r"|(?:어른|성인|대인)\s*(\d{1,2})"
+)
+# Word numerals take 분 too ("두 분"); a digit before 분 is minutes.
+_WORD_COUNT = re.compile(
+    r"(?<![가-힣])(한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*(?:명|사람|좌석|자리|분|장)|(혼자)"
+)
+_WORDS = {"한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6, "일곱": 7, "여덟": 8, "아홉": 9}
+_WORDS["열"] = 10
+_WORDS["혼자"] = 1
 _CAR_MENTION = re.compile(r"(?<!\d)(\d{1,2})\s*호차")
 # A station written the way people say it: without the parenthesis, or by its common name.
 _STATION_ALIASES = {"여수EXPO": ["여수엑스포"]}
@@ -816,11 +891,17 @@ def _said(text):
     return re.sub(r"\s+", " ", text).strip().upper()
 
 
+def _part(number):
+    """A month or a day as written: 3 or 03, but 10 only as 10 ("010/013" is two trains)."""
+    return f"0?{number}" if number < 10 else str(number)
+
+
 def _date_forms(date):
+    month, day = _part(date.month), _part(date.day)
     return (
         date.isoformat(),
-        rf"(?<!\d)0*{date.month}\s*월\s*0*{date.day}\s*일",
-        rf"(?<!\d)0*{date.month}\s*[/.\-]\s*0*{date.day}(?!\d)",
+        rf"(?<!\d){month}\s*월\s*{day}\s*일",
+        rf"(?<!\d){month}\s*[/.\-]\s*{day}(?!\d)",
     )
 
 
@@ -828,40 +909,71 @@ def _date_in(text, date):
     return any(re.search(form, text) for form in _date_forms(date))
 
 
-def _number_in(text, number, date=None):
+def _number_in(text, number, *dates):
     """
     Whether the train number (or the number without its zeros) stands alone in the text.
 
-    The stations, this call's own date, clock times, cars, head counts and seat labels go
+    The stations, this call's own dates, clock times, cars, head counts and seat labels go
     first: their digits are not the train's ("서울→인천공항T1" is not train 1).
     """
     text = _STATION_NAMES.sub(" ", text)
-    # With no date to go by (the key's had none), any "M월 D일" goes.
-    for form in _date_forms(date) if date else (r"\d{1,2}\s*월\s*\d{1,2}\s*일",):
+    dates = [date for date in dates if date]
+    # With no date to go by (the key's had none), any "M월 D일" or "M/D" goes.
+    for form in (
+        [form for date in dates for form in _date_forms(date)]
+        if dates
+        else [r"\d{1,2}\s*월\s*\d{1,2}\s*일", r"(?<!\d)\d{1,2}\s*[/.]\s*\d{1,2}(?!\d)"]
+    ):
         text = re.sub(form, " ", text)
     text = _NOT_A_TRAIN.sub(" ", text)
     return re.search(rf"(?<!\d)0*{int(number)}(?!\d)", text) is not None
 
 
-def _seat_in(segment, label):
-    """The seat label standing alone: 8C in "8C" but not in "18C"; a bare number needs 번/석."""
-    spelled = r"\s*".join(re.escape(part) for part in label.upper().split())
+def _seat_pattern(label):
+    """The seat label standing alone: 8C or "8 C", but not 18C; a bare number needs 번/석."""
+    spelled = r"\s*".join(re.escape(part) for part in re.findall(r"\d+|[^\d\s]+", label.upper()))
     tail = r"\s*번" if label.strip().isdigit() else r"(?![0-9A-Z])"
-    return re.search(rf"(?<![0-9A-Z]){spelled}{tail}", segment) is not None
+    return rf"(?<![0-9A-Z]){spelled}{tail}"
+
+
+# "8C·D" is 8C and 8D: the row once, then each letter.
+_SHARED_ROW = re.compile(
+    r"(?<![0-9A-Z])(\d{1,2})([A-Z])((?:\s*[·,/]\s*[A-Z](?![0-9A-Z]))+)(\s*\(\s*\d+\s*호차\s*\))?"
+)
+_BRACKETED_SEAT = re.compile(r"(?<![0-9A-Z])\d{1,3}(?:\s?[A-Z]|\s*번)?\s*\(\s*\d+\s*호차\s*\)")
+
+
+def _one_label_each(text):
+    """ "8C·D" as "8C 8D", and "8C·D(2호차)" as "8C(2호차) 8D(2호차)"."""
+    return _SHARED_ROW.sub(
+        lambda hit: " ".join(
+            hit.group(1) + letter + (hit.group(4) or "")
+            for letter in [hit.group(2), *re.findall(r"[A-Z]", hit.group(3))]
+        ),
+        text,
+    )
 
 
 def _seats_missing(text, seats):
-    """The seats the sentence does not put in their own car: "N호차 label" in that order."""
-    cars = list(_CAR_MENTION.finditer(text))
+    """
+    The seats the sentence does not put in their own car: "N호차 label" in that order, or the
+    car in brackets right after the seat, "label(N호차)". "label N호차" stays refused: in
+    "2호차 8C 3호차 9D" it would read 8C as in car 3.
+    """
+    text = _one_label_each(text)
+    # A bracketed seat belongs to its bracket only, never to the car named before it.
+    plain = _BRACKETED_SEAT.sub(" ", text)
+    cars = list(_CAR_MENTION.finditer(plain))
     segments = [
-        (int(car.group(1)), text[car.end() : cars[n + 1].start() if n + 1 < len(cars) else None])
+        (int(car.group(1)), plain[car.end() : cars[n + 1].start() if n + 1 < len(cars) else None])
         for n, car in enumerate(cars)
     ]
     missing = []
     for seat in seats:
-        if not any(
-            number == seat["carNo"] and _seat_in(segment, seat["label"])
-            for number, segment in segments
+        pattern = _seat_pattern(seat["label"])
+        bracketed = rf"{pattern}\s*\(\s*0*{seat['carNo']}\s*호차\s*\)"
+        if not re.search(bracketed, text) and not any(
+            number == seat["carNo"] and re.search(pattern, segment) for number, segment in segments
         ):
             missing.append(f"{seat['carNo']}호차 {seat['label']}")
     return missing
@@ -915,6 +1027,9 @@ def _confirmed(name, arguments):
     """
     text = _said(arguments["summary"])
     missing, how = [], ""
+    if name in ("reserve_seat", "start_watch"):
+        _same_party(text, arguments.get("passengers", 1))
+        _same_class(text, arguments.get("seatClass") or arguments.get("seat", "any"))
     if name == "reserve_seat":
         how = "호차와 좌석 번호(예: 4호차 1C)"
         missing = _seats_missing(text, arguments["seats"])
@@ -926,9 +1041,16 @@ def _confirmed(name, arguments):
         if date and not _date_in(text, date):
             missing.append(f"{date.month}월 {date.day}일")
         missing += _stations_missing(text, arguments["from"], arguments["to"])
+        begins = _starts(arguments)
+        if begins:
+            how = "날짜·구간·열차 번호와 감시를 시작할 시각(예: 10월 17일 07:00부터)"
+            missing += _start_missing(text, begins, date)
         if len(arguments["trains"]) <= 5:
+            start_day = begins.date() if begins else None
             missing += [
-                number for number in arguments["trains"] if not _number_in(text, number, date)
+                number
+                for number in arguments["trains"]
+                if not _number_in(text, number, date, start_day)
             ]
         waits = "예약 대기" in text or "예약대기" in text.replace(" ", "")
         if arguments.get("waitlist") and not waits:
@@ -944,12 +1066,275 @@ def _confirmed(name, arguments):
         )
 
 
+def _same_party(text, passengers):
+    """A head count the sentence states must be the call's: "2명" approves two seats, not one."""
+    said = {int(a or b) for a, b in _COUNT.findall(text)}
+    said |= {_WORDS[a or b] for a, b in _WORD_COUNT.findall(text)}
+    said -= {passengers}
+    if said:
+        raise Invalid(
+            f"summary 에는 {min(said)}명(석)이라고 했는데 passengers 는 {passengers}예요. "
+            "인원을 사실대로 적어 주세요."
+        )
+
+
+_CLASSES = {"general": "(?:일반실|일반석)", "special": "(?:특실|특석)"}
+_SAID_CLASS = {"general": "일반실", "special": "특실"}
+_RULED_OUT = (
+    r"\s*(?:은|는|이|을|를|도)?\s*(?:말고|아닌|아니라|아님|대신|빼고|빼|제외|안\s*(?:돼|되))"
+)
+
+
+def _first(text, klass):
+    """Whether the sentence puts this class first: "일반실 우선", "없으면 특실" puts the other."""
+    other = "special" if klass == "general" else "general"
+    return re.search(rf"{_CLASSES[klass]}\s*(?:을|를|이)?\s*우선|없으면\s*{_CLASSES[other]}", text)
+
+
+def _same_class(text, seat_class):
+    """특실 costs more: a sentence approving 특실 or 일반실 must say the class the call asks for."""
+    for klass, spelled in _CLASSES.items():
+        if re.search(spelled + _RULED_OUT, text):
+            raise Invalid(
+                f"summary 에서 {_SAID_CLASS[klass]}을 빼는 말은 읽는 사람이 헷갈려요. "
+                "고르는 등급만 적어 주세요."
+            )
+    named = {klass for klass, spelled in _CLASSES.items() if re.search(spelled, text)}
+    # 특실 only: a sentence that lets 일반실 do too ("일반실 또는 특실") approves something cheaper.
+    if seat_class == "special" and named != {"special"}:
+        raise Invalid("summary 에 특실이라고 적어 주세요. 이 호출은 특실 좌석만 잡아요.")
+    if seat_class == "general" and (named == {"special"} or _first(text, "special")):
+        raise Invalid(
+            "summary 는 특실이라고 하는데 이 호출은 일반실만 잡아요. 등급을 사실대로 적어 주세요."
+        )
+    # "any" is 일반실 first and 특실 when there is none: one class named must be put that way.
+    only = any(re.search(rf"{spelled}\s*만", text) for spelled in _CLASSES.values())
+    general_first = _first(text, "general")
+    special_first = _first(text, "special")
+    if (
+        seat_class == "any"
+        and named
+        and (only or special_first or not (len(named) == 2 or general_first))
+    ):
+        raise Invalid(
+            "summary 는 한 등급만 말하는데 seat 는 any(일반실 우선, 없으면 특실)예요. "
+            "'일반실 우선(없으면 특실)'처럼 적거나, 한 등급만 원하면 seat 를 general 이나 "
+            "special 로 넣어 주세요."
+        )
+
+
+def _starts(arguments):
+    """When a scheduled watch begins, on the railway's clock; None when it begins now."""
+    try:
+        begins = datetime.datetime.fromisoformat(arguments.get("start_at") or "")
+    except ValueError:
+        return None  # prepare says what is wrong with it
+    try:
+        return begins.astimezone(SEOUL) if begins.tzinfo else None
+    except OverflowError as exc:
+        raise Invalid("start_at 값을 확인해 주세요. 열차 날짜보다 앞선 시각이에요.") from exc
+
+
+_AM, _PM = r"(?:오전|새벽|아침|A\.?M\.?)", r"(?:오후|저녁|밤|낮|P\.?M\.?)"
+
+
+def _halves(hour):
+    """The words for this hour's half of the day, and for the other half. 밤 12시 is midnight."""
+    if hour == 0:
+        return r"(?:밤|자정|오전|새벽|A\.?M\.?)", r"(?:오후|저녁|낮|P\.?M\.?)"
+    if hour == 12:
+        return r"(?:오후|낮|정오|P\.?M\.?)", r"(?:오전|새벽|아침|밤|A\.?M\.?)"
+    return (_AM, _PM) if hour < 12 else (_PM, _AM)
+
+
+def _clock_pattern(at):
+    """
+    The clock time said as 07:00, 7시, 7시 00분, 오전 7시 or 오후 7시 반, as one pattern, with the
+    text it is to be found in: "오후 7시", "오후에 7시" and "7:00 PM" hold a 7시 or 7:00 that is
+    not 07:00, so the other half of the day goes first.
+    """
+    hour, minute = at.hour, at.minute
+    own, other = _halves(hour)
+    if minute == 0:
+        minutes = r"(?:\s*0{1,2}\s*분)?(?!\s*(?:\d+\s*분|반))"
+    elif minute == 30:
+        minutes = r"\s*(?:반|30\s*분)"
+    else:
+        minutes = rf"\s*{_part(minute)}\s*분"
+    twelve = _part(hour % 12 or 12)
+    forms = [
+        rf"(?<!\d){_part(hour)}:{minute:02d}(?!\d)",
+        rf"(?<!\d){_part(hour)}\s*시{minutes}",
+        rf"{own}\s*{twelve}(?:\s*시{minutes}|:{minute:02d}(?!\d))",
+        *([{0: "자정", 12: "정오"}[hour]] if minute == 0 and hour in (0, 12) else []),
+    ]
+    strip = [
+        rf"{other}[가-힣]{{0,2}}\s*\d{{1,2}}",
+        rf"\d{{1,2}}(?::\d{{2}})?\s*{other}(?![가-힣])",
+    ]
+    return "|".join(forms), strip
+
+
+# The words that make a time the moment the watch begins, not a train's departure.
+# Not "07:00부터 09:00까지 출발하는": that is the trains' window, not the watch's start.
+_FROM = r"\s*(?:부터|에\s*(?:감시를?\s*)?시작)(?!\s*(?:\d{1,2}(?::\d{2}|\s*시)\S*\s*)?까지|\s*출발)"
+# Any clock time with 부터: the watch's start is the last one ("07:00부터 다니는 … 05:00부터 감시").
+_ANY_CLOCK_FROM = re.compile(
+    r"(?:\d{1,2}:\d{2}|\d{1,2}\s*시(?:\s*\d{1,2}\s*분|\s*반)?|정오|자정)" + _FROM
+)
+_NOW = re.compile(r"지금부터|지금\s*바로|바로\s*(?:감시|시작)|즉시")
+_ANY_DAY = (
+    r"(?:\d{4}-\d{2}-\d{2}|\d{1,2}\s*월\s*\d{1,2}\s*일|(?<!\d)\d{1,2}\s*[/.\-]\s*\d{1,2}(?!\d)"
+    r"|(?<!\d)\d{1,2}\s*일)"
+)
+
+
+def _start_missing(text, begins, day):
+    """
+    A scheduled watch's sentence says when it begins: the time followed by 부터 (or "에 시작"),
+    with the start's own day in front of it when that is not the trip's. A time anywhere else (a
+    train leaving at 07:00) and the trip's day in front of the time are not the start.
+    """
+    if day and begins.date() > day:
+        raise Invalid("start_at 이 열차 날짜보다 뒤예요. 감시는 열차가 떠나기 전에 시작해야 해요.")
+    if _NOW.search(text):
+        raise Invalid(
+            "summary 는 지금 시작한다고 하는데 start_at 은 나중 시각이에요. "
+            "지금 시작하려면 start_at 을 빼 주세요."
+        )
+    clock, strip = _clock_pattern(begins)
+    for pattern in strip:
+        text = re.sub(pattern, " ", text)
+    other_day = begins.date() != day
+    # Whatever day is written right before the time must be the start's own.
+    pattern = rf"({_ANY_DAY}\s*(?:\([가-힣]\))?\s*(?:에|,|\.)?\s*)?(?:{clock}){_FROM}"
+    last = max((hit.start() for hit in _ANY_CLOCK_FROM.finditer(text)), default=-1)
+    for hit in re.finditer(pattern, text):
+        if hit.end() <= last:
+            continue
+        written = hit.group(1)
+        if _day_written(written, begins.date(), day) if written else not other_day:
+            return []
+    when = f"{begins.hour:02d}:{begins.minute:02d}"
+    if other_day:
+        when = f"{begins.month}월 {begins.day}일 {when}"
+    return [f"감시 시작 시각 '{when}부터'"]
+
+
+def _day_written(written, date, trip):
+    """
+    Whether the day written before a time is this date: "10월 17일", "10/17", or "17일" when the
+    trip is in the same month (a reader takes a bare day in the trip's month).
+    """
+    bare = re.fullmatch(r"\s*(\d{1,2})\s*일\D*", written)
+    same_month = trip is None or trip.month == date.month
+    return _date_in(written, date) or bool(bare and same_month and int(bare.group(1)) == date.day)
+
+
 def _is_date(raw):
     try:
         datetime.date.fromisoformat(raw)
     except ValueError:
         return False
     return True
+
+
+def _trip_day(raw):
+    """20261019 as a date, or None."""
+    raw = str(raw or "")
+    iso = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+    return datetime.date.fromisoformat(iso) if len(raw) == 8 and _is_date(iso) else None
+
+
+def _trip_missing(text, day, source, target):
+    """The day and the stretch of a watch or a train, as far as they are known."""
+    missing = []
+    if day and not _date_in(text, day):
+        missing.append(f"{day.month}월 {day.day}일")
+    if source in FALLBACK_STATIONS and target in FALLBACK_STATIONS:
+        missing += _stations_missing(text, source, target)
+    return missing
+
+
+def _read_status(gateway, storage_id, name):
+    """The status, for checking a sentence; None when it cannot be read (the call goes ahead)."""
+    try:
+        return gateway.status(storage_id)
+    except Exception as exc:
+        logger.warning("%s could not read the status (%s)", name, type(exc).__name__)
+        return None
+
+
+def unconfirmed_stop(gateway, storage_id, arguments):
+    """Why stop_watch's sentence does not name the watch it stops, or None."""
+    status = _read_status(gateway, storage_id, "stop_watch")
+    if not status:
+        return None
+    scheduled = status.get("scheduled")
+    watches = [
+        status.get("running"),
+        scheduled.get("search") if isinstance(scheduled, dict) else None,
+    ]
+    text = _said(arguments["summary"])
+    missing = []
+    for watch in watches:
+        if isinstance(watch, dict):
+            day = _trip_day(watch.get("depDate"))
+            missing += _trip_missing(text, day, watch.get("srcLocate"), watch.get("dstLocate"))
+    if not missing:
+        return None
+    return (
+        "summary 에 멈추는 감시의 날짜와 구간을 사실대로 적어 주세요(예: 10월 19일 서울→부산). "
+        f"빠진 것: {', '.join(dict.fromkeys(missing))}"
+    )
+
+
+# The train number in a pending reservation's trainInfo ("KTX 049 서울 → 부산 · 10월 19일(월) …").
+# A pending reservation's trainInfo: "KTX 049 서울 → 부산 · 10월 19일(월) 07:00→09:40". The number
+# follows the train's name; a station's digits (인천공항T1) are not it.
+_HELD_TRAIN = re.compile(r"^\S+\s+(\d{1,5})(?!\d)")
+_HELD_DAY = re.compile(r"(\d{1,2})\s*월\s*(\d{1,2})\s*일")
+
+
+def _held_day(info):
+    """The day in a trainInfo, in the coming twelve months, or None."""
+    hit = _HELD_DAY.search(info)
+    if not hit:
+        return None
+    today = _today()
+    for year in (today.year, today.year + 1):
+        try:
+            day = datetime.date(year, int(hit.group(1)), int(hit.group(2)))
+        except ValueError:
+            continue
+        if day >= today - datetime.timedelta(days=1):
+            return day
+    return None
+
+
+def unconfirmed_cancel(gateway, storage_id, arguments):
+    """
+    Why cancel_reservation's sentence does not name every reservation it gives back, or None.
+
+    The cancel takes every pending reservation of the account, so the sentence names each train.
+    """
+    status = _read_status(gateway, storage_id, "cancel_reservation")
+    held = [item for item in (status or {}).get("pending") or [] if isinstance(item, dict)]
+    if len(held) > 5:
+        return None
+    infos = [str(item.get("trainInfo") or "") for item in held]
+    days = [_held_day(info) for info in infos]
+    numbers = [hit.group(1) for info in infos if (hit := _HELD_TRAIN.search(info))]
+    text = _said(arguments["summary"])
+    missing = [
+        f"열차 {number}" for number in dict.fromkeys(numbers) if not _number_in(text, number, *days)
+    ]
+    if not missing:
+        return None
+    return (
+        "summary 에 취소하는 예약의 열차 번호를 사실대로 적어 주세요. 결제를 기다리는 예약은 "
+        f"모두 함께 취소돼요. 빠진 것: {', '.join(missing)}"
+    )
 
 
 def unconfirmed_train(gateway, storage_id, arguments):
@@ -959,17 +1344,17 @@ def unconfirmed_train(gateway, storage_id, arguments):
         return None  # expired or unknown: the booking itself says so
     text = _said(arguments["summary"])
     missing = []
-    raw = str(train.get("depDate") or "")
-    iso = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
-    day = datetime.date.fromisoformat(iso) if len(raw) == 8 and _is_date(iso) else None
+    day = _trip_day(train.get("depDate"))
     number = str(train.get("trainNo") or "")
     if number.isdigit() and not _number_in(text, number, day):
         missing.append(f"열차 번호 {number}")
-    if day and not _date_in(text, day):
-        missing.append(_day(raw))
+    missing += _trip_missing(text, day, train.get("from"), train.get("to"))
     if not missing:
         return None
-    return f"summary 에 예약하는 열차의 날짜와 번호를 사실대로 적어 주세요. 빠진 것: {', '.join(missing)}"
+    return (
+        "summary 에 예약하는 열차의 날짜·구간·번호를 사실대로 적어 주세요. "
+        f"빠진 것: {', '.join(missing)}"
+    )
 
 
 def unlisted(gateway, storage_id, arguments):
@@ -1049,6 +1434,11 @@ def install(app, identity, gateway, store, locks):
                 return _result(error=refused)
             if name == "reserve_seat" and (refused := unconfirmed_train(gateway, user, arguments)):
                 return _result(error=refused)
+            # Checked before the budget, so a wrong sentence costs no call, and again under the
+            # lock below, so it is checked against what then gets stopped or given back.
+            confirm = {"stop_watch": unconfirmed_stop, "cancel_reservation": unconfirmed_cancel}
+            if name in confirm and (refused := confirm[name](gateway, user, arguments)):
+                return _result(error=refused)
             # The app counts the same calls (api.py authenticated): status reads are free.
             if rail and not identity.allow("rail:" + agent["id"], 10, 60):
                 return _result(error=RAIL_TOO_MANY)
@@ -1059,6 +1449,8 @@ def install(app, identity, gateway, store, locks):
                     raise Disconnected
                 if scope == BOOK and agent["scope"] != BOOK:
                     return _result(error=BOOK_REFUSED)
+                if name in confirm and (refused := confirm[name](gateway, user, arguments)):
+                    return _result(error=refused)
                 # ponytail: the app and its agents share one train list per user, so a search on
                 # either side replaces the other's trainOptions and draft. trainKeys stay valid
                 # for their 30 minutes, but start_watch refuses numbers the last list lacks.

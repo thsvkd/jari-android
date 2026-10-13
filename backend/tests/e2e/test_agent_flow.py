@@ -215,10 +215,17 @@ def trip() -> dict:
     return {"date": day.isoformat(), "from": "서울", "to": "부산", "earliest": "07:00"}
 
 
-def reserving(train: dict, car: int, label: str) -> str:
-    """The sentence an agent writes for reserve_seat: the day, the train, the car and the seat."""
+def reserving(train: dict, car: int, label: str, klass: str = "") -> str:
+    """
+    The sentence an agent writes for reserve_seat: the day, the stretch, the train, the class
+    when it is 특실, the car and the seat.
+    """
     day = datetime.date.fromisoformat(trip()["date"])
-    return f"{day.month}월 {day.day}일 {train['trainNo']}편 {car}호차 {label} 좌석을 예약해요"
+    where = f"{trip()['from']}→{trip()['to']}"
+    return (
+        f"{day.month}월 {day.day}일 {where} {train['trainNo']}편 {klass}{car}호차 {label} "
+        "좌석을 예약해요"
+    )
 
 
 def test_an_mcp_client_without_a_token_finds_where_to_authorize(stack):
@@ -271,6 +278,40 @@ def test_an_agent_connects_through_a_browser_sign_in_and_starts_a_watch(stack, c
     [connection] = client.call("GET", "/agents")["agents"]
     assert connection["allowBooking"] is True
     assert connection["lastUsedAt"]
+
+
+def test_a_scheduled_watch_is_stopped_only_by_a_sentence_that_names_it(stack, client):
+    # 승인 문장은 실제 상태와 맞아야 해요: 시작 시각을 말해야 예약되고, 그 감시의 날짜·구간을 말해야 멈춰요.
+    agent = connect(stack, client, allow_booking=True)
+    assert not agent.tool("find_trains", trip()).get("isError")
+    seoul = datetime.timezone(datetime.timedelta(hours=9))
+    begins = (datetime.datetime.now(seoul) + datetime.timedelta(hours=2)).replace(
+        second=0, microsecond=0
+    )
+    day = datetime.date.fromisoformat(trip()["date"])
+    watch = {**trip(), "trains": ["00101"], "start_at": begins.isoformat()}
+    vague = agent.tool("start_watch", {**watch, "summary": SUMMARIES["start_watch"](watch)})
+    assert vague["isError"] is True
+    assert "감시 시작 시각" in text_of(vague)
+
+    said = (
+        f"{begins.month}월 {begins.day}일 {begins:%H:%M}부터 {day.month}월 {day.day}일 "
+        "서울→부산 00101 취소표를 감시해요"
+    )
+    scheduled = agent.tool("start_watch", {**watch, "summary": said})
+    assert not scheduled.get("isError"), scheduled
+    assert client.call("GET", "/status")["scheduled"]
+
+    refused = agent.tool("stop_watch", {"summary": "진행 중인 감시를 멈춰요"})
+    assert refused["isError"] is True
+    assert f"{day.month}월 {day.day}일" in text_of(refused)
+    assert client.call("GET", "/status")["scheduled"]
+
+    stopped = agent.tool(
+        "stop_watch", {"summary": f"{day.month}월 {day.day}일 서울→부산 예약된 감시를 멈춰요"}
+    )
+    assert not stopped.get("isError"), stopped
+    assert not client.call("GET", "/status")["scheduled"]
 
 
 def test_a_read_only_agent_can_look_but_not_book(stack, client):
@@ -390,7 +431,8 @@ def test_a_seat_must_be_free_and_named_as_on_the_map(stack, client):
     [pending] = agent.tool("get_status")["structuredContent"]["pending"]
     assert pending["paymentUrl"].startswith("https://")
     assert pending["expiresAt"].endswith("+09:00")
-    assert not agent.tool("cancel_reservation").get("isError")
+    said = f"결제를 기다리는 {train['trainNo']}편 예약을 취소해요"
+    assert not agent.tool("cancel_reservation", {"summary": said}).get("isError")
 
 
 def test_a_sold_out_class_drawn_from_another_date_offers_no_seat_to_book(stack, client):
@@ -412,7 +454,7 @@ def test_a_sold_out_class_drawn_from_another_date_offers_no_seat_to_book(stack, 
                 **args,
                 "carNo": 4,
                 "seats": [{"carNo": 4, "seatNo": "040101", "label": "1A"}],
-                "summary": reserving(train, 4, "1A"),
+                "summary": reserving(train, 4, "1A", "특실 "),
             },
         )
         assert reserved["isError"] is True

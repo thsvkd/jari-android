@@ -83,6 +83,21 @@ RUNNING = {
     "health": "healthy",
     "lastCheckedAt": "2026-10-07T00:01:00+00:00",
 }
+# get_status 는 감시를 start_watch 인자와 같은 말로 돌려준다(앱 필드 이름·코드가 아니라).
+PLAIN_RUNNING = {
+    "date": "2026-10-10",
+    "from": "서울",
+    "to": "부산",
+    "earliest": "07:00",
+    "latest": "24:00",
+    "seat": "일반실만",
+    "passengers": 2,
+    "seatStrategy": "연속 좌석",
+    "trains": ["00101"],
+    "startedAt": "2026-10-07T09:00:00+09:00",
+    "health": "healthy",
+    "lastCheckedAt": "2026-10-07T09:01:00+09:00",
+}
 PENDING = {
     "reservationId": "R1",
     "trainInfo": "KTX 00101 서울 → 부산",
@@ -260,11 +275,7 @@ SHAPES = [
             "pending": [PENDING],
         },
         {
-            "running": {
-                **RUNNING,
-                "startedAt": "2026-10-07T09:00:00+09:00",
-                "lastCheckedAt": "2026-10-07T09:01:00+09:00",
-            },
+            "running": PLAIN_RUNNING,
             "scheduled": {"startAt": "2026-10-10T07:00:00+09:00"},
             "pending": [{**PENDING, "expiresAt": "2026-10-10T10:10:00+09:00", "paymentUrl": URL}],
             "notes": [
@@ -287,13 +298,7 @@ SHAPES = [
             "pending": [PENDING],
         },
         {
-            "running": {
-                **RUNNING,
-                "seatsHeld": 1,
-                "seatsWanted": 2,
-                "startedAt": "2026-10-07T09:00:00+09:00",
-                "lastCheckedAt": "2026-10-07T09:01:00+09:00",
-            },
+            "running": {**PLAIN_RUNNING, "seatsHeld": 1, "seatsWanted": 2},
             "scheduled": None,
             "pending": [{**PENDING, "expiresAt": "2026-10-10T10:10:00+09:00", "paymentUrl": URL}],
             "notes": [
@@ -323,8 +328,8 @@ SHAPES = [
         {
             "running": {
                 "health": "zzz",
-                "specialInfoShow": "MYSTERY",
-                "passengerCount": 3,
+                "seat": "MYSTERY",
+                "passengers": 3,
                 "seatStrategy": "zigzag",
             },
             "scheduled": None,
