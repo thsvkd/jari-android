@@ -127,6 +127,25 @@ def test_successful_relogin_replaces_and_closes_previous_client(monkeypatch):
     assert service._relogin_count == 1
 
 
+def test_a_login_in_place_closes_the_korail2_session_it_replaces(monkeypatch):
+    # A cached mobile rail logs in again in place when Korail drops its login.
+    service = KorailService()
+    modern_clients = iter([_ModernClient(), _ModernClient()])
+    legacy = [_LegacyClient(), _LegacyClient()]
+    built = list(legacy)
+    monkeypatch.setattr(service, "_build_modern_client", lambda: next(modern_clients))
+    monkeypatch.setattr(service, "_build_client", lambda *_: built.pop(0))
+    closed = []
+    for client in legacy:
+        client._session.close = lambda client=client: closed.append(client)
+
+    assert service.login("1234567890", "synthetic-password") is True
+    assert service.login("1234567890", "synthetic-password") is True
+
+    assert closed == [legacy[0]]
+    assert service._korail_instance is legacy[1]
+
+
 class _UnreachableClient(_ModernClient):
     def __init__(self, error: Exception):
         super().__init__()

@@ -396,7 +396,9 @@ class ConversationHandler:
             True when there was a registration to try. The login may still
             have been refused, in which case the user has been sent to
             register again and the session is no longer at PW_INPUT_SUCCESS -
-            which is how a caller tells the two apart.
+            which is how a caller tells the two apart. The same holds when
+            Korail did not take the login at all (maintenance, outage), except
+            that the registration is kept and the user told to retry later.
         """
         account = self.storage.get_onboarded_account(chat_id)
         if not account:
@@ -404,6 +406,30 @@ class ConversationHandler:
 
         rail = self._rail_service(chat_id)
         if not rail.login(account.korail_id, account.korail_pw):
+            if getattr(rail, "login_unavailable", False) is True:
+                # Korail did not take the login at all (maintenance window,
+                # outage): that says nothing about the password, so the
+                # registration stays. The session is left where it was (a
+                # booking draft survives), only kept off PW_INPUT_SUCCESS, which
+                # is how callers tell this from a login that worked, and off the
+                # registration steps, whose next message would be read as a
+                # phone number for an account that is already there.
+                logger.info(f"Korail not taking logins for chat_id={chat_id}; account kept")
+                if session.last_action in (
+                    UserProgress.PW_INPUT_SUCCESS,
+                    UserProgress.START_ACCEPTED,
+                    UserProgress.ID_INPUT_SUCCESS,
+                ):
+                    session.last_action = UserProgress.STARTED
+                    self.storage.save_user_session(session)
+                self.telegram.send_message(
+                    chat_id,
+                    MessageTemplates.korail_login_unavailable(
+                        getattr(rail, "login_unavailable_notice", None)
+                    ),
+                    reply_markup=keyboards.remove_reply_keyboard(),
+                )
+                return True
             # The registration is no longer usable, so it goes. Leaving it
             # would fail this same way on every /start from now on.
             logger.info(f"Registered account for chat_id={chat_id} no longer logs in")
@@ -681,6 +707,21 @@ class ConversationHandler:
 
         rail = self._rail_service(chat_id)
         if not rail.login(account.korail_id, account.korail_pw):
+            if getattr(rail, "login_unavailable", False) is True:
+                # Korail is not taking logins (maintenance window, outage):
+                # keep the account and end the half-started flow, so the chat
+                # is not left waiting on a phone number nobody should type.
+                logger.info(f"Korail not taking logins for chat_id={chat_id}; account kept")
+                session.reset()
+                self.storage.save_user_session(session)
+                self.telegram.send_message(
+                    chat_id,
+                    MessageTemplates.korail_login_unavailable(
+                        getattr(rail, "login_unavailable_notice", None), mini_app=True
+                    ),
+                    reply_markup=keyboards.remove_reply_keyboard(),
+                )
+                return
             self.storage.delete_onboarded_account(chat_id)
             self.telegram.send_message(
                 chat_id,

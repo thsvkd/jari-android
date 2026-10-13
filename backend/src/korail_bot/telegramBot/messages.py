@@ -1395,6 +1395,28 @@ Mini App을 열면 기기의 시간대로 자동 갱신됩니다.
         return Messages.WELCOME
 
     @staticmethod
+    def korail_login_unavailable(notice: str | None = None, mini_app: bool = False) -> str:
+        """
+        Korail did not take the login (maintenance window or outage).
+
+        Not a password problem, so the saved account is kept and the user is
+        only asked to wait. Korail's own sentence is passed along when it gave
+        one.
+        """
+        text = (
+            "⏳ 코레일이 지금 로그인을 받지 않습니다.\n\n"
+            "점검 중이거나 일시적인 장애일 수 있습니다. 계정 문제는 아니며, "
+            "등록된 계정은 그대로 두었습니다."
+        )
+        if notice:
+            text += f"\n\n코레일 안내: {notice}"
+        if mini_app:
+            text += "\n\n예약 조건은 적용하지 못했습니다. 잠시 후 앱에서 다시 보내주세요."
+        else:
+            text += "\n\n잠시 후 다시 시도해주세요."
+        return text
+
+    @staticmethod
     def request_phone_number():
         """Request phone number (compatibility method)"""
         return Messages.REQUEST_PHONE

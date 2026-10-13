@@ -7,6 +7,8 @@ from time import monotonic
 
 from korail2 import TrainType
 from korail_mobile_api.errors import (
+    KorailAuthContinuationRequired,
+    KorailAuthError,
     KorailReservationRefusedError,
     KorailSeatUnavailableError,
     KorailSoldOutError,
@@ -55,6 +57,7 @@ RAIL_SESSION_SECONDS = 1800
 # Korail's refusals that say this account already holds the train (the Korail app sends the person
 # to the reservation list for the last two): not "someone else took the seat".
 ALREADY_BOOKED_CODES = {"WRR800029", "ERR911531", "ERR911051"}
+UNSURE_BOOKING = "예약이 됐는지 확인하지 못했어요. 코레일 앱의 예약 목록을 먼저 확인해 주세요."
 LOGIN_REFUSED = (
     "코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요."
 )
@@ -127,15 +130,21 @@ class MobileGateway(MiniAppGateway):
         session, submission = self._prepared_session(chat_id, payload)
         rail = self._logged_in_rail(chat_id)
         try:
-            trains = rail.search_selectable_trains(
-                dep_date=submission.dep_date,
-                src_locate=submission.src_station,
-                dst_locate=submission.dst_station,
-                dep_time=f"{submission.dep_time}00",
-                max_dep_time=submission.max_dep_time,
-                train_type=TrainType.KTX if submission.train_type == "1" else TrainType.ALL,
-                passenger_count=submission.passenger_count,
+            trains = self._again_if_expired(
+                chat_id,
+                rail,
+                lambda: rail.search_selectable_trains(
+                    dep_date=submission.dep_date,
+                    src_locate=submission.src_station,
+                    dst_locate=submission.dst_station,
+                    dep_time=f"{submission.dep_time}00",
+                    max_dep_time=submission.max_dep_time,
+                    train_type=TrainType.KTX if submission.train_type == "1" else TrainType.ALL,
+                    passenger_count=submission.passenger_count,
+                ),
             )
+        except MiniAppError:
+            raise
         except Exception as exc:
             logger.error(
                 "Could not list current Korail trains for chat_id=%s (%s)",
@@ -215,13 +224,17 @@ class MobileGateway(MiniAppGateway):
         count = self._passenger_count(passenger_count)
         rail = self._logged_in_rail(chat_id)
         try:
-            response = rail.seat_cars(train, seat_class, count)
+            response = self._again_if_expired(
+                chat_id, rail, lambda: rail.seat_cars(train, seat_class, count)
+            )
             return {
                 "cars": self.seat_maps.describe_cars(response),
                 "layoutReference": bool(rail.seat_layout_is_reference(train, seat_class, count)),
             }
         except ValueError as exc:
             raise MiniAppError(str(exc), 422) from exc
+        except MiniAppError:
+            raise
         except Exception as exc:
             # The message is safe to log here: no request on this path carries
             # the password, and a protocol error's text names the failing field.
@@ -255,9 +268,15 @@ class MobileGateway(MiniAppGateway):
         count = self._passenger_count(passenger_count)
         rail = self._logged_in_rail(chat_id)
         try:
-            return self._described_inventory(rail, train, car_no, seat_class, count)
+            return self._again_if_expired(
+                chat_id,
+                rail,
+                lambda: self._described_inventory(rail, train, car_no, seat_class, count),
+            )
         except ValueError as exc:
             raise MiniAppError(str(exc), 422) from exc
+        except MiniAppError:
+            raise
         except Exception as exc:
             logger.error(
                 "Could not read Korail seats for chat_id=%s (%s: %s) %s",
@@ -285,9 +304,13 @@ class MobileGateway(MiniAppGateway):
         count = self._passenger_count(passenger_count)
         rail = self._logged_in_rail(chat_id)
         try:
-            cars = rail.seat_cars(train, seat_class, count)
+            cars = self._again_if_expired(
+                chat_id, rail, lambda: rail.seat_cars(train, seat_class, count)
+            )
         except ValueError as exc:
             raise MiniAppError(str(exc), 422) from exc
+        except MiniAppError:
+            raise
         except Exception as exc:
             logger.error(
                 "Could not read Korail cars for chat_id=%s (%s: %s) %s",
@@ -377,17 +400,25 @@ class MobileGateway(MiniAppGateway):
             # seats are not on sale on this train, and reading "the current car" would read
             # that date's.
             raise MiniAppError(SOLD_OUT_CLASS, 409)
-        try:
+
+        def book():
             current = rail.seat_inventory(train, car_no, seat_class, count)
-            hold = rail.reserve_designated(
+            return rail.reserve_designated(
                 train,
                 current,
                 targets,
                 passenger_count=count,
                 seat_class=seat_class,
             )
+
+        try:
+            # An expired login is Korail turning the request away before it books; it is asked
+            # again on a fresh login unless the answer names a reservation (_again_if_expired).
+            hold = self._again_if_expired(chat_id, rail, book, booking=True)
         except ValueError as exc:
             raise MiniAppError(str(exc), 409) from exc
+        except MiniAppError:
+            raise
         except (
             KorailSoldOutError,
             KorailSeatUnavailableError,
@@ -546,6 +577,47 @@ class MobileGateway(MiniAppGateway):
             raise login_failure(rail, LOGIN_REFUSED, 428)
         self._rails[chat_id] = (rail, monotonic() + RAIL_SESSION_SECONDS, account.korail_id)
         return rail
+
+    def _again_if_expired(self, chat_id, rail, call, *, booking=False):
+        """
+        call(), and once more on a fresh login if Korail says this one is gone.
+
+        Korail drops an idle login sooner than RAIL_SESSION_SECONDS keeps it (production: gone
+        after 28 idle minutes, KorailSessionExpiredError P058), so a booking made a while after
+        the seat map failed once. The client also forgets a login a swallowed P058 ended, and
+        then refuses before sending anything (KorailAuthError). The same rail logs in again rather
+        than a new one: it keeps the reference formation its train keys were drawn with, and only
+        the server-side seat context is set up afresh.
+
+        A booking is asked again only when the expiry carries no reservation number: Korail
+        checks the session first, but an answer that names a reservation means something may
+        be held, and booking again would leave that one untracked.
+        """
+        try:
+            return call()
+        except KorailAuthContinuationRequired:
+            raise
+        except KorailAuthError as exc:
+            raw = getattr(exc, "raw", None)
+            if booking and isinstance(raw, dict) and raw.get("h_pnr_no"):
+                logger.critical(
+                    "Korail answered a booking for chat_id=%s as expired with a reservation number",
+                    chat_id,
+                )
+                raise MiniAppError(UNSURE_BOOKING, 502) from exc
+            logger.info(
+                "Korail login gone for chat_id=%s (%s); logging in again",
+                chat_id,
+                type(exc).__name__,
+            )
+        account = self.storage.get_onboarded_account(chat_id)
+        if not account:
+            self._forget_rail(chat_id)
+            raise MiniAppError("코레일 계정을 연결해 주세요.", 428)
+        if not rail.login(account.korail_id, account.korail_pw):
+            self._forget_rail(chat_id)
+            raise login_failure(rail, LOGIN_REFUSED, 428)
+        return call()
 
     def _forget_rail(self, chat_id):
         cached = self._rails.pop(chat_id, None)

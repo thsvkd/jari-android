@@ -119,6 +119,17 @@ def _korail_unreachable(exc: BaseException) -> bool:
     return isinstance(exc, _LOGIN_UNAVAILABLE)
 
 
+def _close_legacy(legacy) -> None:
+    """Close a replaced korail2 adapter's HTTP session; it is no longer used."""
+    session = getattr(legacy, "_session", None)
+    if session is None:
+        return
+    try:
+        session.close()
+    except Exception as exc:
+        logger.debug("Could not close a replaced Korail session (%s)", type(exc).__name__)
+
+
 def _maintenance_notice(exc: BaseException) -> str | None:
     """
     Korail's maintenance sentence when that is why a login failed ("" if it gave none), else None.
@@ -416,6 +427,9 @@ class KorailService(RailService):
 
     def _login_with_current_api(self, username: str, password: str) -> bool:
         candidate = self._build_modern_client()
+        # The adapter this login replaces, whether it works or not: its HTTP session is closed
+        # rather than left to the collector (a cached mobile rail logs in again in place).
+        previous_legacy = self._korail_instance
         try:
             digits = "".join(character for character in username if character.isdigit())
             if "@" in username:
@@ -429,6 +443,7 @@ class KorailService(RailService):
         except Exception as exc:
             candidate.close()
             self._korail_instance = None
+            _close_legacy(previous_legacy)
             self._logged_in = False
             # The exception's text is not logged: it may quote the request,
             # and the request carries the password.
@@ -447,6 +462,8 @@ class KorailService(RailService):
         self._modern_seat_context = None
         if previous is not None:
             previous.close()
+        if previous_legacy is not self._korail_instance:
+            _close_legacy(previous_legacy)
         self._logged_in = True
         return True
 
