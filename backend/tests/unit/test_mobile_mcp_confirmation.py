@@ -275,6 +275,60 @@ def test_the_status_reads_the_watch_aloud(env, booker):
     assert "예약된 감시 내용: 10월 20일 서울→대전" in notes
 
 
+def test_the_watch_note_names_the_train_the_apps_label_leaves_out(env, booker):
+    # Production labels are the times and the name only ("07:27→10:03 KTX").
+    env.gateway.status.return_value = {
+        "running": {
+            "depDate": "20261021",
+            "srcLocate": "서울",
+            "dstLocate": "부산",
+            "selectedTrains": ["013", "30"],
+            "trainLabels": {"013": "07:27→10:03 KTX", "30": "09:30→12:30 KTX"},
+            "health": "healthy",
+            "lastCheckedAt": None,
+        },
+        "pending": [],
+    }
+    notes = call_tool(env, booker, "get_status")["structuredContent"]["notes"]
+    assert "감시 내용: 10월 21일 서울→부산 · 열차 013 07:27→10:03 KTX, 30 09:30→12:30 KTX" in notes
+
+
+def test_a_started_watch_answers_in_start_watchs_words(env, booker):
+    env.gateway.listed_trains.return_value = ["013"]
+    env.gateway.start_search.return_value = {
+        "started": True,
+        "running": {
+            "depDate": "20261101",
+            "depTime": "0700",
+            "maxDepTime": "0800",
+            "srcLocate": "서울",
+            "dstLocate": "부산",
+            "selectedTrains": ["013"],
+            "specialInfoShow": "GENERAL_ONLY",
+            "seatStrategy": "consecutive",
+            "passengerCount": 1,
+        },
+    }
+    result = call_tool(
+        env,
+        booker,
+        "start_watch",
+        watch("11월 1일 서울→부산 KTX 013 취소표를 감시해요"),
+        summary=False,
+    )
+    running = result["structuredContent"]["running"]
+    assert running["date"] == "2026-11-01"
+    assert (running["from"], running["to"], running["earliest"], running["latest"]) == (
+        "서울",
+        "부산",
+        "07:00",
+        "08:00",
+    )
+    assert running["seat"] == "일반실만"
+    assert running["seatStrategy"] == "연속 좌석"
+    assert not {"depDate", "srcLocate", "specialInfoShow"} & running.keys()
+
+
 # ---------------------------------------------------------------- summary 가 실제 호출과 맞는지(경계)
 
 

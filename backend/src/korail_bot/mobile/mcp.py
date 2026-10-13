@@ -550,7 +550,15 @@ def _held(item):
 def _watching(search):
     """A running or scheduled search as a sentence: the day, the stretch and the trains."""
     labels = search.get("trainLabels") or {}
-    trains = [labels.get(no) or no for no in search.get("selectedTrains") or []]
+    # The app's label is the times and the name ("07:27→10:03 KTX"): the number goes in front.
+    trains = [
+        label
+        if re.search(
+            rf"(?<![\d:]){re.escape(str(no))}(?![\d:])", label := str(labels.get(no) or "")
+        )
+        else f"{no} {label}".strip()
+        for no in search.get("selectedTrains") or []
+    ]
     shown = ", ".join(trains[:5]) + (f" 외 {len(trains) - 5}편" if len(trains) > 5 else "")
     begins, ends = str(search.get("depTime") or "")[:4], str(search.get("maxDepTime") or "")[:4]
     start = _clock(begins) if begins and begins != "0000" else ""
@@ -634,6 +642,9 @@ def _started(result):
                 "배정 결과는 사용자가 앱이나 코레일에서 확인해야 해요."
             ],
         }
+    if isinstance(result.get("running"), dict):
+        # The same words get_status uses, not the app's fields.
+        return {**result, "running": _plain_watch(result["running"])}
     return result
 
 
@@ -1043,7 +1054,10 @@ def _confirmed(name, arguments):
         missing += _stations_missing(text, arguments["from"], arguments["to"])
         begins = _starts(arguments)
         if begins:
-            how = "날짜·구간·열차 번호와 감시를 시작할 시각(예: 10월 17일 07:00부터)"
+            how = (
+                "감시를 시작할 시각과 날짜·구간·열차 번호"
+                "(예: 10월 17일 07:00부터, 10월 19일 서울→부산 KTX 013)"
+            )
             missing += _start_missing(text, begins, date)
         if len(arguments["trains"]) <= 5:
             start_day = begins.date() if begins else None
