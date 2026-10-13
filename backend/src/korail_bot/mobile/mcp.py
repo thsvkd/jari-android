@@ -547,18 +547,22 @@ def _held(item):
     return " ".join(part for part in (item.get("trainInfo"), klass, seats) if part)
 
 
+def _named(no, labels):
+    """
+    A watched train as the note says it. The app's label is the times and the name
+    ("07:27→10:03 KTX"), so the number goes in front unless the label already has it.
+    """
+    no = str(no)
+    label = str(labels.get(no) or "")
+    if re.search(rf"(?<![\d:]){re.escape(no)}(?![\d:])", label):
+        return label
+    return f"{no} {label}".strip()
+
+
 def _watching(search):
     """A running or scheduled search as a sentence: the day, the stretch and the trains."""
     labels = search.get("trainLabels") or {}
-    # The app's label is the times and the name ("07:27→10:03 KTX"): the number goes in front.
-    trains = [
-        label
-        if re.search(
-            rf"(?<![\d:]){re.escape(str(no))}(?![\d:])", label := str(labels.get(no) or "")
-        )
-        else f"{no} {label}".strip()
-        for no in search.get("selectedTrains") or []
-    ]
+    trains = [_named(no, labels) for no in search.get("selectedTrains") or []]
     shown = ", ".join(trains[:5]) + (f" 외 {len(trains) - 5}편" if len(trains) > 5 else "")
     begins, ends = str(search.get("depTime") or "")[:4], str(search.get("maxDepTime") or "")[:4]
     start = _clock(begins) if begins and begins != "0000" else ""
@@ -642,9 +646,15 @@ def _started(result):
                 "배정 결과는 사용자가 앱이나 코레일에서 확인해야 해요."
             ],
         }
-    if isinstance(result.get("running"), dict):
+    running = result.get("running")
+    if isinstance(running, dict):
         # The same words get_status uses, not the app's fields.
-        return {**result, "running": _plain_watch(result["running"])}
+        said = _watching(running)
+        return {
+            **result,
+            "running": _plain_watch(running),
+            **({"notes": [f"감시를 시작했어요: {said}"]} if said and result.get("started") else {}),
+        }
     return result
 
 

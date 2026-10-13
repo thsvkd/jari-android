@@ -282,15 +282,22 @@ def test_the_watch_note_names_the_train_the_apps_label_leaves_out(env, booker):
             "depDate": "20261021",
             "srcLocate": "서울",
             "dstLocate": "부산",
-            "selectedTrains": ["013", "30"],
-            "trainLabels": {"013": "07:27→10:03 KTX", "30": "09:30→12:30 KTX"},
+            "selectedTrains": ["013", "30", "10"],
+            "trainLabels": {
+                "013": "07:27→10:03 KTX",
+                "30": "09:30→12:30 KTX",
+                "10": "07:27→10:03 KTX",
+            },
             "health": "healthy",
             "lastCheckedAt": None,
         },
         "pending": [],
     }
     notes = call_tool(env, booker, "get_status")["structuredContent"]["notes"]
-    assert "감시 내용: 10월 21일 서울→부산 · 열차 013 07:27→10:03 KTX, 30 09:30→12:30 KTX" in notes
+    assert (
+        "감시 내용: 10월 21일 서울→부산 · "
+        "열차 013 07:27→10:03 KTX, 30 09:30→12:30 KTX, 10 07:27→10:03 KTX"
+    ) in notes
 
 
 def test_a_started_watch_answers_in_start_watchs_words(env, booker):
@@ -327,6 +334,19 @@ def test_a_started_watch_answers_in_start_watchs_words(env, booker):
     assert running["seat"] == "일반실만"
     assert running["seatStrategy"] == "연속 좌석"
     assert not {"depDate", "srcLocate", "specialInfoShow"} & running.keys()
+    assert result["structuredContent"]["notes"] == [
+        "감시를 시작했어요: 11월 1일 서울→부산 · 07:00~08:00 출발 · 열차 013"
+    ]
+
+
+def test_a_missing_start_time_names_what_to_write(env, booker):
+    env.gateway.listed_trains.return_value = ["013"]
+    said = "11월 1일 서울→부산 KTX 013 취소표를 10월 30일 07:00에 감시해요"
+    arguments = watch(said, start_at="2026-10-30T07:00:00+09:00")
+    result = call_tool(env, booker, "start_watch", arguments, summary=False)
+    assert result["isError"] is True
+    assert "감시를 시작할 시각과 날짜·구간·열차 번호(예:" in tool_text(result)
+    assert ")를 사실대로" in tool_text(result)
 
 
 # ---------------------------------------------------------------- summary 가 실제 호출과 맞는지(경계)
