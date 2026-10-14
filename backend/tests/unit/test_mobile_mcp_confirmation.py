@@ -300,7 +300,8 @@ def test_the_watch_note_names_the_train_the_apps_label_leaves_out(env, booker):
     ) in notes
 
 
-def test_a_started_watch_answers_in_start_watchs_words(env, booker):
+@pytest.mark.parametrize("passengers", [1, 2])
+def test_a_started_watch_answers_in_start_watchs_words(env, booker, passengers):
     env.gateway.listed_trains.return_value = ["013"]
     env.gateway.start_search.return_value = {
         "started": True,
@@ -313,14 +314,16 @@ def test_a_started_watch_answers_in_start_watchs_words(env, booker):
             "selectedTrains": ["013"],
             "specialInfoShow": "GENERAL_ONLY",
             "seatStrategy": "consecutive",
-            "passengerCount": 1,
+            "passengerCount": passengers,
         },
     }
     result = call_tool(
         env,
         booker,
         "start_watch",
-        watch("11월 1일 서울→부산 KTX 013 취소표를 감시해요"),
+        watch(
+            f"11월 1일 서울→부산 KTX 013 {passengers}명 취소표를 감시해요", passengers=passengers
+        ),
         summary=False,
     )
     running = result["structuredContent"]["running"]
@@ -334,8 +337,33 @@ def test_a_started_watch_answers_in_start_watchs_words(env, booker):
     assert running["seat"] == "일반실만"
     assert running["seatStrategy"] == "연속 좌석"
     assert not {"depDate", "srcLocate", "specialInfoShow"} & running.keys()
+    # Who it is for too (live, 2026-10-14: a 2-passenger watch said only the trains).
     assert result["structuredContent"]["notes"] == [
-        "감시를 시작했어요: 11월 1일 서울→부산 · 07:00~08:00 출발 · 열차 013"
+        "감시를 시작했어요: 11월 1일 서울→부산 · 07:00~08:00 출발 · 열차 013",
+        f"좌석 조건: 일반실만, {passengers}명, 연속 좌석",
+    ]
+
+
+def test_a_started_watch_without_seat_details_says_only_what_it_watches(env, booker):
+    env.gateway.listed_trains.return_value = ["013"]
+    env.gateway.start_search.return_value = {
+        "started": True,
+        "running": {
+            "depDate": "20261101",
+            "srcLocate": "서울",
+            "dstLocate": "부산",
+            "selectedTrains": ["013"],
+        },
+    }
+    result = call_tool(
+        env,
+        booker,
+        "start_watch",
+        watch("11월 1일 서울→부산 KTX 013 취소표를 감시해요"),
+        summary=False,
+    )
+    assert result["structuredContent"]["notes"] == [
+        "감시를 시작했어요: 11월 1일 서울→부산 · 열차 013"
     ]
 
 

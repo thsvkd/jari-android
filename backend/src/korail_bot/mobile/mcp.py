@@ -594,6 +594,19 @@ def _watching(search):
     return " · ".join(part for part in parts if part)
 
 
+def _seat_terms(search):
+    """The class, head count and seating of a watch, as get_status and start_watch say them."""
+    seat_class, count = search.get("specialInfoShow"), search.get("passengerCount")
+    strategy = search.get("seatStrategy")
+    # A value the status left out is left out of the sentence too, never read as "None".
+    parts = [
+        SEAT_CLASS_NOTES.get(seat_class, seat_class) if seat_class else None,
+        f"{count}명" if count else None,
+        STRATEGY_NOTES.get(strategy, strategy) if strategy else None,
+    ]
+    return ", ".join(part for part in parts if part)
+
+
 def _reserved(result):
     held = [text for item in result.get("pending") or [] if (text := _held(item))]
     return {
@@ -656,12 +669,17 @@ def _started(result):
         }
     running = result.get("running")
     if isinstance(running, dict):
-        # The same words get_status uses, not the app's fields.
+        # The same words get_status uses, not the app's fields: what is watched, then for whom.
         said = _watching(running)
+        notes = []
+        if said and result.get("started"):
+            notes.append(f"감시를 시작했어요: {said}")
+            if terms := _seat_terms(running):
+                notes.append(f"좌석 조건: {terms}")
         return {
             **result,
             "running": _plain_watch(running),
-            **({"notes": [f"감시를 시작했어요: {said}"]} if said and result.get("started") else {}),
+            **({"notes": notes} if notes else {}),
         }
     return result
 
@@ -764,16 +782,8 @@ def _status(result):
         notes.append(HEALTH_NOTES.get(health, HEALTH_NOTES["unknown"]))
         if running_text := _watching(running):
             notes.append(f"감시 내용: {running_text}")
-        seat_class, count = running.get("specialInfoShow"), running.get("passengerCount")
-        strategy = running.get("seatStrategy")
-        # A value the status left out is left out of the sentence too, never read as "None".
-        parts = [
-            SEAT_CLASS_NOTES.get(seat_class, seat_class) if seat_class else None,
-            f"{count}명" if count else None,
-            STRATEGY_NOTES.get(strategy, strategy) if strategy else None,
-        ]
-        if any(parts):
-            notes.append("좌석 조건: " + ", ".join(part for part in parts if part))
+        if terms := _seat_terms(running):
+            notes.append(f"좌석 조건: {terms}")
     if result.get("scheduled"):
         notes.append("정한 시각에 감시를 시작해요.")
         later = result["scheduled"].get("search") if isinstance(result["scheduled"], dict) else None
