@@ -590,6 +590,8 @@ html:has(.modal-backdrop) { overflow: hidden; }
 .settings-section { margin: 27px 0; }
 a.settings-row { color: inherit; text-decoration: none; }
 .settings-row { width: 100%; min-height: 61px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; }
+.settings-row.with-icon { grid-template-columns: 32px minmax(0, 1fr) auto; }
+.google-brand-icon { width: 32px; height: 32px; padding: 6px; object-fit: contain; border-radius: 50%; background: #fff; }
 .settings-section > .settings-row:last-child { border-bottom: 0; }
 .settings-row > span:not(.badge) { display: grid; gap: 4px; }
 .settings-row b { font-size: 12px; }

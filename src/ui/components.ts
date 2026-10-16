@@ -196,6 +196,8 @@ export function emptyState(options: EmptyStateOptions): Html {
 export interface ListRowOptions {
   title: string;
   hint?: string;
+  /** 글자 앞에 붙는 아이콘 HTML. */
+  leading?: Html;
   /** 오른쪽 글자(escape 해요). */
   value?: string;
   /** value 대신 그대로 넣는 오른쪽 HTML(배지·스테퍼·스피너). */
@@ -210,8 +212,9 @@ export interface ListRowOptions {
 export function listRow(options: ListRowOptions): Html {
   const text = `<span><b>${esc(options.title)}</b>${options.hint ? `<small>${esc(options.hint)}</small>` : ""}</span>`;
   const end = options.trailing ?? (options.value ? `<em>${esc(options.value)}</em>` : "");
-  if (!options.action && !options.view) return `<div class="settings-row static">${text}${end}</div>`;
-  return `<button ${attrs({ type: "button", class: "settings-row", "data-action": options.action, "data-view": options.view, disabled: options.disabled })}>${text}${end}</button>`;
+  const content = `${options.leading ?? ""}${text}${end}`;
+  if (!options.action && !options.view) return `<div class="${cx("settings-row", "static", options.leading && "with-icon")}">${content}</div>`;
+  return `<button ${attrs({ type: "button", class: cx("settings-row", options.leading && "with-icon"), "data-action": options.action, "data-view": options.view, disabled: options.disabled })}>${content}</button>`;
 }
 
 /** 화면 위에 뜨는 창(확인 시트·좌석표). 뒤로가기·Escape 로 닫는 것은 앱의 closeTopOverlay 가 맡아요. */

@@ -40,6 +40,12 @@ test("설정에서 비밀번호로 구글 연결 후 구글 로그인으로 돌�
   // 기기 프로젝트는 이 브라우저 대체를 쓸 수 없어 별도 네이티브 빌드·수동 smoke 범위예요.
   await page.evaluate(() => { window.open = (() => ({ opener: null })) as unknown as typeof window.open; });
   await page.locator(".bottom-nav [data-view='settings']").click();
+  const googleMark = page.locator("[data-action='google-link'] .google-brand-icon");
+  await expect(googleMark).toBeVisible();
+  await expect.poll(() => googleMark.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+  await expect(googleMark).toHaveAttribute("alt", "");
+  await expect(googleMark).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await expectCleanLayout(page, "구글 연결 메뉴와 공식 로고");
   await page.locator("[data-action='google-link']").click();
   await page.locator("#sheet-password").fill(user.password);
   await expectCleanLayout(page, "구글 연결 본인 확인");
@@ -49,6 +55,7 @@ test("설정에서 비밀번호로 구글 연결 후 구글 로그인으로 돌�
   await expectCleanLayout(page, "구글 인증 대기");
   waiting = false;
   await expect(page.getByText("구글 계정 연결됨", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-action='google-unlink'] .google-brand-icon")).toBeVisible();
   await expectCleanLayout(page, "구글 연결 완료");
   await page.locator("[data-action='app-logout']").click();
   const confirm = page.locator("[data-action='sheet-confirm']");
