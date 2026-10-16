@@ -1,8 +1,8 @@
 """
-Public pages outside /api/mobile: the privacy policy and how to delete an
-account. Google Play links to both (the privacy policy, and the account- and
-data-deletion URL of the data safety form), so they are served to any browser,
-need no session and say only what the code in this repository actually keeps.
+Public pages outside /api/mobile: the app homepage, privacy policy and how to
+delete an account. Google Play and the Google OAuth consent screen link to
+these pages, so they are served to any browser, need no session and say only
+what the code in this repository actually does.
 
 Change the text when what is stored changes, and keep it in step with the
 data types declared on Play: user ID, phone number, other personal info,
@@ -36,7 +36,10 @@ table { width: 100%; border-collapse: collapse; font-size: .95rem; }
 th, td { text-align: left; vertical-align: top; padding: 8px 6px; border-bottom: 1px solid var(--line); }
 th { white-space: nowrap; }
 .table { overflow-x: auto; }
-nav { margin: 0 0 16px; font-size: .95rem; }
+nav { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 16px; font-size: .95rem; }
+nav a, .actions a { display: inline-flex; min-width: 48px; min-height: 48px; align-items: center; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0; }
+.actions a { flex: 1 1 180px; justify-content: center; padding: 8px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); font-weight: 650; text-align: center; }
 """
 
 
@@ -70,7 +73,7 @@ def _page(title: str, body: str) -> str:
 <style>{_STYLE}</style>
 </head>
 <body><main>
-<nav><a href="/privacy">개인정보처리방침</a> · <a href="/delete-account">계정·데이터 삭제</a></nav>
+<nav><a href="/">홈</a><a href="/privacy">개인정보처리방침</a><a href="/delete-account">계정·데이터 삭제</a></nav>
 <header><span class="app">{APP_NAME}</span><span class="dev">개발자 {DEVELOPER}</span></header>
 {body}
 </main></body>
@@ -143,6 +146,34 @@ def _partial_steps() -> str:
 <li><b>휴대폰 알림</b>: Android 설정 → 앱 → 자리났다 → 알림에서 끕니다.</li>
 <li><b>이 휴대폰에 남은 정보</b>(로그인, 최근 조회 구간): 앱에서 로그아웃하거나 앱을 지우면 지워집니다.</li>
 </ul>"""
+
+
+def homepage(_contact: str | None) -> str:
+    return _page(
+        "홈",
+        """<h1>자리났다</h1>
+<p>매진된 코레일 열차의 빈자리를 대신 확인하다가, 사용자가 정한 조건에 맞는 자리가 나면 결제 전 예약까지 잡아 주는 Android 앱입니다.</p>
+
+<h2>이용 방법</h2>
+<ol>
+<li>운영자에게 초대 코드를 받아 앱 계정을 만듭니다. 자리났다는 초대받은 사람만 이용할 수 있습니다.</li>
+<li>본인의 코레일 계정을 연결하고 날짜·구간·열차·좌석 조건을 정해 빈자리 찾기를 시작합니다.</li>
+<li>좌석이 예약되면 알림을 확인합니다. 결제는 코레일 앱이나 코레일 웹사이트에서 사용자가 직접 합니다.</li>
+</ol>
+
+<h2>Google 로그인</h2>
+<p>Google 로그인은 새 회원 가입 수단이 아닙니다. 초대 코드로 만든 기존 앱 계정에 사용자가 직접 Google 계정을 연결한 뒤, 다음 로그인부터 선택해서 사용할 수 있습니다.</p>
+
+<div class="actions">
+<a href="https://github.com/thsvkd/jari-android/releases/latest">Android 앱 받기</a>
+<a href="https://github.com/thsvkd/jari-android/releases">릴리스 목록</a>
+<a href="/privacy">개인정보처리방침</a>
+<a href="/delete-account">계정·데이터 삭제</a>
+</div>
+
+<p class="muted">자리났다는 한국철도공사의 공식 앱이 아니며, 결제와 승차권 관리는 코레일에서 진행합니다.</p>
+""",
+    )
 
 
 def privacy_page(contact: str | None) -> str:

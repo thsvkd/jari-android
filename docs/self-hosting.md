@@ -198,6 +198,16 @@ Docker 이미지에는 알림 의존성이 이미 들어 있습니다. Docker �
 
 기존 초대 계정에 구글 로그인을 연결할 수 있습니다. Google Cloud에서 **웹 애플리케이션** OAuth 클라이언트를 만들고 승인된 리디렉션 URI를 `https://<MOBILE_PUBLIC_URL의 호스트>/api/mobile/auth/google/callback`으로 정확히 등록합니다. 서버에 `MOBILE_PUBLIC_URL`, `MOBILE_GOOGLE_CLIENT_ID`, `MOBILE_GOOGLE_CLIENT_SECRET`을 함께 설정합니다. Docker Compose는 셸 또는 비공개 `.env`의 두 Google 값을 API 컨테이너로 전달합니다. 비밀키를 앱의 `VITE_` 설정이나 저장소에 넣지 않습니다.
 
+Google Auth Platform에서는 홈페이지를 `<MOBILE_PUBLIC_URL>/`, 개인정보처리방침을 `<MOBILE_PUBLIC_URL>/privacy`로 등록합니다. 두 페이지는 이 서버가 공개 경로로 제공합니다. 실제 초대 회원이 쓰게 하려면 대상을 **외부(External)**, 게시 상태를 **프로덕션(Production)**으로 둡니다. 요청 범위는 `openid`만 사용합니다. 동의 화면에 맞춤 앱 이름이나 로고를 표시하려면 Google의 별도 브랜드 인증을 통과해야 합니다. 브랜드 인증을 신청하기 전에는 홈페이지와 개인정보처리방침이 실제 공개 서버에서 열리는지 확인하고, [Google의 최신 브랜딩 요건](https://support.google.com/cloud/answer/15549049)을 따릅니다.
+
+운영 비밀값을 Doppler의 `dev` 프로젝트·`dev` 구성에 둘 때는 아래 이름으로 저장하고, 서버 환경 변수로 내보낼 때 오른쪽 이름에 연결합니다. 값 자체는 문서나 저장소에 적지 않습니다.
+
+| Doppler 비밀 이름 | 서버 환경 변수 |
+|---|---|
+| `JARI_GOOGLE_CLIENT_ID` | `MOBILE_GOOGLE_CLIENT_ID` |
+| `JARI_GOOGLE_CLIENT_SECRET` | `MOBILE_GOOGLE_CLIENT_SECRET` |
+| `JARI_MOBILE_PUBLIC_URL` | `MOBILE_PUBLIC_URL` |
+
 설정이 없으면 구글 로그인 버튼을 표시하지 않고, 일부 값만 설정하면 서버가 시작 오류를 냅니다. Firebase 푸시용 `google-services.json`만으로는 구글 로그인이 활성화되지 않습니다. 설정 후 앱 계정으로 로그인해 **설정 → 구글 계정 연결**에서 앱 비밀번호를 확인하고 구글 계정을 고릅니다. 다음부터 로그인 화면의 **구글로 로그인**을 사용할 수 있습니다. 앱에 표시된 확인 코드를 인증 브라우저에 직접 입력하고, 표시된 계정과 요청 기기를 확인한 뒤 로그인을 허용합니다. 연결 해제도 앱 비밀번호를 확인하며 현재 기기를 제외한 다른 앱 세션을 해제합니다. 새 회원은 먼저 초대 코드로 기존 앱 계정을 만듭니다. 운영 서버에 설정을 적용하거나 재시작하는 것은 별도 운영 승인 절차를 따릅니다.
 
 인증 페이지는 Android WebView 밖의 브라우저에서 열립니다. 새 앱 의존성·Android용 Google OAuth 클라이언트·서명 지문 추가는 필요하지 않습니다. [Google 웹 서버 OAuth 문서](https://developers.google.com/identity/protocols/oauth2/web-server)와 [OpenID Connect 검증 문서](https://developers.google.com/identity/openid-connect/openid-connect)를 기준으로 합니다.

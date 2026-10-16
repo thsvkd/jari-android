@@ -10,7 +10,7 @@ from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from korail_bot.mobile import google_auth, mcp, oauth
 from korail_bot.mobile.config import MAX_REQUEST_BYTES
 from korail_bot.mobile.identity import LAST_ADMIN_MESSAGE, AuthError, timestamp
-from korail_bot.mobile.pages import delete_account_page, privacy_page
+from korail_bot.mobile.pages import delete_account_page, homepage, privacy_page
 from korail_bot.services.mini_app_gateway import MiniAppError
 
 PREFIX = "/api/mobile"
@@ -31,7 +31,7 @@ def _log_field(value):
 
 
 # Public pages for Google Play: any browser, no session, cacheable.
-PUBLIC_PAGES = {"/privacy": privacy_page, "/delete-account": delete_account_page}
+PUBLIC_PAGES = {"/": homepage, "/privacy": privacy_page, "/delete-account": delete_account_page}
 # Called by browsers and agents from anywhere, and answering in OAuth's own error shape.
 OAUTH_PREFIXES = ("/oauth/", "/.well-known/")
 

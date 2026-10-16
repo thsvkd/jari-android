@@ -399,6 +399,34 @@ def test_public_pages_are_cacheable_html_for_any_browser(pages, path):
     assert api.headers["Cache-Control"] == "no-store"
 
 
+def test_homepage_explains_the_real_app_and_links_to_public_resources(pages):
+    client = pages("privacy@example.com")
+
+    response = client.get("/", headers={"Origin": "https://accounts.google.com"})
+
+    assert response.status_code == 200
+    assert response.mimetype == "text/html"
+    assert response.headers["Cache-Control"] == "public, max-age=3600"
+    assert "default-src 'none'" in response.headers["Content-Security-Policy"]
+    assert "Access-Control-Allow-Origin" not in response.headers
+    body = response.get_data(as_text=True)
+    for fact in (
+        "자리났다",
+        "개발자 SonPang",
+        "코레일",
+        "빈자리",
+        "초대",
+        "기존 앱 계정",
+        "Google",
+        "결제는 코레일",
+        'href="/privacy"',
+        'href="/delete-account"',
+        'href="https://github.com/thsvkd/jari-android/releases/latest"',
+    ):
+        assert fact in body
+    assert client.head("/").status_code == 200
+
+
 def test_privacy_page_names_what_is_kept_and_who_receives_it(pages):
     body = pages("privacy@example.com").get("/privacy").get_data(as_text=True)
     for fact in (
