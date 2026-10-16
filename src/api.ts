@@ -285,7 +285,7 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
     googleConfiguration: () => request<{ enabled: boolean }>("/auth/google", { method: "GET", authenticated: false, timeoutMs: 10_000 }),
     googleStatus: () => request<{ enabled: boolean; linked: boolean; reauthenticationRequired?: boolean }>("/account/google", { method: "GET" }),
     googleStart: () => request<GoogleAuthStart>("/auth/google/start", { body: {}, authenticated: false, timeoutMs: 10_000 }),
-    googleLink: (password) => request<GoogleAuthStart>("/account/google/link", { body: password === undefined ? {} : { password }, timeoutMs: 10_000 }),
+    googleLink: () => request<GoogleAuthStart>("/account/google/link", { body: {}, timeoutMs: 10_000 }),
     googleUnlink: (password) => request<{ linked: false }>("/account/google/unlink", { body: { password } }),
     googleAcknowledge: (ticket) => request<{ acknowledged: boolean }>("/auth/google/ack", { body: { ticket }, authenticated: false, timeoutMs: 10_000 }),
     googleCancel: (ticket) => request<{ cancelled: boolean }>("/auth/google/cancel", { body: { ticket }, authenticated: false, timeoutMs: 10_000 }),

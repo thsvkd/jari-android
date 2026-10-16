@@ -1,7 +1,6 @@
 """SQLite identities and opaque sessions, independent of Telegram and Redis."""
 
 import hashlib
-import math
 import os
 import re
 import secrets
@@ -303,28 +302,6 @@ class IdentityStore:
             user = db.execute("SELECT password_hash FROM users WHERE id=?", (user_id,)).fetchone()
         valid = check_password_hash(user["password_hash"] if user else _DUMMY_HASH, password)
         return user is not None and valid
-
-    def session_requires_reauthentication(self, user_id, token, *, max_age=600):
-        """Whether this exact live session lacks a recent primary authentication."""
-        if not isinstance(token, str):
-            return True
-        now = self.clock()
-        with self.connect() as db:
-            row = db.execute(
-                "SELECT authenticated_at FROM sessions WHERE hash=? AND user_id=? AND expires>?",
-                (digest(token), user_id, now),
-            ).fetchone()
-        if row is None:
-            return True
-        authenticated_at = row["authenticated_at"]
-        if (
-            not isinstance(authenticated_at, int | float)
-            or isinstance(authenticated_at, bool)
-            or not math.isfinite(authenticated_at)
-        ):
-            return True
-        age = now - authenticated_at
-        return not 0 <= age < max_age
 
     def reauthenticate_session(self, user_id, token, password):
         """Verify the local password and refresh only the current live session."""

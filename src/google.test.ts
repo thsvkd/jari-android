@@ -27,7 +27,7 @@ it("opens Google externally and saves only the resulting app session", async () 
   await vi.waitFor(() => expect(root.querySelector(".screen-home")).not.toBeNull());
 });
 
-it("requires the local password before linking, then shows the linked status", async () => {
+it("links with the existing app session and shows the linked status without a password", async () => {
   const demo = createDemoApi();
   let linked = false;
   const googleLink = vi.fn(async () => ({ ticket: "link-proof", authorizationUrl: "https://accounts.google.com/auth", expiresIn: 300, verificationCode: "ABCD-EFGH" }));
@@ -42,20 +42,19 @@ it("requires the local password before linking, then shows the linked status", a
   await app.start(true);
   app.navigate("settings");
   root.querySelector<HTMLButtonElement>("[data-action='google-link']")!.click();
-  await vi.waitFor(() => expect(root.querySelector("#sheet-password")).not.toBeNull());
-  const input = root.querySelector<HTMLInputElement>("#sheet-password")!;
-  input.value = "password8";
-  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
-  await vi.waitFor(() => expect(googleLink).toHaveBeenCalledWith("password8"));
+  await vi.waitFor(() => expect(googleLink).toHaveBeenCalledWith());
+  expect(root.querySelector("#sheet-password")).toBeNull();
   await vi.waitFor(() => expect(root.textContent).toContain("구글 계정 연결됨"));
 });
 
-it("links directly after recent authentication without asking for the local password", async () => {
+it.each([true, false, undefined])("ignores a legacy reauthentication hint (%s) and links without the local password", (reauthenticationRequired) => runDirectLink(reauthenticationRequired));
+
+async function runDirectLink(reauthenticationRequired: boolean | undefined): Promise<void> {
   const demo = createDemoApi();
   const googleLink = vi.fn(async () => ({ ticket: "recent-proof", authorizationUrl: "https://accounts.google.com/auth", expiresIn: 300, verificationCode: "ABCD-EFGH" }));
   const root = document.createElement("div"); document.body.append(root);
   const app = new JariApp(root, { ...demo,
-    googleStatus: async () => ({ enabled: true, linked: false, reauthenticationRequired: false }),
+    googleStatus: async () => ({ enabled: true, linked: false, reauthenticationRequired }),
     googleLink, googlePoll: async () => ({ status: "pending" as const }),
   }, { demoMode: false, onOpenExternal: async () => undefined });
   mounted.push(app);
@@ -65,28 +64,23 @@ it("links directly after recent authentication without asking for the local pass
   await vi.waitFor(() => expect(googleLink).toHaveBeenCalledWith());
   expect(root.querySelector("#sheet-password")).toBeNull();
   await vi.waitFor(() => expect(root.querySelector("[data-google-code]")?.textContent).toBe("ABCD-EFGH"));
-});
+}
 
-it("asks for the password when the server says recent authentication expired", async () => {
+it("shows a link failure without opening a password prompt or silently retrying", async () => {
   const demo = createDemoApi();
-  const googleLink = vi.fn()
-    .mockRejectedValueOnce(new ApiError("비밀번호를 다시 확인해 주세요.", 403, "server", "reauthentication_required"))
-    .mockResolvedValue({ ticket: "verified-proof", authorizationUrl: "https://accounts.google.com/auth", expiresIn: 300, verificationCode: "ABCD-EFGH" });
+  const googleLink = vi.fn().mockRejectedValue(new ApiError("연결을 시작하지 못했어요.", 403, "server", "reauthentication_required"));
   const root = document.createElement("div"); document.body.append(root);
   const app = new JariApp(root, { ...demo,
     googleStatus: async () => ({ enabled: true, linked: false, reauthenticationRequired: false }),
-    googleLink, googlePoll: async () => ({ status: "pending" as const }),
+    googleLink,
   }, { demoMode: false, onOpenExternal: async () => undefined });
   mounted.push(app);
   await app.start(true);
   app.navigate("settings");
   root.querySelector<HTMLButtonElement>("[data-action='google-link']")!.click();
-  await vi.waitFor(() => expect(root.querySelector("#sheet-password")).not.toBeNull());
+  await vi.waitFor(() => expect(root.textContent).toContain("연결을 시작하지 못했어요."));
+  expect(root.querySelector("#sheet-password")).toBeNull();
   expect(googleLink).toHaveBeenCalledTimes(1);
-  root.querySelector<HTMLInputElement>("#sheet-password")!.value = "password8";
-  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
-  await vi.waitFor(() => expect(googleLink).toHaveBeenNthCalledWith(2, "password8"));
-  await vi.waitFor(() => expect(root.querySelector("[data-google-code]")?.textContent).toBe("ABCD-EFGH"));
 });
 
 it("still asks for the password before unlinking a recently authenticated account", async () => {

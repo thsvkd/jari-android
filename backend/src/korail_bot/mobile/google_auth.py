@@ -447,25 +447,14 @@ def install(
         return jsonify(
             enabled=enabled,
             linked=enabled and identity.google_status(g.user["id"]),
-            reauthenticationRequired=identity.session_requires_reauthentication(
-                g.user["id"], g.token
-            ),
+            # 4.18 clients treat a missing field as requiring the app password.
+            reauthenticationRequired=False,
         )
 
     @app.post("/api/mobile/account/google/link")
     @authenticated
     def google_link():
         limited("google-link:" + g.user["id"], 5, 300)
-        if identity.session_requires_reauthentication(g.user["id"], g.token):
-            password = g.payload.get("password")
-            if not isinstance(password, str) or not password:
-                raise AuthError(
-                    "Google 계정을 연결하려면 앱 비밀번호를 다시 확인해 주세요.",
-                    403,
-                    code="reauthentication_required",
-                )
-            if not identity.reauthenticate_session(g.user["id"], g.token, password):
-                raise AuthError("앱 비밀번호가 맞지 않아요.", 403)
         return jsonify(start("link", user_id=g.user["id"], session_token=g.token))
 
     @app.post("/api/mobile/account/google/unlink")

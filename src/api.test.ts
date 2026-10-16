@@ -64,7 +64,7 @@ describe("mobile API authentication boundary", () => {
     expect(expired).toHaveBeenCalledOnce();
   });
 
-  it("starts recent Google linking without a password and preserves a reauthentication challenge", async () => {
+  it("starts Google linking with the session alone and preserves a server failure", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ error: "본인 확인이 필요해요.", code: "reauthentication_required" }, 403));
     const api = createHttpApi({ baseUrl: "https://jari.example", tokenStorage, fetcher });
     await expect(api.googleLink()).rejects.toMatchObject({ status: 403, code: "reauthentication_required" });

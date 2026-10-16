@@ -243,7 +243,7 @@ export function conditionsToDraft(conditions?: Conditions | null): BookingDraft 
     String(now.getMonth() + 1).padStart(2, "0"),
     String(now.getDate()).padStart(2, "0"),
   ].join("-");
-  // 시간 선택기는 정시만 골라요. 시작은 지금 시각의 정시로 내려요: 올리면 그 사이에 떠나는 열차를 빠뜨려요.
+  // 기본 시작은 지금 시각의 정시로 내려요: 올리면 그 사이에 떠나는 열차를 빠뜨려요.
   const roundedStartMinutes = now.getHours() * 60;
   const suggestedEndMinutes = roundedStartMinutes + 120;
   const defaultUnlimitedTime = suggestedEndMinutes >= 24 * 60;

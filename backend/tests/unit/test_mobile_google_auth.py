@@ -150,7 +150,7 @@ def test_google_login_never_auto_links_email_or_creates_an_account(tmp_path, mon
     assert identity.find_user("must-not-be-used") is None
 
 
-def test_recent_session_links_without_password_and_reports_no_reauthentication(tmp_path):
+def test_live_approved_session_links_without_password(tmp_path):
     identity, client = make_env(tmp_path)
     _, headers = register(identity, client)
     assert client.get("/api/mobile/account/google", headers=headers).json == {
@@ -168,69 +168,23 @@ def test_recent_session_links_without_password_and_reports_no_reauthentication(t
     assert "code_verifier" not in query
 
 
-def test_exactly_ten_minutes_old_or_future_session_requires_password(tmp_path):
+@pytest.mark.parametrize("authenticated_at", [None, 399.999, 1_601.0])
+def test_live_approved_session_links_without_password_regardless_of_authentication_age(
+    tmp_path, authenticated_at
+):
     now = [1_000.0]
     identity, client = make_env(tmp_path, clock=lambda: now[0])
     _, headers = register(identity, client)
-
-    now[0] = 1_599.999
-    assert (
-        client.get("/api/mobile/account/google", headers=headers).json["reauthenticationRequired"]
-        is False
-    )
-    now[0] = 1_600.0
-    assert (
-        client.get("/api/mobile/account/google", headers=headers).json["reauthenticationRequired"]
-        is True
-    )
-    missing = client.post("/api/mobile/account/google/link", json={}, headers=headers)
-    assert missing.status_code == 403
-    assert missing.json["code"] == "reauthentication_required"
-
     with identity.connect() as db:
         db.execute(
             "UPDATE sessions SET authenticated_at=? WHERE hash=?",
-            (now[0] + 1, digest(headers["Authorization"].removeprefix("Bearer "))),
+            (authenticated_at, digest(headers["Authorization"].removeprefix("Bearer "))),
         )
-    assert (
-        client.get("/api/mobile/account/google", headers=headers).json["reauthenticationRequired"]
-        is True
-    )
-
-
-def test_stale_session_password_refreshes_only_the_current_session(tmp_path):
-    now = [1_000.0]
-    identity, client = make_env(tmp_path, clock=lambda: now[0])
-    first, first_headers = register(identity, client)
-    second = identity.login("alice", PASSWORD)
-    second_headers = {"Authorization": "Bearer " + second["token"]}
-    now[0] = 1_601.0
-
-    wrong = client.post(
-        "/api/mobile/account/google/link", json={"password": "wrong-pass"}, headers=first_headers
-    )
-    assert wrong.status_code == 403
-    assert wrong.json == {"error": "앱 비밀번호가 맞지 않아요."}
-    linked = client.post(
-        "/api/mobile/account/google/link", json={"password": PASSWORD}, headers=first_headers
-    )
+    linked = client.post("/api/mobile/account/google/link", json={}, headers=headers)
     assert linked.status_code == 200
-    assert (
-        client.get("/api/mobile/account/google", headers=first_headers).json[
-            "reauthenticationRequired"
-        ]
-        is False
-    )
-    assert (
-        client.get("/api/mobile/account/google", headers=second_headers).json[
-            "reauthenticationRequired"
-        ]
-        is True
-    )
-    assert identity.authenticate(first["token"])["id"] == first["user"]["id"]
 
 
-def test_legacy_session_migrates_as_reauthentication_required(tmp_path):
+def test_legacy_live_approved_session_links_without_password(tmp_path):
     path = tmp_path / "identity.sqlite3"
     token = "legacy-session-" + "x" * 32
     db = sqlite3.connect(path)
@@ -262,14 +216,46 @@ def test_legacy_session_migrates_as_reauthentication_required(tmp_path):
         google_client_secret=CLIENT_SECRET,
     )
     app.testing = True
-    response = app.test_client().get(
-        "/api/mobile/account/google", headers={"Authorization": "Bearer " + token}
+    response = app.test_client().post(
+        "/api/mobile/account/google/link",
+        json={},
+        headers={"Authorization": "Bearer " + token},
     )
     assert response.status_code == 200
-    assert response.json["reauthenticationRequired"] is True
+    assert response.json["expiresIn"] == 300
     with identity.connect() as db:
         row = db.execute("SELECT authenticated_at FROM sessions").fetchone()
     assert row["authenticated_at"] is None
+
+
+def test_expired_revoked_pending_or_rejected_session_cannot_start_account_link(tmp_path):
+    identity, client = make_env(tmp_path)
+    expired, expired_headers = register(identity, client, "expired")
+    revoked, revoked_headers = register(identity, client, "revoked")
+    pending = identity.register("pending", PASSWORD)
+    pending_headers = {"Authorization": "Bearer " + pending["token"]}
+    rejected = identity.register("rejected", PASSWORD)
+    identity.set_approval(rejected["user"]["id"], "rejected")
+    rejected_headers = {"Authorization": "Bearer " + rejected["token"]}
+    with identity.connect() as db:
+        db.execute(
+            "UPDATE sessions SET expires=? WHERE hash=?",
+            (identity.clock() - 1, digest(expired["token"])),
+        )
+    identity.revoke(revoked["token"])
+
+    assert (
+        client.post("/api/mobile/account/google/link", json={}, headers=expired_headers).status_code
+        == 401
+    )
+    assert (
+        client.post("/api/mobile/account/google/link", json={}, headers=revoked_headers).status_code
+        == 401
+    )
+    for headers in (pending_headers, rejected_headers):
+        response = client.post("/api/mobile/account/google/link", json={}, headers=headers)
+        assert response.status_code == 403
+        assert response.json["code"] == "approval_required"
 
 
 def test_link_then_login_creates_session_only_when_ticket_is_polled(tmp_path, monkeypatch):
@@ -302,12 +288,11 @@ def test_link_then_login_creates_session_only_when_ticket_is_polled(tmp_path, mo
     assert result.json["status"] == "complete"
     assert result.json["auth"]["user"]["id"] == session["user"]["id"]
     google_headers = {"Authorization": "Bearer " + result.json["auth"]["token"]}
-    assert (
-        client.get("/api/mobile/account/google", headers=google_headers).json[
-            "reauthenticationRequired"
-        ]
-        is False
-    )
+    assert client.get("/api/mobile/account/google", headers=google_headers).json == {
+        "enabled": True,
+        "linked": True,
+        "reauthenticationRequired": False,
+    }
 
 
 def test_recent_authorization_remains_valid_for_the_five_minute_link_flow(tmp_path, monkeypatch):
@@ -797,17 +782,9 @@ def test_unlink_revokes_other_sessions_but_keeps_reauthenticated_caller(tmp_path
     ]
 
     now[0] = 1_601.0
-    assert (
-        client.get("/api/mobile/account/google", headers=headers).json["reauthenticationRequired"]
-        is True
-    )
     assert client.post(
         "/api/mobile/account/google/unlink", json={"password": PASSWORD}, headers=headers
     ).json == {"linked": False}
-    assert (
-        client.get("/api/mobile/account/google", headers=headers).json["reauthenticationRequired"]
-        is False
-    )
     assert identity.authenticate(local["token"])["id"] == local["user"]["id"]
     with pytest.raises(AuthError):
         identity.authenticate(google["token"])

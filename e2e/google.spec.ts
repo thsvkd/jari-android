@@ -2,25 +2,23 @@ import { expect, signIn, test } from "./fixtures";
 import { expectCleanLayout } from "./layout";
 
 // UI 계약 검증: Google 자체는 호출하지 않고, API 성공·취소 응답을 경계에서 대체해요.
-for (const mode of ["recent", "stale", "expires"] as const) {
-  const reauthenticationRequired = mode === "stale";
-  let challengeReturned = false;
-test(`설정에서 ${mode === "expires" ? "화면을 연 뒤 인증이 오래되면 비밀번호 확인 후" : reauthenticationRequired ? "오래된 로그인은 비밀번호 확인 후" : "최근 로그인은 비밀번호 없이"} 구글을 연결해요 @layout`, async ({ app: page, user }, testInfo) => {
+for (const legacyHint of [undefined, true, false]) {
+test(`설정에서 로그인 세션으로 비밀번호 없이 구글을 연결해요 (이전 상태 ${legacyHint}) @layout`, async ({ app: page, user }, testInfo) => {
   test.skip(testInfo.project.name === "device", "Google API·외부 브라우저 대체는 헤드리스에서 검사해요");
+  let failLink = true;
   let linked = false;
   let purpose: "login" | "link" = "link";
   let waiting = true;
   let failCancel = true;
   await page.route("**/api/mobile/auth/google", (route) => route.fulfill({ json: { enabled: true } }));
-  await page.route("**/api/mobile/account/google", (route) => route.fulfill({ json: { enabled: true, linked, reauthenticationRequired } }));
+  await page.route("**/api/mobile/account/google", (route) => route.fulfill({ json: { enabled: true, linked, reauthenticationRequired: legacyHint } }));
   await page.route("**/api/mobile/account/google/link", async (route) => {
-    if (mode === "expires" && !challengeReturned) {
-      expect(route.request().postDataJSON()).toEqual({});
-      challengeReturned = true;
-      await route.fulfill({ status: 403, json: { error: "본인 확인이 필요해요.", code: "reauthentication_required" } });
+    expect(route.request().postDataJSON()).toEqual({});
+    if (failLink) {
+      failLink = false;
+      await route.fulfill({ status: 503, json: { error: "구글 연결을 시작하지 못했어요. 다시 시도해 주세요." } });
       return;
     }
-    expect(route.request().postDataJSON()).toEqual(mode === "recent" ? {} : { password: user.password });
     purpose = "link";
     await route.fulfill({ json: { ticket: "fake-link-proof", authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth?state=fake", expiresIn: 300, verificationCode: "ABCD-EFGH" } });
   });
@@ -56,13 +54,11 @@ test(`설정에서 ${mode === "expires" ? "화면을 연 뒤 인증이 오래되
   await expect(googleMark).toHaveCSS("background-color", "rgb(255, 255, 255)");
   await expectCleanLayout(page, "구글 연결 메뉴와 공식 로고");
   await page.locator("[data-action='google-link']").click();
-  if (mode !== "recent") {
-    await page.locator("#sheet-password").fill(user.password);
-    await expectCleanLayout(page, "구글 연결 본인 확인");
-    await page.locator("[data-action='sheet-confirm']").click();
-  } else {
-    await expect(page.locator("#sheet-password")).toHaveCount(0);
-  }
+  await expect(page.getByText("구글 연결을 시작하지 못했어요. 다시 시도해 주세요.", { exact: true })).toBeVisible();
+  await expect(page.locator("#sheet-password")).toHaveCount(0);
+  await expectCleanLayout(page, "구글 연결 시작 실패와 재시도");
+  await page.locator("[data-action='google-link']").click();
+  await expect(page.locator("#sheet-password")).toHaveCount(0);
   await expect(page.locator("[data-action='google-cancel']")).toBeVisible();
   await expect(page.locator("[data-google-code]")).toHaveText("ABCD-EFGH");
   await expectCleanLayout(page, "구글 인증 대기");

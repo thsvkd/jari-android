@@ -284,7 +284,6 @@ export class JariApp {
   private draft: BookingDraft = conditionsToDraft(null);
   private googleEnabled = false;
   private googleLinked = false;
-  private googleReauthenticationRequired = true;
   private googleFlow: { ticket: string; verificationCode: string; expires: number; purpose: "login" | "link"; polling: boolean; cancelRequested?: boolean; cancelling?: boolean; cancelError?: string } | null = null;
   private googleTimer: number | null = null;
   private journeyDirty = false;
@@ -402,7 +401,6 @@ export class JariApp {
   private resetSession(): void {
     this.cancelGoogle();
     this.googleLinked = false;
-    this.googleReauthenticationRequired = true;
     this.generation += 1;
     this.trial = null;
     this.trialRoutes = [];
@@ -1727,7 +1725,7 @@ export class JariApp {
     return `<div class="settings-layout"><aside class="settings-profile"><section class="profile-card"><span class="profile-avatar">${escapeHtml((state.user?.username || "나").slice(0, 1))}</span><div><b>${escapeHtml(state.user?.username || "여행자")}</b><small>${state.user?.role === "admin" ? "관리자 계정" : "회원 계정"}</small></div></section></aside>
       <div class="settings-groups"><section class="settings-section"><p class="eyebrow">철도 계정</p>${listRow({ view: "rail-account", title: "코레일 계정", hint: state.rail.registered ? "연결됨 · 모든 고속열차 예약 준비 완료" : "연결되지 않음", value: `${state.rail.registered ? "관리" : "연결"} →` })}${listRow({ title: "수서 출발 고속열차", hint: "별도 SRT 계정 없이 코레일 계정으로 이용해요", trailing: badge({ tone: "success", className: "integrated-badge", label: "통합됨" }) })}</section>
       ${state.capabilities.agents ? `<section class="settings-section"><p class="eyebrow">AI 에이전트</p>${listRow({ view: "agents", title: "에이전트 연결", hint: "AI 에이전트가 열차를 찾고 예약하게 해요", value: "관리 →" })}</section>` : ""}
-      ${this.googleEnabled && !this.demo ? `<section class="settings-section"><p class="eyebrow">로그인</p>${listRow({ action: this.googleLinked ? "google-unlink" : "google-link", leading: `<img class="google-brand-icon" src="${googleLogo}" width="32" height="32" alt="" aria-hidden="true">`, title: this.googleLinked ? "구글 계정 연결됨" : "구글 계정 연결", hint: this.googleLinked ? "연결한 구글 계정으로도 로그인할 수 있어요" : this.googleReauthenticationRequired ? "본인 확인 후 구글 계정을 연결해요" : "구글 계정을 선택해 로그인을 연결해요", value: this.googleLinked ? "연결 해제" : "연결 →" })}${this.renderGooglePending()}</section>` : ""}
+      ${this.googleEnabled && !this.demo ? `<section class="settings-section"><p class="eyebrow">로그인</p>${listRow({ action: this.googleLinked ? "google-unlink" : "google-link", leading: `<img class="google-brand-icon" src="${googleLogo}" width="32" height="32" alt="" aria-hidden="true">`, title: this.googleLinked ? "구글 계정 연결됨" : "구글 계정 연결", hint: this.googleLinked ? "연결한 구글 계정으로도 로그인할 수 있어요" : "구글 계정을 선택해 로그인을 연결해요", value: this.googleLinked ? "연결 해제" : "연결 →" })}${this.renderGooglePending()}${this.renderError()}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">알림</p>${listRow({ title: "찾기 상황 알림", hint: notifyAvailable ? "찾는 중 진행 상황을 알려드리는 간격" : "현재 서버에서는 알림 간격을 바꿀 수 없어요", trailing: stepper({ small: true, label: "찾기 상황 알림 간격", value: notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가", decrease: "notify-minus", increase: "notify-plus", disabled: !notifyAvailable, atMin: state.notifyMinutes <= NOTIFY_STEPS[0]!, atMax: state.notifyMinutes >= NOTIFY_STEPS[NOTIFY_STEPS.length - 1]! }) })}${listRow({ action: "request-push", disabled: !pushAvailable, title: "휴대폰 알림", hint: pushAvailable ? "Android 알림 권한 열기" : "휴대폰 알림 서비스가 아직 준비되지 않았어요", value: pushAvailable ? "설정" : "이용 불가" })}</section>
       ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p>${badge({ className: "admin-only-badge", label: "관리자 전용" })}</div><p class="settings-section-copy">가입 신청을 확인하고 사용 여부를 결정해요.</p>${listRow({ view: "members", title: "회원 목록", hint: "승인 대기, 승인, 거절 상태를 확인해요", value: "관리 →" })}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">앱</p>${listRow({ action: "theme", title: "화면 테마", hint: "시스템과 별도로 바꿀 수 있어요", value: this.theme === "dark" ? "다크" : "라이트" })}${listRow({ title: "앱 버전", hint: `서버 ${state.version}`, value: `v${appPackage.version}` })}</section>
@@ -2909,7 +2907,6 @@ ${agentHost(agent)}`;
       if (generation !== this.generation) return;
       this.googleEnabled = result.enabled;
       this.googleLinked = "linked" in result && result.linked === true;
-      this.googleReauthenticationRequired = !("reauthenticationRequired" in result && result.reauthenticationRequired === false);
       this.render();
     } catch {
       // Older servers have no provider endpoint. Password login remains available.
@@ -2957,20 +2954,19 @@ ${agentHost(agent)}`;
 
   private async changeGoogleLink(unlink: boolean): Promise<void> {
     if (this.googleFlow || this.busy) return;
-    if (!unlink && !this.googleReauthenticationRequired) {
+    if (!unlink) {
       await this.beginGoogle("link");
       return;
     }
     const generation = this.generation;
     const password = await this.openSheet({
-      title: unlink ? "구글 계정 연결을 해제할까요?" : "구글 계정을 연결할까요?",
-      body: unlink ? "본인 확인을 위해 앱 비밀번호를 입력해 주세요." : "로그인한 지 시간이 지나 본인 확인이 필요해요. 앱 비밀번호를 입력해 주세요.",
+      title: "구글 계정 연결을 해제할까요?",
+      body: "본인 확인을 위해 앱 비밀번호를 입력해 주세요.",
       content: '<label class="field"><span>앱 비밀번호</span><input id="sheet-password" type="password" maxlength="128" autocomplete="current-password" required></label>',
-      confirmLabel: unlink ? "연결 해제" : "구글 계정 선택",
+      confirmLabel: "연결 해제",
     });
     if (generation !== this.generation || password === null) return;
     if (!password) { this.error = "앱 비밀번호를 입력해 주세요."; this.render(); return; }
-    if (!unlink) { await this.beginGoogle("link", password); return; }
     await this.run(async () => {
       await this.api.googleUnlink(password);
       if (generation !== this.generation) return;
@@ -2981,16 +2977,15 @@ ${agentHost(agent)}`;
     });
   }
 
-  private async beginGoogle(purpose: "login" | "link", password?: string): Promise<void> {
+  private async beginGoogle(purpose: "login" | "link"): Promise<void> {
     if (!this.googleEnabled || this.googleFlow || this.busy) return;
     const generation = this.generation;
     this.error = "";
     this.busy = true;
     this.render();
     try {
-      const result = purpose === "link" ? await (password === undefined ? this.api.googleLink() : this.api.googleLink(password)) : await this.api.googleStart();
+      const result = purpose === "link" ? await this.api.googleLink() : await this.api.googleStart();
       if (generation !== this.generation) return;
-      if (purpose === "link") this.googleReauthenticationRequired = false;
       this.googleFlow = { ticket: result.ticket, verificationCode: result.verificationCode, expires: Date.now() + result.expiresIn * 1000, purpose, polling: false };
       if (!this.options.onOpenExternal) throw new Error("구글 로그인을 열 수 없어요. 앱을 다시 열어 주세요.");
       await this.options.onOpenExternal(result.authorizationUrl);
@@ -2999,13 +2994,7 @@ ${agentHost(agent)}`;
     } catch (error) {
       if (generation !== this.generation) return;
       this.cancelGoogle();
-      if (purpose === "link" && password === undefined && error instanceof ApiError && error.code === "reauthentication_required") {
-        this.googleReauthenticationRequired = true;
-        this.busy = false;
-        await this.changeGoogleLink(false);
-      } else {
-        this.handleError(error);
-      }
+      this.handleError(error);
     } finally {
       if (generation === this.generation) { this.busy = false; this.render(); }
     }

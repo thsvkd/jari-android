@@ -4,10 +4,6 @@ import { keepOnlyTrains, searchTrains, waitForPaymentCard } from "./flows";
 
 // 사용자가 거치는 모든 화면·상태에서 레이아웃 규칙을 재요. phone-dark 프로젝트가 같은 검사를 어두운 테마로 한 번 더 해요.
 
-// 기기 에뮬레이터(소프트웨어 GPU)는 시간 휠을 넘기는 장면에서 말없이 죽는 일이 잦아요(호스트 쪽 렌더러 결함, 프로세스가 통째로 사라져 뒤 테스트가 전부 연쇄 실패해요).
-// 그래서 기기 단계의 필수 묶음에서는 휠 장면을 빼고, 헤드리스 세 프로젝트가 계속 재요. 기기에서 휠도 보려면 JARI_DEVICE_WHEEL=1(야간·릴리스 때의 전체 실행)을 줘요.
-const wheelHere = (project: string) => project !== "device" || process.env.JARI_DEVICE_WHEEL === "1";
-
 test.describe("레이아웃 @layout", () => {
   test("로그인 전 화면", async ({ app: page }) => {
     await openApp(page);
@@ -35,53 +31,43 @@ test.describe("레이아웃 @layout", () => {
     await expectCleanLayout(page, "알림");
   });
 
-  test("새 여정의 시간 휠", async ({ signedIn: page }, testInfo) => {
-    test.skip(!wheelHere(testInfo.project.name), "기기 에뮬레이터에서는 야간·릴리스 전체 실행에서만 재요");
+  test("새 여정의 시간 슬라이더", async ({ signedIn: page }) => {
     await page.locator(".screen-home [data-action='new-journey']").click();
     await expectCleanLayout(page, "새 여정");
     // 원래 순서 그대로, 달력이 펼쳐진 채로 시간 칸을 열어요.
     await page.locator("[data-dp='toggle']").click();
     await expect(page.locator("[data-dp-day]").first()).toBeVisible();
     const timeField = (name: string) => page.locator("[data-time-picker]", { has: page.locator(`[name=${name}]`) });
-    // 손가락처럼 휠 위에서 위아래로 넘겨요. 멈추면 가운데 띠에 든 정시가 값이 되고, 칸은 열린 채예요.
-    const flick = async (name: string, rows: number) => {
-      const wheel = timeField(name).locator("[data-tp-wheel]");
-      // 판을 펼치면 화면이 부드럽게 스크롤돼요. 자리가 멈춘 뒤에 휠 위로 가요.
-      await wheel.scrollIntoViewIfNeeded();
-      let box = (await wheel.boundingBox())!;
+    // 손으로 슬라이더를 끌다 떼요. 떼는 순간 다음 단계로 넘어가요.
+    const drag = async (name: string, part: "hour" | "minute", at: number) => {
+      const slider = timeField(name).locator(`[data-tp-slider='${part}']`);
+      await slider.scrollIntoViewIfNeeded();
+      let box = (await slider.boundingBox())!;
       for (let settled = false; !settled;) {
         await page.waitForTimeout(80);
-        const next = (await wheel.boundingBox())!;
+        const next = (await slider.boundingBox())!;
         settled = next.y === box.y;
         box = next;
       }
-      const before = await page.locator(`[name=${name}]`).inputValue();
-      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-      await page.mouse.wheel(0, rows * 48);
-      await expect(page.locator(`[name=${name}]`)).not.toHaveValue(before);
-      await expect(page.locator(`[name=${name}]`)).toHaveValue(/^\d\d:00$/);
-      // 가운데 띠의 글자가 고른 시각이에요.
-      const value = await page.locator(`[name=${name}]`).inputValue();
-      await expect(timeField(name).locator(".time-option.current")).toHaveAttribute("data-tp-hour", String(Number(value.slice(0, 2))));
-      await expect(timeField(name).locator(".time-panel")).toBeVisible();
+      await page.mouse.move(box.x + 14, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + 14 + (box.width - 28) * at, box.y + box.height / 2, { steps: 5 });
+      await page.mouse.up();
     };
     await timeField("dep_time").locator("[data-tp='toggle']").click();
-    await expect(timeField("dep_time").locator("[data-tp-wheel]")).toBeVisible();
-    await expect(timeField("dep_time").locator("[data-tp-wheel]")).toBeFocused();
+    await expect(timeField("dep_time").locator("[data-tp-slider='minute']")).toBeVisible();
+    await expect(timeField("dep_time").locator("[data-tp-slider='hour']")).toBeFocused();
     await expectCleanLayout(page, "새 여정(dep_time 시간 펼침)");
-    // 기본 시작은 지금 시각의 정시라 밤 9시가 넘으면 아래로 두 줄 넘길 자리가 없어요. 그때는 위로 넘겨요.
-    const startHour = Number((await page.locator("[name=dep_time]").inputValue()).slice(0, 2));
-    await flick("dep_time", startHour >= 21 ? -2 : 2);
-    // 한 줄을 누르면 그 시각으로 정하고 끝 칸으로 넘어가요.
-    await timeField("dep_time").locator("[data-tp-hour='8']").click();
-    await expect(page.locator("[name=dep_time]")).toHaveValue("08:00");
+    await drag("dep_time", "hour", 0.5);
+    await expect(timeField("dep_time").locator("[data-tp-slider='minute']")).toBeFocused();
+    await drag("dep_time", "minute", 0.5);
     await expect(timeField("dep_time").locator(".time-panel")).toHaveCount(0);
     // 밤 10시가 넘어 돌면 기본값이 "마지막 열차까지"라 끝 시각 칸이 꺼져 있어 넘어가지 않아요.
     if (!(await timeField("max_dep_time").locator("[data-tp='toggle']").isDisabled())) {
-      await expect(timeField("max_dep_time").locator("[data-tp-wheel]")).toBeFocused();
+      await expect(timeField("max_dep_time").locator("[data-tp-slider='hour']")).toBeFocused();
       await expectCleanLayout(page, "새 여정(max_dep_time 시간 펼침)");
-      await timeField("max_dep_time").locator("[data-tp-hour='18']").click();
-      await expect(page.locator("[name=max_dep_time]")).toHaveValue("18:00");
+      await drag("max_dep_time", "hour", 0.8);
+      await drag("max_dep_time", "minute", 0);
       await expect(timeField("max_dep_time").locator(".time-panel")).toHaveCount(0);
     }
   });
@@ -179,17 +165,15 @@ test.describe("레이아웃 @layout", () => {
     await expectCleanLayout(page, "좌석 범위(조건 선택)");
   });
 
-  test("찾는 중·결제 대기", async ({ signedIn: page }, testInfo) => {
+  test("찾는 중·결제 대기", async ({ signedIn: page }) => {
     await searchTrains(page);
     await keepOnlyTrains(page, ["00101"]);
     await page.locator("[data-action='trains-next']").click();
     await expectCleanLayout(page, "조건 확인");
     await page.locator("[data-action='schedule-toggle']").click();
-    if (wheelHere(testInfo.project.name)) {
-      await page.locator("[data-time-picker='schedule-time'] [data-tp='toggle']").click();
-      await expect(page.locator(".time-panel [data-tp-wheel]")).toBeVisible();
-      await expectCleanLayout(page, "조건 확인(찾기 시작 시각 펼침)");
-    }
+    await page.locator("[data-time-picker='schedule-time'] [data-tp='toggle']").click();
+    await expect(page.locator(".time-panel [data-tp-slider='hour']")).toBeVisible();
+    await expectCleanLayout(page, "조건 확인(찾기 시작 시각 펼침)");
     await page.locator("[data-date-picker='schedule-date'] [data-dp='toggle']").click();
     await expect(page.locator(".schedule-panel [data-dp-day]").first()).toBeVisible();
     await expectCleanLayout(page, "조건 확인(찾기 시작 날짜 펼침)");
