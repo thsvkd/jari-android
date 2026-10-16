@@ -4,7 +4,7 @@
 아래 CLI 명령은 모두 이 `backend/` 폴더에서 실행합니다.
 원본 봇과의 연관 설명은 공통 코드의 출처를 설명하며, 원래 저장소가 설치되어 있어야 한다는 뜻이 아닙니다.
 
-- 처음 띄우기, Docker 실행, 관리자·초대, HTTPS 공개, 배포·백업: [서버 운영 가이드](../docs/self-hosting.md)
+- 처음 띄우기, Docker 실행, 관리자·회원 승인, HTTPS 공개, 배포·백업: [서버 운영 가이드](../docs/self-hosting.md)
 - 내부 구조와 API 계약: [기술 명세](../docs/SPEC.md)
 - 테스트와 개발용 스택: [개발 가이드](../docs/development.md)
 
@@ -32,10 +32,9 @@ Python 3.13 이상과 Redis가 필요합니다. Windows에는 시간대 데이�
 기존 봇 `.env`는 자동으로 읽지 않습니다. 봇의 계정·비밀 키를 모바일 설정으로 복사하지 않습니다.
 모바일 Redis 키에는 `jari:mobile:v1:` 접두어가 붙고, 앱 계정은 `mobile_...` ID 및
 서버가 배정한 별도 정수 키를 사용합니다. 조회·스캔·삭제·런타임 잠금 모두 이 접두어 안에서 실행합니다.
-기존 전화번호·등록 세션·검색 기록과 섞이지 않습니다. 앱 초대는 예약 이용 권한이며 개발자 권한을 주지 않습니다.
+기존 전화번호·등록 세션·검색 기록과 섞이지 않습니다. 앱 회원 승인은 예약 이용 권한이며 개발자 권한을 주지 않습니다.
 
 ```text
-uv run --frozen python -m korail_bot.mobile invite --ttl-hours 24
 uv run --frozen python -m korail_bot.mobile admin --username <운영자_아이디>
 uv run --frozen python -m korail_bot.mobile serve --host 127.0.0.1 --port 8081
 ```
@@ -43,11 +42,11 @@ uv run --frozen python -m korail_bot.mobile serve --host 127.0.0.1 --port 8081
 `admin`은 `--password`를 생략하면 `MOBILE_ADMIN_PASSWORD` 또는 표준 입력에서 비밀번호를 읽습니다.
 명령줄에 비밀번호를 적으면 셸 기록에 남으므로 생략하는 쪽을 씁니다.
 
-`invite`가 출력한 코드는 한 번만 사용됩니다. 별도 전달은 운영자가 합니다.
 앱 아이디는 영문·숫자·밑줄 3~32자, 비밀번호는 8~128자입니다.
-초대 발급·API 실행에는 같은 `MOBILE_DATA_DIR`를 사용해야 합니다.
-앱 계정 암호, 초대 코드, Bearer 토큰은 평문 저장하지 않습니다.
-계정 비밀번호는 scrypt `N=32768,r=8,p=3`으로, 초대와 무작위 256비트 세션 토큰은 SHA-256으로 저장합니다.
+새 가입은 선택적인 신청 메모(최대 200자)를 받을 수 있고 `pending` 상태로 저장됩니다. 관리자는 앱의 **설정 → 회원 관리**에서 대기·거절 회원을 승인하거나 거절합니다. 승인된 회원은 다시 거절할 수 없으며, 기존 회원은 마이그레이션 때 `approved`로 유지됩니다.
+관리자 명령과 API 실행에는 같은 `MOBILE_DATA_DIR`를 사용해야 합니다.
+앱 계정 암호와 Bearer 토큰은 평문 저장하지 않습니다.
+계정 비밀번호는 scrypt `N=32768,r=8,p=3`으로, 무작위 256비트 세션 토큰은 SHA-256으로 저장합니다.
 세션은 30일 뒤 만료되고 `/auth/logout`에서 즉시 폐기됩니다.
 에이전트 연결의 권한 코드·access/refresh 토큰도 SHA-256으로만 저장합니다(docs/SPEC.md §12).
 에이전트 연결은 브라우저의 `/oauth/authorize` 페이지에서 앱 아이디·비밀번호로 로그인해 허용합니다. 이 로그인은 앱 로그인과 같은 인증 제한을 함께 쓰고 앱 세션을 만들지 않습니다.
@@ -56,7 +55,7 @@ Google 로그인은 `MOBILE_PUBLIC_URL`, `MOBILE_GOOGLE_CLIENT_ID`,
 `MOBILE_GOOGLE_CLIENT_SECRET`을 모두 설정했을 때만 켜집니다. Google Cloud에서 클라이언트 유형을
 **웹 애플리케이션**으로 만들고 승인된 리디렉션 URI를
 `<MOBILE_PUBLIC_URL>/api/mobile/auth/google/callback`과 정확히 같게 등록합니다. 일부 값만 설정하면
-서버는 시작하지 않습니다. 기존 초대 계정으로 로그인한 뒤 설정에서 앱 비밀번호를 다시 입력해
+서버는 시작하지 않습니다. 승인된 기존 앱 계정으로 로그인한 뒤 설정에서 앱 비밀번호를 다시 입력해
 Google 계정을 연결해야 하며, Google 이메일만 같은 계정에 자동 연결하거나 Google만으로 새 회원을
 만들지 않습니다. 연결 뒤 로그인은 시스템 브라우저를 사용합니다. 브라우저 콜백에는 앱 Bearer
 토큰이 들어가지 않습니다. 시작 앱에는 5분짜리 일회용 티켓과 확인 코드가, 콜백 브라우저에는
@@ -93,6 +92,8 @@ uv run --frozen python -m korail_bot.mobile serve --auth-only --host 127.0.0.1 -
 
 명세의 `/api/mobile` 경로를 그대로 제공합니다. 오류는 `{error:string}`입니다.
 앱 인증 오류에만 401을 사용하고, 철도 계정 재연결이 필요하면 428을 반환합니다.
+대기·거절 회원은 로그인·로그아웃과 비밀번호를 다시 확인하는 회원 탈퇴를 사용할 수 있습니다. `bootstrap`은 철도 저장소를 읽지 않는 빈 안전 상태와 회원 상태만 반환하며, 나머지 앱 API와 OAuth/MCP는 서버에서 승인 상태를 검사해 차단합니다.
+관리자는 `GET /admin/users`로 회원 목록을 읽고 `POST /admin/users/<id>/approval` 본문 `{status:"approved"|"rejected"}`로 대기·거절 회원을 처리합니다. 관리자 계정 변경과 승인된 회원의 거절은 허용하지 않습니다.
 요청 최대 크기는 2 MiB이며 JSON 객체만 허용합니다. 좌석 계획 전체가 한 요청에 담기므로
 `korail_bot.mobile.config.MAX_REQUEST_BYTES` 한 값이 HTTP 본문 한도와 조건 파싱 한도를 함께 정합니다.
 `chatId`, `userId` 등 클라이언트의 사용자 지정은 거부합니다.

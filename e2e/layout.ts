@@ -113,7 +113,7 @@ export async function layoutProblems(page: Page, rules: LayoutRules = {}): Promi
       const right = box.right - parseFloat(style.paddingRight);
       for (const button of screen.querySelectorAll(".button")) {
         if (!visible(button) || ignored(button)) continue;
-        if (button.closest(".card, .notice, .schedule-panel, .favourite-row, .two-columns, .invite-actions, .split-actions, .action-sheet-actions")) continue;
+        if (button.closest(".card, .notice, .schedule-panel, .favourite-row, .two-columns, .split-actions, .action-sheet-actions")) continue;
         const edge = button.getBoundingClientRect();
         if (edge.width < (right - left) * 0.6) continue;
         if (Math.abs(edge.left - left) > 1 || Math.abs(edge.right - right) > 1) {

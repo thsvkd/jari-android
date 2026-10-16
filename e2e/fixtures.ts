@@ -39,9 +39,17 @@ export class Control {
     return this.post("/user", {});
   }
 
-  /** 관리자가 만든 것과 같은 일회용 초대 코드예요. */
-  async newInvite(): Promise<string> {
-    return (await this.post<{ invite: string }>("/invite", {})).invite;
+  /** 로컬 테스트 서버가 만든 관리자예요. 운영 계정에는 닿지 않아요. */
+  async adminUser(): Promise<User> {
+    const config = await fetch(`${CONTROL}/config`).then((reply) => reply.json()) as { admin: { username: string; password: string } };
+    const reply = await fetch(`http://127.0.0.1:${E2E.api}/api/mobile/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...config.admin, role: "admin" }),
+    });
+    if (!reply.ok) throw new Error(`테스트 관리자 로그인 실패: ${reply.status}`);
+    const auth = await reply.json() as { token: string };
+    return { ...config.admin, token: auth.token };
   }
 
   /** 운영 배포처럼 API 서버를 SIGTERM 으로 내리고 같은 설정으로 다시 띄워요. 새 서버가 답하면(재시작 복구가 끝난 뒤) 돌아와요. */
@@ -86,6 +94,11 @@ export async function openApp(page: Page): Promise<void> {
     }
   }
   if (await page.locator(".auth-shell").count()) return;
+  if (await page.locator(".screen-approval").count()) {
+    await page.locator("[data-action='app-logout']").click();
+    await expect(page.locator(".auth-shell")).toBeVisible();
+    return;
+  }
   await page.locator(".bottom-nav [data-view='settings']").click();
   await page.locator("[data-action='app-logout']").click();
   const sheetConfirm = page.locator("[data-action='sheet-confirm']");
@@ -93,7 +106,7 @@ export async function openApp(page: Page): Promise<void> {
   await expect(page.locator(".auth-shell")).toBeVisible();
 }
 
-/** 초대 회원 로그인 화면을 거쳐 홈까지 들어가요. 실제 사용자가 누르는 순서 그대로예요. */
+/** 승인된 회원 로그인 화면을 거쳐 홈까지 들어가요. 실제 사용자가 누르는 순서 그대로예요. */
 export async function signIn(page: Page, user: User): Promise<void> {
   await openApp(page);
   await page.locator("[data-auth-gate='guest']").click();

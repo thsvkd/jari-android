@@ -41,9 +41,8 @@ def test_seat_map_reads_share_one_korail_login(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime.gateway.conversation, "_rail_service", rail_service)
     now = [1000.0]
     monkeypatch.setattr(gateway_module, "monotonic", lambda: now[0])
-    alice = runtime.identity.register(
-        "alice", "a long secure passphrase", runtime.identity.create_invite()
-    )
+    alice = runtime.identity.register("alice", "a long secure passphrase")
+    runtime.identity.set_approval(alice["user"]["id"], "approved")
     owner = runtime.identity.authenticate(alice["token"])["storage_id"]
     http = runtime.app.test_client()
     headers = {"Authorization": "Bearer " + alice["token"]}
@@ -109,9 +108,8 @@ def _expiring_user(tmp_path, monkeypatch):
         return rail
 
     monkeypatch.setattr(runtime.gateway.conversation, "_rail_service", rail_service)
-    alice = runtime.identity.register(
-        "alice", "a long secure passphrase", runtime.identity.create_invite()
-    )
+    alice = runtime.identity.register("alice", "a long secure passphrase")
+    runtime.identity.set_approval(alice["user"]["id"], "approved")
     owner = runtime.identity.authenticate(alice["token"])["storage_id"]
     runtime.storage.save_onboarded_account(
         OnboardedAccount(chat_id=owner, korail_id="01012345678", korail_pw="rail-password")

@@ -56,7 +56,8 @@ def callback(client, start: dict, subject: str):
 def render_pages() -> dict[str, str]:
     with tempfile.TemporaryDirectory(prefix="jari-google-pages-") as directory:
         identity = IdentityStore(Path(directory) / "identity.sqlite3")
-        session = identity.register("alice", PASSWORD, identity.create_invite())
+        session = identity.register("alice", PASSWORD)
+        identity.set_approval(session["user"]["id"], "approved")
         headers = {"Authorization": "Bearer " + session["token"]}
         app = create_app(
             identity,

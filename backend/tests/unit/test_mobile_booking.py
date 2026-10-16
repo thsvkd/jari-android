@@ -38,9 +38,8 @@ def test_real_gateway_delegates_booking_schedule_and_favourites(tmp_path, monkey
     monkeypatch.setattr(runtime.gateway.conversation, "_rail_service", lambda owner: rail)
     start = MagicMock(return_value=True)
     monkeypatch.setattr(runtime.reservation, "start_reservation_process", start)
-    alice = runtime.identity.register(
-        "alice", "a long secure passphrase", runtime.identity.create_invite()
-    )
+    alice = runtime.identity.register("alice", "a long secure passphrase")
+    runtime.identity.set_approval(alice["user"]["id"], "approved")
     owner = runtime.identity.authenticate(alice["token"])["storage_id"]
     http = runtime.app.test_client()
     headers = {"Authorization": "Bearer " + alice["token"]}
@@ -99,9 +98,8 @@ def test_real_gateway_delegates_booking_schedule_and_favourites(tmp_path, monkey
     assert listed.status_code == 200
     assert listed.json["favourites"] == saved.json["favourites"]
     fav_id = saved.json["favourites"][0]["id"]
-    bob = runtime.identity.register(
-        "bobby", "a long secure passphrase", runtime.identity.create_invite()
-    )
+    bob = runtime.identity.register("bobby", "a long secure passphrase")
+    runtime.identity.set_approval(bob["user"]["id"], "approved")
     assert (
         http.delete(
             "/api/mobile/favourites/" + fav_id, headers={"Authorization": "Bearer " + bob["token"]}
@@ -220,9 +218,8 @@ def test_railway_registration_accepts_member_number_and_normalizes_phone(tmp_pat
     rail = MagicMock()
     rail.login.return_value = True
     monkeypatch.setattr(runtime.gateway.conversation, "_rail_service", lambda owner: rail)
-    session = runtime.identity.register(
-        "alice", "a long secure passphrase", runtime.identity.create_invite()
-    )
+    session = runtime.identity.register("alice", "a long secure passphrase")
+    runtime.identity.set_approval(session["user"]["id"], "approved")
     owner = runtime.identity.authenticate(session["token"])["storage_id"]
     http = runtime.app.test_client()
     headers = {"Authorization": "Bearer " + session["token"]}
@@ -250,9 +247,8 @@ def test_railway_registration_accepts_member_number_and_normalizes_phone(tmp_pat
 def test_auth_only_runtime_requires_no_bot_redis_or_rail(tmp_path, monkeypatch):
     monkeypatch.delenv("BOTTOKEN", raising=False)
     runtime = MobileRuntime(MobileConfig(str(tmp_path / "app.sqlite3"), "a" * 40))
-    session = runtime.identity.register(
-        "alice", "a long secure passphrase", runtime.identity.create_invite()
-    )
+    session = runtime.identity.register("alice", "a long secure passphrase")
+    runtime.identity.set_approval(session["user"]["id"], "approved")
     client = runtime.app.test_client()
     headers = {"Authorization": "Bearer " + session["token"]}
     response = client.post("/api/mobile/bootstrap", headers=headers, json={})
@@ -444,9 +440,8 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
     runtime.storage.save_onboarded_account(
         OnboardedAccount(chat_id=-100, korail_id="01012345678", korail_pw="rail-password")
     )
-    alice = runtime.identity.register(
-        "alice", "a long secure passphrase", runtime.identity.create_invite()
-    )
+    alice = runtime.identity.register("alice", "a long secure passphrase")
+    runtime.identity.set_approval(alice["user"]["id"], "approved")
     owner = runtime.identity.authenticate(alice["token"])["storage_id"]
     runtime.storage.save_onboarded_account(
         OnboardedAccount(chat_id=owner, korail_id="01012345678", korail_pw="rail-password")
@@ -527,9 +522,8 @@ def test_designated_seat_flow_is_owner_scoped_rechecks_and_persists(tmp_path, mo
     assert "팔렸" not in twice.json["error"]
     rail.reserve_designated.side_effect = None
 
-    bob = runtime.identity.register(
-        "bobby", "a long secure passphrase", runtime.identity.create_invite()
-    )
+    bob = runtime.identity.register("bobby", "a long secure passphrase")
+    runtime.identity.set_approval(bob["user"]["id"], "approved")
     assert (
         http.get(
             f"/api/mobile/trains/{train_key}/cars?seatClass=general&passengerCount=1",
@@ -624,9 +618,8 @@ def listed_train(tmp_path, monkeypatch, *, cars, inventories):
     )
     rail.seat_inventory.side_effect = inventories
     monkeypatch.setattr(runtime.gateway.conversation, "_rail_service", lambda owner: rail)
-    alice = runtime.identity.register(
-        "alice", "a long secure passphrase", runtime.identity.create_invite()
-    )
+    alice = runtime.identity.register("alice", "a long secure passphrase")
+    runtime.identity.set_approval(alice["user"]["id"], "approved")
     owner = runtime.identity.authenticate(alice["token"])["storage_id"]
     runtime.storage.save_onboarded_account(
         OnboardedAccount(chat_id=owner, korail_id="01012345678", korail_pw="rail-password")

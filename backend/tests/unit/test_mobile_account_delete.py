@@ -61,7 +61,8 @@ def runtime(tmp_path, monkeypatch):
 
 def member(runtime, username):
     """A member with a linked Korail login, a favourite, an inbox item and a phone."""
-    signed = runtime.identity.register(username, PASSWORD, runtime.identity.create_invite())
+    signed = runtime.identity.register(username, PASSWORD)
+    runtime.identity.set_approval(signed["user"]["id"], "approved")
     http = runtime.app.test_client()
     headers = {"Authorization": "Bearer " + signed["token"]}
     assert http.post(
@@ -415,7 +416,7 @@ def test_homepage_explains_the_real_app_and_links_to_public_resources(pages):
         "개발자 SonPang",
         "코레일",
         "빈자리",
-        "초대",
+        "승인",
         "기존 앱 계정",
         "Google",
         "결제는 코레일",
@@ -457,6 +458,7 @@ def test_without_a_contact_the_pages_point_to_the_app(pages):
         body = client.get(path).get_data(as_text=True)
         assert "mailto:" not in body
         assert "설정 → 회원 탈퇴" in body
+        assert "승인 대기·거절 화면" in body
 
 
 def test_a_contact_is_escaped(pages):

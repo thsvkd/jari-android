@@ -6,7 +6,7 @@ import { JariApp } from "./app";
 import { ApiError } from "./api";
 import { createDemoApi } from "./demo";
 import appPackage from "../package.json";
-import type { Conditions, SeatClass, SeatInventory, SeatMapSeat, SeatTarget, StatusResult } from "./types";
+import type { AppUser, Conditions, SeatClass, SeatInventory, SeatMapSeat, SeatTarget, StatusResult } from "./types";
 
 const mounted: JariApp[] = [];
 
@@ -243,8 +243,8 @@ describe("concept C application shell", () => {
     adminApp.navigate("settings");
 
     expect(adminRoot.querySelector(".admin-only-badge")?.textContent).toBe("관리자 전용");
-    expect(adminRoot.textContent).toContain("회원 가입 권한은 관리자만 발급할 수 있어요");
-    expect(adminRoot.querySelector("[data-action='create-invite']")).not.toBeNull();
+    expect(adminRoot.textContent).toContain("가입 신청을 확인하고 사용 여부를 결정해요");
+    expect(adminRoot.querySelector("[data-view='members']")).not.toBeNull();
     expect(adminRoot.textContent).toContain(`v${appPackage.version}`);
     expect(adminRoot.textContent).not.toContain("베타");
 
@@ -258,7 +258,7 @@ describe("concept C application shell", () => {
     memberApp.navigate("settings");
 
     expect(memberRoot.querySelector(".admin-only-badge")).toBeNull();
-    expect(memberRoot.querySelector("[data-action='create-invite']")).toBeNull();
+    expect(memberRoot.querySelector("[data-view='members']")).toBeNull();
   });
 
   it("marks the fixture-only experience on every demo screen", async () => {
@@ -600,7 +600,7 @@ describe("concept C application shell", () => {
     expect(root.textContent).not.toContain("최근 조회 상태는 알 수 없어요");
   });
 
-  it("matches the server app-account credential bounds", async () => {
+  it("matches the server app-account credential and application note bounds", async () => {
     const root = document.createElement("div");
     document.body.append(root);
     const app = new JariApp(root, createDemoApi(), { demoMode: false });
@@ -615,11 +615,9 @@ describe("concept C application shell", () => {
     expect(password.minLength).toBe(8);
     expect(password.maxLength).toBe(128);
     root.querySelector<HTMLButtonElement>("[data-auth-mode='register']")?.click();
-    const invite = root.querySelector<HTMLInputElement>("[name='invite']")!;
-    expect(invite.minLength).toBe(-1);
-    expect(invite.maxLength).toBe(128);
-    expect(invite.getAttribute("autocapitalize")).toBe("off");
-    expect(invite.getAttribute("spellcheck")).toBe("false");
+    expect(root.querySelector("[name='invite']")).toBeNull();
+    const note = root.querySelector<HTMLTextAreaElement>("[name='applicationNote']")!;
+    expect(note.maxLength).toBe(200);
     const confirm = root.querySelector<HTMLInputElement>("[name='password_confirm']")!;
     expect([confirm.type, confirm.autocomplete, confirm.minLength, confirm.maxLength]).toEqual(["password", "new-password", 8, 128]);
     root.querySelector<HTMLButtonElement>("[data-auth-mode='login']")?.click();
@@ -638,18 +636,134 @@ describe("concept C application shell", () => {
     edit(root, "username", "new_friend");
     edit(root, "password", "a long secure passphrase");
     edit(root, "password_confirm", "a long secure passphrasE");
-    edit(root, "invite", "Apple River Cloud");
+    edit(root, "applicationNote", "  친구 소개  ");
     const submit = () => root.querySelector("#auth-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
     submit();
     expect(root.querySelector(".form-error")?.textContent).toBe("비밀번호가 서로 달라요.");
     expect(registerApp).not.toHaveBeenCalled();
-    expect(root.querySelector<HTMLInputElement>("[name='invite']")!.value).toBe("Apple River Cloud");
+    expect(root.querySelector<HTMLTextAreaElement>("[name='applicationNote']")!.value).toBe("  친구 소개  ");
 
     edit(root, "password_confirm", "a long secure passphrase");
     submit();
     await vi.waitFor(() => expect(registerApp).toHaveBeenCalledOnce());
-    expect(registerApp).toHaveBeenCalledWith({ username: "new_friend", password: "a long secure passphrase", invite: "Apple River Cloud" });
+    expect(registerApp).toHaveBeenCalledWith({ username: "new_friend", password: "a long secure passphrase", applicationNote: "친구 소개" });
+  });
+
+  it("keeps a pending member away from railway APIs and enters home after approval refresh", async () => {
+    const demo = createDemoApi();
+    const approved = await demo.bootstrap();
+    const pending = {
+      ...approved,
+      user: { ...approved.user!, status: "pending" as const, applicationNote: "친구 소개", createdAt: "2026-10-17T00:00:00Z" },
+      rail: { registered: false, stations: [], majorStations: [], displayName: "코레일" },
+      running: null,
+      scheduled: null,
+      pending: [],
+      favourites: [],
+      draft: null,
+      capabilities: Object.fromEntries(Object.keys(approved.capabilities).map((key) => [key, false])) as unknown as typeof approved.capabilities,
+    };
+    const bootstrap = vi.fn().mockResolvedValueOnce(pending).mockResolvedValue({ ...approved, user: { ...approved.user!, status: "approved" as const } });
+    const status = vi.fn(demo.status);
+    const notifications = vi.fn(demo.notifications);
+    const { root } = await mountLive({ bootstrap, status, notifications });
+
+    expect(root.querySelector(".screen-approval")).not.toBeNull();
+    expect(root.textContent).toContain("관리자 승인을 기다리고 있어요");
+    expect(root.querySelector("[data-action='delete-account']")).not.toBeNull();
+    expect(status).not.toHaveBeenCalled();
+    expect(notifications).not.toHaveBeenCalled();
+
+    root.querySelector<HTMLButtonElement>("[data-action='refresh-approval']")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".screen-home")).not.toBeNull());
+    expect(bootstrap).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows rejected membership separately and still allows logout", async () => {
+    const state = await createDemoApi().bootstrap();
+    state.user = { ...state.user!, status: "rejected", applicationNote: null, createdAt: null };
+    const { root } = await mountLive({ bootstrap: async () => state });
+
+    expect(root.querySelector(".screen-approval")?.textContent).toContain("사용 신청이 승인되지 않았어요");
+    expect(root.querySelector("[data-action='app-logout']")).not.toBeNull();
+  });
+
+  it("loads escaped member applications and approves a pending member", async () => {
+    const state = await createDemoApi().bootstrap();
+    state.user = { ...state.user!, role: "admin", status: "approved" };
+    const applicant = { id: "u<1", username: "<b>mint</b>", role: "member" as const, status: "pending" as const, applicationNote: "<img src=x>", createdAt: "2026-10-17T00:00:00Z" };
+    const users = vi.fn(async () => ({ users: [applicant] }));
+    const setUserApproval = vi.fn(async () => ({ user: { ...applicant, status: "approved" as const } }));
+    const { app, root } = await mountLive({ bootstrap: async () => state, users, setUserApproval });
+    app.navigate("settings");
+    root.querySelector<HTMLButtonElement>("[data-view='members']")!.click();
+
+    await vi.waitFor(() => expect(root.querySelector(".screen-members [data-member-id='u<1']")).not.toBeNull());
+    expect(root.querySelector(".screen-members b")?.innerHTML).toBe("&lt;b&gt;mint&lt;/b&gt;");
+    expect(root.querySelector(".screen-members img")).toBeNull();
+    root.querySelector<HTMLButtonElement>("[data-member-id='u<1'] [data-action='approve-member']")!.click();
+    await vi.waitFor(() => expect(setUserApproval).toHaveBeenCalledWith("u<1", "approved"));
+    expect(root.querySelector("[data-member-id='u<1']")?.textContent).toContain("승인됨");
+  });
+
+  it("keeps an approval decision when an older member-list reload finishes later", async () => {
+    const state = await createDemoApi().bootstrap();
+    state.user = { ...state.user!, role: "admin", status: "approved" };
+    const applicant = { id: "u1", username: "mint", role: "member" as const, status: "pending" as const, applicationNote: null, createdAt: null };
+    const staleList = deferred<{ users: typeof applicant[] }>();
+    const decision = deferred<{ user: AppUser }>();
+    const users = vi.fn().mockResolvedValueOnce({ users: [applicant] }).mockReturnValueOnce(staleList.promise);
+    const setUserApproval = vi.fn(() => decision.promise);
+    const { app, root } = await mountLive({ bootstrap: async () => state, users, setUserApproval });
+    app.navigate("settings");
+    root.querySelector<HTMLButtonElement>("[data-view='members']")!.click();
+    await vi.waitFor(() => expect(root.querySelector("[data-member-id='u1']")).not.toBeNull());
+
+    app.navigate("settings");
+    app.navigate("members");
+    expect(root.querySelector("[data-member-id='u1']")).not.toBeNull();
+    root.querySelector<HTMLButtonElement>("[data-member-id='u1'] [data-action='approve-member']")!.click();
+    app.navigate("settings");
+    app.navigate("members");
+    expect(users).toHaveBeenCalledTimes(2);
+
+    decision.resolve({ user: { ...applicant, status: "approved" } });
+    await vi.waitFor(() => expect(root.querySelector("[data-member-id='u1']")?.textContent).toContain("승인됨"));
+    staleList.resolve({ users: [applicant] });
+    await Promise.resolve();
+    expect(root.querySelector("[data-member-id='u1']")?.textContent).toContain("승인됨");
+  });
+
+  it("lets a pending member retry or log out after approval refresh times out", async () => {
+    const state = await createDemoApi().bootstrap();
+    state.user = { ...state.user!, status: "pending" };
+    const bootstrap = vi.fn()
+      .mockResolvedValueOnce(state)
+      .mockRejectedValueOnce(new ApiError("서버가 제때 답하지 않았어요.", 0, "timeout"))
+      .mockResolvedValue(state);
+    const { root } = await mountLive({ bootstrap });
+
+    root.querySelector<HTMLButtonElement>("[data-action='refresh-approval']")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".form-error")?.textContent).toContain("제때 답하지 않았어요"));
+    expect(root.querySelector(".blocker")).toBeNull();
+    expect(root.querySelector("[data-action='app-logout']")).not.toBeNull();
+    root.querySelector<HTMLButtonElement>("[data-action='refresh-approval']")!.click();
+    await vi.waitFor(() => expect(bootstrap).toHaveBeenCalledTimes(3));
+  });
+
+  it("does not poll approval while the account-deletion sheet is open", async () => {
+    vi.useFakeTimers();
+    const state = await createDemoApi().bootstrap();
+    state.user = { ...state.user!, status: "pending" };
+    const bootstrap = vi.fn(async () => state);
+    const { root } = await mountLive({ bootstrap });
+
+    root.querySelector<HTMLButtonElement>("[data-action='delete-account']")!.click();
+    expect(root.querySelector("[role='dialog']")).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(bootstrap).toHaveBeenCalledOnce();
   });
 });
 
@@ -1398,20 +1512,15 @@ it("updates the notification interval without covering the screen", async () => 
   await vi.waitFor(() => expect(setNotify).toHaveBeenCalledWith(10));
 });
 
-it("spins only the invite button while a code is created", async () => {
+it("shows member management only to administrators", async () => {
   const demo = createDemoApi();
   const state = await demo.bootstrap();
   state.user!.role = "admin";
-  const pending = deferred<{ invite: string; ttlHours: number; expiresAt: string }>();
-  const { app, root } = await mountLive({ bootstrap: async () => state, createInvite: () => pending.promise });
+  const { app, root } = await mountLive({ bootstrap: async () => state });
   app.navigate("settings");
 
-  root.querySelector<HTMLButtonElement>("[data-action='create-invite']")!.click();
-
-  expect(root.querySelector(".blocker")).toBeNull();
-  expect(root.querySelector("[data-action='create-invite'] .inline-spinner")).not.toBeNull();
-  pending.resolve({ invite: "INVITE-CODE-123456", ttlHours: 72, expiresAt: "2026-09-17T00:00:00Z" });
-  await vi.waitFor(() => expect(root.querySelector(".invite-card")?.textContent).toContain("INVITE-CODE-123456"));
+  expect(root.querySelector("[data-view='members']")).not.toBeNull();
+  expect(root.querySelector("[data-action='create-invite']")).toBeNull();
 });
 
 it("opens the seat dialog immediately and keeps load failures inside it", async () => {
@@ -2311,7 +2420,7 @@ describe("체험하기", () => {
     expect(liveCalls).toEqual(["googleConfiguration"]);
     liveCalls.length = 0;
     const gates = [...root.querySelectorAll<HTMLButtonElement>(".gate-card")];
-    expect(gates.map((gate) => gate.querySelector("b")?.textContent)).toEqual(["관리자", "초대 회원", "체험하기"]);
+    expect(gates.map((gate) => gate.querySelector("b")?.textContent)).toEqual(["관리자", "회원", "체험하기"]);
     gates[2]!.click();
     await vi.waitFor(() => expect(root.querySelector(".screen-home")).not.toBeNull());
     expect(root.querySelector("[data-trial-banner]")?.textContent).toContain("실제 예약되지 않아요");

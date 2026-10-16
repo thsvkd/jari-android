@@ -157,10 +157,11 @@ def signup(env, username):
         json={
             "username": username,
             "password": PASSWORD,
-            "invite": env.identity.create_invite(),
         },
     )
     assert response.status_code == 200, response.json
+    env.identity.set_approval(response.json["user"]["id"], "approved")
+    response.json["user"]["status"] = "approved"
     return response.json
 
 

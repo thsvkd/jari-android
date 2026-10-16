@@ -40,10 +40,11 @@ def signup(api, username):
         json={
             "username": username,
             "password": "a long secure passphrase",
-            "invite": identity.create_invite(),
         },
     )
     assert response.status_code == 200
+    identity.set_approval(response.json["user"]["id"], "approved")
+    response.json["user"]["status"] = "approved"
     return response.json
 
 
@@ -89,7 +90,6 @@ def test_server_identity_is_only_identity_and_logout_revokes(api, monkeypatch):
         "favourites",
         "notify",
         "devices",
-        "invites",
     ],
 )
 def test_every_mutation_needs_session(api, path):
@@ -210,15 +210,19 @@ def test_upstream_failure_keeps_its_message_and_cors_headers(tmp_path):
     assert response.headers["Access-Control-Allow-Origin"] == "https://localhost"
 
 
-def test_only_admin_can_create_invites(api):
+def test_registration_waits_for_admin_and_admin_can_approve(api):
     client, identity, _ = api
-    alice = signup(api, "alice")
-    forbidden = client.post(
-        "/api/mobile/invites",
-        headers={"Authorization": "Bearer " + alice["token"]},
-        json={"ttlHours": 24},
+    registered = client.post(
+        "/api/mobile/auth/register",
+        json={
+            "username": "chosen",
+            "password": "a long secure passphrase",
+            "applicationNote": "친구 소개",
+        },
     )
-    assert forbidden.status_code == 403
+    assert registered.status_code == 200
+    assert registered.json["user"]["status"] == "pending"
+    assert registered.json["user"]["applicationNote"] == "친구 소개"
     identity.ensure_admin("operator", "a long admin passphrase")
     admin = client.post(
         "/api/mobile/auth/login",
@@ -229,23 +233,109 @@ def test_only_admin_can_create_invites(api):
         },
     )
     assert admin.status_code == 200
-    created = client.post(
-        "/api/mobile/invites",
+    listed = client.get(
+        "/api/mobile/admin/users",
         headers={"Authorization": "Bearer " + admin.json["token"]},
-        json={"ttlHours": 24},
     )
-    assert created.status_code == 200
-    assert len(created.json["invite"].split("-")) == 3
-    guest = client.post(
+    assert listed.status_code == 200
+    assert [user["username"] for user in listed.json["users"]] == ["chosen", "operator"]
+    approved = client.post(
+        f"/api/mobile/admin/users/{registered.json['user']['id']}/approval",
+        headers={"Authorization": "Bearer " + admin.json["token"]},
+        json={"status": "approved"},
+    )
+    assert approved.status_code == 200
+    assert approved.json["user"]["status"] == "approved"
+
+
+@pytest.mark.parametrize("status", [None, {}, [], "pending", "unknown"])
+def test_admin_approval_rejects_malformed_status(api, status):
+    client, identity, _ = api
+    identity.ensure_admin("operator", "a long admin passphrase")
+    admin = client.post(
+        "/api/mobile/auth/login",
+        json={"username": "operator", "password": "a long admin passphrase", "role": "admin"},
+    ).json
+    member = client.post(
         "/api/mobile/auth/register",
-        json={
-            "username": "chosen",
-            "password": "a long secure passphrase",
-            "invite": created.json["invite"],
-        },
+        json={"username": "waiting", "password": "a long secure passphrase"},
+    ).json
+    response = client.post(
+        f"/api/mobile/admin/users/{member['user']['id']}/approval",
+        headers={"Authorization": "Bearer " + admin["token"]},
+        json={"status": status},
     )
-    assert guest.status_code == 200
-    assert guest.json["user"]["role"] == "member"
+    assert response.status_code == 400
+    assert identity.find_user("waiting")["status"] == "pending"
+
+
+@pytest.mark.parametrize("attacker_status", ["pending", "rejected", "approved"])
+def test_members_cannot_list_or_approve_other_members(api, attacker_status):
+    client, identity, _ = api
+    attacker = client.post(
+        "/api/mobile/auth/register",
+        json={"username": "attacker", "password": "a long secure passphrase"},
+    ).json
+    victim = client.post(
+        "/api/mobile/auth/register",
+        json={"username": "victim", "password": "a long secure passphrase"},
+    ).json
+    if attacker_status != "pending":
+        identity.set_approval(attacker["user"]["id"], attacker_status)
+    headers = {"Authorization": "Bearer " + attacker["token"]}
+
+    assert client.get("/api/mobile/admin/users", headers=headers).status_code == 403
+    response = client.post(
+        f"/api/mobile/admin/users/{victim['user']['id']}/approval",
+        headers=headers,
+        json={"status": "approved"},
+    )
+    assert response.status_code == 403
+    assert identity.find_user("victim")["status"] == "pending"
+
+
+def test_pending_bootstrap_is_safe_and_other_features_are_forbidden(api):
+    client, _, gateway = api
+    pending = client.post(
+        "/api/mobile/auth/register",
+        json={"username": "waiting", "password": "a long secure passphrase"},
+    ).json
+    headers = {"Authorization": "Bearer " + pending["token"]}
+    response = client.post("/api/mobile/bootstrap", headers=headers)
+    assert response.status_code == 200
+    assert response.json["user"]["status"] == "pending"
+    assert response.json["rail"] == {
+        "registered": False,
+        "stations": [],
+        "majorStations": [],
+        "displayName": "코레일",
+    }
+    assert response.json["running"] is None
+    assert response.json["scheduled"] is None
+    assert response.json["pending"] == []
+    assert response.json["favourites"] == []
+    assert all(value is False for value in response.json["capabilities"].values())
+    gateway.bootstrap.assert_not_called()
+    forbidden = client.get("/api/mobile/status", headers=headers)
+    assert forbidden.status_code == 403
+    assert forbidden.json["code"] == "approval_required"
+    gateway.status.assert_not_called()
+
+
+def test_pending_member_can_delete_without_touching_railway_storage(api):
+    client, identity, gateway = api
+    pending = client.post(
+        "/api/mobile/auth/register",
+        json={"username": "waiting", "password": "a long secure passphrase"},
+    ).json
+    response = client.post(
+        "/api/mobile/account/delete",
+        headers={"Authorization": "Bearer " + pending["token"]},
+        json={"password": "a long secure passphrase"},
+    )
+    assert response.status_code == 200
+    assert identity.find_user("waiting") is None
+    gateway.delete_account.assert_not_called()
 
 
 def test_a_whole_car_seat_plan_fits_inside_the_body_limit(api):

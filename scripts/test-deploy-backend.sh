@@ -296,7 +296,7 @@ SNAP_ALLOWED="$(
   echo "EXPECTED=[$EXPECTED_RESUMES] AT=[$SNAPSHOT_AT]"
 )"
 SNAP_UNREADABLE="$(
-  run_remote() { cat >/dev/null; echo "usage: python -m korail_bot.mobile {serve,invite,admin}" >&2; return 2; }
+  run_remote() { cat >/dev/null; echo "usage: python -m korail_bot.mobile {serve,admin}" >&2; return 2; }
   DRY_RUN=0; ALLOW_UNRESUMABLE=1; SKIP_RESUME_CHECK=0; EXPECTED_RESUMES=""
   { snapshot_running || echo "SNAPSHOT_RC=$?"; } 2>&1
 )"

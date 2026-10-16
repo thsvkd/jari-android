@@ -47,16 +47,16 @@ Follow the one path that matches what you want to do.
 
 | I want to… | You need | Result |
 |---|---|---|
-| [1. Use it on my phone](#1-use-it-on-my-phone) | An Android 7.0+ phone and an invite code (or try the sample mode) | Seat searches on your phone |
+| [1. Use it on my phone](#1-use-it-on-my-phone) | An Android 7.0+ phone (operator approval is required for real use) | Seat searches on your phone |
 | [2. See the demo in a browser](#2-see-the-demo-in-a-browser) | Node.js 22.12+ | Every screen with sample data |
 | [3. Run my own server](#3-run-my-own-server) | Docker and an HTTPS address | Your own server to share with friends |
 
 ### 1. Use it on my phone
 
 1. Download `jari-<version>-debug.apk` from the [latest release](https://github.com/thsvkd/jari-android/releases/latest) and install it. You may need to allow installing apps from unknown sources. If you are registered as a Google Play internal tester, install it from the Play Store instead.
-2. Open the app and sign up under **초대 회원 → 처음 가입** (Invited member → First sign-up) with the invite code you got from the operator.
-   No invite code? Tap **체험하기** (Try it) to browse every screen with sample data. Nothing is actually booked.
-3. Link your Korail account in **설정 → 코레일 계정** (Settings → Korail account), then set up a search with **새 여정 찾기** (New journey) on the home screen.
+2. Open the app and choose **처음 가입** (First sign-up). Pick an ID and password; you may add an application note of up to 200 characters so the operator can identify you.
+3. You stay signed in on the approval-pending screen, where you can refresh your status, sign out, or delete the account. Railway features stay locked until approval. To look around before signing up, use **체험하기** (Try it) on the sign-in screen.
+4. After approval, refresh your status to enter the home screen with the same login. Link your Korail account in **설정 → 코레일 계정** (Settings → Korail account), then set up a search with **새 여정 찾기** (New journey).
 
 > [!NOTE]
 > Release APKs connect to the operator's server. To use your own server, follow [path 3](#3-run-my-own-server).
@@ -94,12 +94,12 @@ curl http://127.0.0.1:8081/api/mobile/health     # {"ok":true,...} means it's up
 docker compose exec -T api python -m korail_bot.mobile admin --username <your-id>
 ```
 
-The password is visible while you type. A hidden-input variant is in [Admin account and invite codes](docs/self-hosting.md#3-관리자-계정과-초대-코드) (Korean).
+The password is visible while you type. A hidden-input variant is in [Admin account and member approval](docs/self-hosting.md#3-관리자-계정과-회원-승인) (Korean).
 
-**③ Connect your phone and invite friends**
+**③ Connect your phone and approve members**
 
 - Phones connect to the server over HTTPS only. Put a reverse proxy in front of the server and build the app with that address: [Publish over HTTPS](docs/self-hosting.md#4-https로-공개하기) → [Connect the app to your server](docs/self-hosting.md#5-앱을-내-서버에-연결하기) (Korean)
-- In that app, log in as **관리자** (Admin) and create invite codes for friends under **설정 → 회원 관리** (Settings → Members). To create one on the server instead: `docker compose exec api python -m korail_bot.mobile invite --ttl-hours 24`.
+- In that app, log in as **관리자** (Admin). People can sign up without an invite code; review their application notes under **설정 → 회원 관리** (Settings → Members), then approve or reject them. Only approved members can search Korail, watch for seats, or connect an agent.
 
 ## Connect an AI agent
 
@@ -120,7 +120,7 @@ The detailed docs are written in Korean.
 
 | Document | For | Contents |
 |---|---|---|
-| [Self-hosting guide](docs/self-hosting.md) | Server operators | Server key, Docker, admin and invites, HTTPS, an app for your server, remote deploy, backups |
+| [Self-hosting guide](docs/self-hosting.md) | Server operators | Server key, Docker, admin and member approval, HTTPS, an app for your server, remote deploy, backups |
 | [Server configuration reference](backend/README.md) | Changing server settings | Environment variables, CLI commands, API scope, security, background jobs and notifications |
 | [Android build and release](docs/android.md) | Building or releasing the app | Prerequisites, APK and AAB builds, signing keys, push notifications (Firebase), package name history |
 | [Development guide](docs/development.md) | Changing the code | Local setup, tests and CI, layout rules, branch and commit rules |
@@ -145,7 +145,7 @@ docs/       Product, spec and guide documents
 
 - **Korail trains only.** SRT accounts are not used; high-speed trains from Suseo are searched with your Korail account too.
 - **No payment.** Once a seat is held, you pay in the Korail app before the payment deadline.
-- **Invite only.** Sign-up requires an invite code issued by the operator.
+- **Approval required.** Anyone can apply for an account, but railway features stay locked until the operator approves it.
 - Korail's official waitlist is requested for standard class only, without choosing seat positions.
 - Installs on Android 7.0 (API 24) or later.
 - Automated tests never reach the real Korail. They use a fake Korail built from the real library classes ([development guide](docs/development.md#테스트와-검증)).

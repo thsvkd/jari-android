@@ -1,12 +1,12 @@
 # 서버 운영 가이드
 
-자리났다 서버를 직접 띄우고, 지인을 초대하고, 휴대폰 앱을 그 서버에 연결하는 방법입니다.
+자리났다 서버를 직접 띄우고, 회원 가입을 승인하고, 휴대폰 앱을 그 서버에 연결하는 방법입니다.
 서버 환경 변수와 API의 자세한 동작은 [서버 설정 레퍼런스](../backend/README.md)를, 내부 구조는 [기술 명세](SPEC.md)를 봅니다.
 
 - [준비물](#준비물)
 - [1. 서버 키 준비](#1-서버-키-준비)
 - [2. 서버 실행](#2-서버-실행)
-- [3. 관리자 계정과 초대 코드](#3-관리자-계정과-초대-코드)
+- [3. 관리자 계정과 회원 승인](#3-관리자-계정과-회원-승인)
 - [4. HTTPS로 공개하기](#4-https로-공개하기)
 - [5. 앱을 내 서버에 연결하기](#5-앱을-내-서버에-연결하기)
 - [6. 휴대폰 알림 켜기](#6-휴대폰-알림-켜기)
@@ -59,7 +59,7 @@ curl http://127.0.0.1:8081/api/mobile/health
 ```
 
 - API는 호스트의 `127.0.0.1:8081`에만 열립니다. Redis 포트는 밖으로 열지 않습니다.
-- 데이터는 Docker 볼륨 `identity`(SQLite: 앱 계정·초대·알림함)와 `redis`(검색 조건·즐겨찾기·실행 기록 등)에 남습니다.
+- 데이터는 Docker 볼륨 `identity`(SQLite: 앱 계정·승인 상태·알림함)와 `redis`(검색 조건·즐겨찾기·실행 기록 등)에 남습니다.
 - 로그: `docker compose logs -f api`
 
 ### Docker 없이 실행하기
@@ -78,11 +78,11 @@ docker run -d --name jari-redis -p 127.0.0.1:6379:6379 redis:7-alpine redis-serv
 uv run --env-file .env --frozen python -m korail_bot.mobile serve --host 127.0.0.1 --port 8081
 ```
 
-철도 기능 없이 앱 로그인·초대만 확인하려면 Redis 없이 `serve --auth-only`로 띄웁니다. 이때 `health`는 `{"booking":false,"ok":true}`를 돌려주고 예약 관련 요청은 503입니다.
+철도 기능 없이 앱 로그인·회원 승인만 확인하려면 Redis 없이 `serve --auth-only`로 띄웁니다. 이때 `health`는 `{"booking":false,"ok":true}`를 돌려주고 예약 관련 요청은 503입니다.
 
-## 3. 관리자 계정과 초대 코드
+## 3. 관리자 계정과 회원 승인
 
-가입은 초대제입니다. 먼저 운영자 본인의 관리자 계정을 만듭니다. 아이디는 영문·숫자·밑줄 3~32자, 비밀번호는 8~128자입니다.
+먼저 운영자 본인의 관리자 계정을 만듭니다. 아이디는 영문·숫자·밑줄 3~32자, 비밀번호는 8~128자입니다. `admin` 명령은 계속 같은 아이디의 관리자 계정을 만들거나 갱신하는 운영 경로입니다.
 
 ```bash
 docker compose exec -T api python -m korail_bot.mobile admin --username <아이디>
@@ -91,12 +91,11 @@ docker compose exec -T api python -m korail_bot.mobile admin --username <아이�
 
 `--password`로 명령줄에 적으면 셸 기록에 남으니 표준 입력으로 넘깁니다. macOS·Linux 셸에서 입력을 화면에 숨기려면 `stty -echo; docker compose exec -T api python -m korail_bot.mobile admin --username <아이디>; stty echo`처럼 감쌉니다. Docker 없이 실행했다면 `backend/`에서 `uv run --env-file .env --frozen python -m korail_bot.mobile admin --username <아이디>`입니다.
 
-지인을 초대하는 방법은 두 가지입니다. 초대 코드는 한 번만 쓸 수 있습니다.
+사용자는 초대 코드 없이 앱의 **처음 가입**에서 아이디·비밀번호를 정하고, 선택적으로 200자 이내의 신청 메모를 남깁니다. 가입 뒤에는 로그인된 채 승인 대기 화면에 머뭅니다.
 
-- **앱에서**: 로그인 화면의 **관리자**로 로그인 → **설정 → 회원 관리 → 회원 초대 코드**. 코드는 그 화면에서만 볼 수 있습니다.
-- **서버에서**: `docker compose exec api python -m korail_bot.mobile invite --ttl-hours 24`
+관리자는 앱의 로그인 화면에서 **관리자**로 로그인한 뒤 **설정 → 회원 관리**에서 아이디·신청 메모·신청 시각을 보고 승인하거나 거절합니다. 거절된 회원은 다시 승인할 수 있지만, 승인된 회원을 이 화면에서 거절하거나 정지할 수는 없습니다. 승인된 회원은 상태를 새로고침하면 같은 세션으로 바로 홈에 들어갑니다.
 
-초대받은 사람은 앱의 **초대 회원 → 처음 가입**에서 코드를 넣습니다. 초대는 예약 이용 권한일 뿐 관리자 권한을 주지 않습니다.
+대기·거절 회원은 로그아웃하거나 앱 비밀번호를 다시 입력해 탈퇴할 수 있습니다. 이 상태에서는 철도 조회·코레일 계정 연결·자리 찾기·OAuth/MCP 에이전트 연결이 서버에서도 차단됩니다. 기존 회원은 업그레이드할 때 승인 상태로 유지됩니다.
 
 ## 4. HTTPS로 공개하기
 
@@ -185,7 +184,6 @@ Docker 이미지에는 알림 의존성이 이미 들어 있습니다. Docker �
 |---|---|
 | 상태 확인 | `curl http://127.0.0.1:8081/api/mobile/health` |
 | 진행 중인 자리 찾기 목록(읽기만) | `docker compose exec -T api python -m korail_bot.mobile running` |
-| 초대 코드 만들기 | `docker compose exec api python -m korail_bot.mobile invite --ttl-hours 24` |
 | 메일로 온 탈퇴 요청 처리 | `docker compose exec -T api python -m korail_bot.mobile delete-account --username <앱 아이디>` |
 | 빈자리가 얼마나 오래 남는지 보기(감시 간격을 정할 때, 읽기만) | `docker compose exec -T api python -m korail_bot.mobile seat-windows` |
 | 앱이 겪은 연결 실패 보기 | `docker compose logs api 2>&1 \| grep "Client connection miss"` |
@@ -196,9 +194,9 @@ Docker 이미지에는 알림 의존성이 이미 들어 있습니다. Docker �
 
 ## 구글 로그인 설정
 
-기존 초대 계정에 구글 로그인을 연결할 수 있습니다. Google Cloud에서 **웹 애플리케이션** OAuth 클라이언트를 만들고 승인된 리디렉션 URI를 `https://<MOBILE_PUBLIC_URL의 호스트>/api/mobile/auth/google/callback`으로 정확히 등록합니다. 서버에 `MOBILE_PUBLIC_URL`, `MOBILE_GOOGLE_CLIENT_ID`, `MOBILE_GOOGLE_CLIENT_SECRET`을 함께 설정합니다. Docker Compose는 셸 또는 비공개 `.env`의 두 Google 값을 API 컨테이너로 전달합니다. 비밀키를 앱의 `VITE_` 설정이나 저장소에 넣지 않습니다.
+승인된 기존 앱 계정에 구글 로그인을 연결할 수 있습니다. Google Cloud에서 **웹 애플리케이션** OAuth 클라이언트를 만들고 승인된 리디렉션 URI를 `https://<MOBILE_PUBLIC_URL의 호스트>/api/mobile/auth/google/callback`으로 정확히 등록합니다. 서버에 `MOBILE_PUBLIC_URL`, `MOBILE_GOOGLE_CLIENT_ID`, `MOBILE_GOOGLE_CLIENT_SECRET`을 함께 설정합니다. Docker Compose는 셸 또는 비공개 `.env`의 두 Google 값을 API 컨테이너로 전달합니다. 비밀키를 앱의 `VITE_` 설정이나 저장소에 넣지 않습니다.
 
-Google Auth Platform에서는 홈페이지를 `<MOBILE_PUBLIC_URL>/`, 개인정보처리방침을 `<MOBILE_PUBLIC_URL>/privacy`로 등록합니다. 두 페이지는 이 서버가 공개 경로로 제공합니다. 실제 초대 회원이 쓰게 하려면 대상을 **외부(External)**, 게시 상태를 **프로덕션(Production)**으로 둡니다. 요청 범위는 `openid`만 사용합니다. 동의 화면에 맞춤 앱 이름이나 로고를 표시하려면 Google의 별도 브랜드 인증을 통과해야 합니다. 브랜드 인증을 신청하기 전에는 홈페이지와 개인정보처리방침이 실제 공개 서버에서 열리는지 확인하고, [Google의 최신 브랜딩 요건](https://support.google.com/cloud/answer/15549049)을 따릅니다.
+Google Auth Platform에서는 홈페이지를 `<MOBILE_PUBLIC_URL>/`, 개인정보처리방침을 `<MOBILE_PUBLIC_URL>/privacy`로 등록합니다. 두 페이지는 이 서버가 공개 경로로 제공합니다. 실제 회원이 쓰게 하려면 대상을 **외부(External)**, 게시 상태를 **프로덕션(Production)**으로 둡니다. 요청 범위는 `openid`만 사용합니다. 동의 화면에 맞춤 앱 이름이나 로고를 표시하려면 Google의 별도 브랜드 인증을 통과해야 합니다. 브랜드 인증을 신청하기 전에는 홈페이지와 개인정보처리방침이 실제 공개 서버에서 열리는지 확인하고, [Google의 최신 브랜딩 요건](https://support.google.com/cloud/answer/15549049)을 따릅니다.
 
 운영 비밀값을 Doppler의 `dev` 프로젝트·`dev` 구성에 둘 때는 아래 이름으로 저장하고, 서버 환경 변수로 내보낼 때 오른쪽 이름에 연결합니다. 값 자체는 문서나 저장소에 적지 않습니다.
 
@@ -208,6 +206,6 @@ Google Auth Platform에서는 홈페이지를 `<MOBILE_PUBLIC_URL>/`, 개인정�
 | `JARI_GOOGLE_CLIENT_SECRET` | `MOBILE_GOOGLE_CLIENT_SECRET` |
 | `JARI_MOBILE_PUBLIC_URL` | `MOBILE_PUBLIC_URL` |
 
-설정이 없으면 구글 로그인 버튼을 표시하지 않고, 일부 값만 설정하면 서버가 시작 오류를 냅니다. Firebase 푸시용 `google-services.json`만으로는 구글 로그인이 활성화되지 않습니다. 설정 후 앱 계정으로 로그인해 **설정 → 구글 계정 연결**에서 앱 비밀번호를 확인하고 구글 계정을 고릅니다. 다음부터 로그인 화면의 **구글로 로그인**을 사용할 수 있습니다. 앱에 표시된 확인 코드를 인증 브라우저에 직접 입력하고, 표시된 계정과 요청 기기를 확인한 뒤 로그인을 허용합니다. 연결 해제도 앱 비밀번호를 확인하며 현재 기기를 제외한 다른 앱 세션을 해제합니다. 새 회원은 먼저 초대 코드로 기존 앱 계정을 만듭니다. 운영 서버에 설정을 적용하거나 재시작하는 것은 별도 운영 승인 절차를 따릅니다.
+설정이 없으면 구글 로그인 버튼을 표시하지 않고, 일부 값만 설정하면 서버가 시작 오류를 냅니다. Firebase 푸시용 `google-services.json`만으로는 구글 로그인이 활성화되지 않습니다. 승인된 앱 계정으로 로그인해 **설정 → 구글 계정 연결**에서 앱 비밀번호를 확인하고 구글 계정을 고릅니다. 다음부터 로그인 화면의 **구글로 로그인**을 사용할 수 있습니다. 앱에 표시된 확인 코드를 인증 브라우저에 직접 입력하고, 표시된 계정과 요청 기기를 확인한 뒤 로그인을 허용합니다. 연결 해제도 앱 비밀번호를 확인하며 현재 기기를 제외한 다른 앱 세션을 해제합니다. Google 로그인만으로 새 회원을 만들거나 대기 회원을 승인하지 않습니다. 운영 서버에 설정을 적용하거나 재시작하는 것은 별도 운영 승인 절차를 따릅니다.
 
 인증 페이지는 Android WebView 밖의 브라우저에서 열립니다. 새 앱 의존성·Android용 Google OAuth 클라이언트·서명 지문 추가는 필요하지 않습니다. [Google 웹 서버 OAuth 문서](https://developers.google.com/identity/protocols/oauth2/web-server)와 [OpenID Connect 검증 문서](https://developers.google.com/identity/openid-connect/openid-connect)를 기준으로 합니다.

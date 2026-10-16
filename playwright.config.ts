@@ -2,11 +2,13 @@ import { defineConfig } from "@playwright/test";
 
 // e2e 스택(실서버 + 가짜 코레일)과 그 서버를 바라보는 웹 빌드를 띄워 놓고, 사용자가 보는 화면을 끝까지 따라가요.
 // 실제 코레일에는 닿지 않아요. 포트는 개발용 스택(18081·18090)과 겹치지 않게 따로 둬요.
+// 다른 작업 트리의 테스트 서버와 겹칠 때 모든 포트를 함께 옮겨요.
+const portOffset = Number(process.env.JARI_E2E_PORT_OFFSET || 0);
 export const E2E = {
-  api: 18281,
-  control: 18290,
-  redis: 16579,
-  web: 4273,
+  api: 18281 + portOffset,
+  control: 18290 + portOffset,
+  redis: 16579 + portOffset,
+  web: 4273 + portOffset,
 } as const;
 
 const phone = {

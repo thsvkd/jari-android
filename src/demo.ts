@@ -1,6 +1,7 @@
 import { normalizeCapabilities } from "./model";
 import type {
   AgentConnection,
+  AppUser,
   AuthResult,
   BootstrapState,
   Conditions,
@@ -105,6 +106,9 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     },
   ];
   let notifyMinutes = 5;
+  let users: AppUser[] = [
+    { id: "demo-user", username: "여행자", role: "member", status: "approved", applicationNote: null, createdAt: clock().toISOString() },
+  ];
   // 알림 화면이 종류마다 어떻게 보이는지 데모에서도 보이게, 실제 서버가 보내는 글 모양 그대로 몇 건 둬요.
   const ago = (minutes: number) => new Date(clock().getTime() - minutes * 60_000).toISOString();
   const notifications: NotificationItem[] = [
@@ -161,7 +165,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
   const bootstrap = (): BootstrapState => ({
     version: "demo",
     timeZone: "Asia/Seoul",
-    user: { id: "demo-user", username: "여행자", role: "member" },
+    user: { ...users[0]! },
     rail: {
       registered,
       stations,
@@ -203,11 +207,11 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     googlePoll: async () => ({ status: "pending" }),
     registerApp: async (input) => auth(input.username, "member"),
     login: async (input) => auth(input.username, input.role ?? "member"),
-    createInvite: async () => ({
-      invite: "acorn-bagel-tulip",
-      ttlHours: 24,
-      expiresAt: new Date(clock().getTime() + 86_400_000).toISOString(),
-    }),
+    users: async () => ({ users: users.map((user) => ({ ...user })) }),
+    setUserApproval: async (id, status) => {
+      users = users.map((user) => user.id === id ? { ...user, status } : user);
+      return { user: { ...users.find((user) => user.id === id)! } };
+    },
     logoutApp: async () => ({ ok: true }),
     deleteAccount: async () => ({ deleted: true }),
     bootstrap: async () => bootstrap(),

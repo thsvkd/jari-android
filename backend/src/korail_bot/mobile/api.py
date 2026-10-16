@@ -7,9 +7,11 @@ from functools import wraps
 from flask import Flask, Response, g, jsonify, request
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 
+from korail_bot import __version__
+from korail_bot.config.settings import settings
 from korail_bot.mobile import google_auth, mcp, oauth
 from korail_bot.mobile.config import MAX_REQUEST_BYTES
-from korail_bot.mobile.identity import LAST_ADMIN_MESSAGE, AuthError, timestamp
+from korail_bot.mobile.identity import LAST_ADMIN_MESSAGE, AuthError
 from korail_bot.mobile.pages import delete_account_page, homepage, privacy_page
 from korail_bot.services.mini_app_gateway import MiniAppError
 
@@ -100,7 +102,10 @@ def create_app(
         # app sees a failed fetch instead of this message. Upstream failures leave as 503.
         if status in (502, 504):
             status = 503
-        return jsonify(error=str(exc)), status
+        payload = {"error": str(exc)}
+        if isinstance(exc, AuthError) and exc.code:
+            payload["code"] = exc.code
+        return jsonify(payload), status
 
     @app.errorhandler(RequestEntityTooLarge)
     def too_large(exc):
@@ -197,7 +202,10 @@ def create_app(
         if not identity.allow(key, limit, window):
             raise AuthError("요청이 너무 많아요. 잠시 후 다시 시도해 주세요.", 429)
 
-    def authenticated(view):
+    def authenticated(view=None, *, allow_nonapproved=False):
+        if view is None:
+            return lambda actual: authenticated(actual, allow_nonapproved=allow_nonapproved)
+
         @wraps(view)
         def wrapped(*args, **kwargs):
             scheme, _, token = request.headers.get("Authorization", "").partition(" ")
@@ -208,6 +216,8 @@ def create_app(
             limited("api:" + g.user["id"], 120, 60)
             if request.method in {"POST", "DELETE"}:
                 g.payload = body()
+            if not allow_nonapproved and g.user.get("status") != "approved":
+                raise AuthError("관리자 승인 후 이용할 수 있어요.", 403, code="approval_required")
             path = request.path.rsplit(PREFIX, 1)[-1]
             # Seat maps under /trains/<key>/ log in to Korail on every call.
             if path.startswith("/trains/") or path in {
@@ -223,8 +233,12 @@ def create_app(
                 # A queued mutation may have waited behind logout. Recheck the
                 # server session once it owns the user's mutation lock.
                 g.user = identity.authenticate(token)
+                if not allow_nonapproved and g.user.get("status") != "approved":
+                    raise AuthError(
+                        "관리자 승인 후 이용할 수 있어요.", 403, code="approval_required"
+                    )
                 timezone_name = request.headers.get("X-User-Timezone", "")
-                if timezone_name:
+                if timezone_name and g.user.get("status") == "approved":
                     gateway.sync_timezone(g.user["storage_id"], timezone_name)
                 return view(*args, **kwargs)
 
@@ -274,7 +288,7 @@ def create_app(
             limited("auth-user:" + username.lower(), 10, 300)
         if request.path.endswith("/register"):
             return jsonify(
-                identity.register(username, payload.get("password"), payload.get("invite"))
+                identity.register(username, payload.get("password"), payload.get("applicationNote"))
             )
         role = payload.get("role")
         if role not in {None, "admin", "member"}:
@@ -282,13 +296,13 @@ def create_app(
         return jsonify(identity.login(username, payload.get("password"), expected_role=role))
 
     @app.post(PREFIX + "/auth/logout")
-    @authenticated
+    @authenticated(allow_nonapproved=True)
     def logout_auth():
         identity.revoke(g.token)
         return jsonify(ok=True)
 
     @app.post(PREFIX + "/account/delete")
-    @authenticated
+    @authenticated(allow_nonapproved=True)
     def delete_account():
         # The password again: a phone left unlocked must not be enough to
         # erase someone's account. Its own small bucket bounds the guessing.
@@ -296,31 +310,69 @@ def create_app(
         # 403, not 401: the app reads 401 as an expired session and logs out.
         if not identity.check_password(g.user["id"], g.payload.get("password")):
             raise AuthError("앱 비밀번호가 맞지 않아요.", 403)
-        erase_account(identity, gateway, notifications, g.user)
+        if g.user["status"] == "approved":
+            erase_account(identity, gateway, notifications, g.user)
+        else:
+            identity.delete_user(
+                g.user["id"],
+                g.user["username"],
+                rate_limit_keys=[
+                    f"{kind}:{g.user['id']}" for kind in ("api", "rail", "diag", "account-delete")
+                ],
+            )
         return jsonify(deleted=True)
 
-    @app.post(PREFIX + "/invites")
-    @authenticated
-    def create_invite():
-        if g.user.get("role") != "admin":
-            raise AuthError("초대 코드는 관리자만 만들 수 있어요.", 403)
-        hours = g.payload.get("ttlHours", 24)
-        if hours is None:
-            hours = 24
-        if not isinstance(hours, int) or isinstance(hours, bool) or not 1 <= hours <= 168:
-            raise AuthError("초대 코드의 유효 시간은 1시간에서 7일 사이로 정해 주세요.", 400)
-        token = identity.create_invite(ttl=hours * 3600)
-        return jsonify(
-            invite=token,
-            ttlHours=hours,
-            expiresAt=timestamp(identity.clock() + hours * 3600),
-        )
-
     @app.post(PREFIX + "/bootstrap")
-    @authenticated
+    @authenticated(allow_nonapproved=True)
     def bootstrap():
+        if g.user["status"] != "approved":
+            return jsonify(
+                version=__version__,
+                timeZone="Asia/Seoul",
+                user={
+                    key: g.user[key]
+                    for key in (
+                        "id",
+                        "username",
+                        "role",
+                        "status",
+                        "applicationNote",
+                        "createdAt",
+                    )
+                },
+                rail={
+                    "registered": False,
+                    "stations": [],
+                    "majorStations": [],
+                    "displayName": "코레일",
+                },
+                running=None,
+                scheduled=None,
+                pending=[],
+                favourites=[],
+                notifyMinutes=0,
+                draft=None,
+                paymentUrl=settings.KORAIL_PAYMENT_URL,
+                capabilities={
+                    "korail": False,
+                    "srt": False,
+                    "waitlist": False,
+                    "scheduledSearch": False,
+                    "seatDirection": False,
+                    "durableNotifications": False,
+                    "favourites": False,
+                    "notificationSettings": False,
+                    "push": False,
+                    "lastChecked": False,
+                    "agents": False,
+                },
+                notifications={"pushAvailable": False},
+            )
         result = gateway.bootstrap(g.user["storage_id"])
-        result["user"] = {key: g.user[key] for key in ("id", "username", "role")}
+        result["user"] = {
+            key: g.user[key]
+            for key in ("id", "username", "role", "status", "applicationNote", "createdAt")
+        }
         result["capabilities"] = {
             "korail": booking_available,
             "srt": False,
@@ -345,6 +397,22 @@ def create_app(
             "pushAvailable": bool(notifications and notifications.push_available)
         }
         return jsonify(result)
+
+    def require_admin():
+        if g.user.get("role") != "admin":
+            raise AuthError("관리자만 회원을 관리할 수 있어요.", 403)
+
+    @app.get(PREFIX + "/admin/users")
+    @authenticated
+    def admin_users():
+        require_admin()
+        return jsonify(users=identity.list_users())
+
+    @app.post(PREFIX + "/admin/users/<user_id>/approval")
+    @authenticated
+    def admin_approval(user_id):
+        require_admin()
+        return jsonify(user=identity.set_approval(user_id, g.payload.get("status")))
 
     def call_gateway(method, payload=False):
         result = getattr(gateway, method)(g.user["storage_id"], *([g.payload] if payload else []))

@@ -26,11 +26,16 @@ export interface AgentConnection {
 }
 
 export type AppRole = "admin" | "member";
+export type AppUserStatus = "pending" | "approved" | "rejected";
 
 export interface AppUser {
   id: string;
   username: string;
   role?: AppRole;
+  /** Older servers omit this; clients treat omission as approved. */
+  status?: AppUserStatus;
+  applicationNote?: string | null;
+  createdAt?: string | null;
 }
 
 export interface AuthResult {
@@ -287,12 +292,6 @@ export interface StatusResult {
   pending: PendingReservation[];
 }
 
-export interface InviteResult {
-  invite: string;
-  ttlHours: number;
-  expiresAt: string;
-}
-
 export interface MobileApi {
   googleConfiguration(): Promise<{ enabled: boolean }>;
   googleStatus(): Promise<{ enabled: boolean; linked: boolean }>;
@@ -302,9 +301,10 @@ export interface MobileApi {
   googleAcknowledge(ticket: string): Promise<{ acknowledged: boolean }>;
   googleCancel(ticket: string): Promise<{ cancelled: boolean }>;
   googlePoll(ticket: string): Promise<GoogleAuthPoll>;
-  registerApp(input: { username: string; password: string; invite: string }): Promise<AuthResult>;
+  registerApp(input: { username: string; password: string; applicationNote?: string }): Promise<AuthResult>;
   login(input: { username: string; password: string; role?: AppRole }): Promise<AuthResult>;
-  createInvite(input?: { ttlHours?: number }): Promise<InviteResult>;
+  users(): Promise<{ users: AppUser[] }>;
+  setUserApproval(id: string, status: "approved" | "rejected"): Promise<{ user: AppUser }>;
   logoutApp(): Promise<{ ok: boolean }>;
   /** 회원 탈퇴. 성공하면 이 폰의 로그인도 지워요. */
   deleteAccount(password: string): Promise<{ deleted: boolean }>;

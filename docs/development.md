@@ -49,7 +49,7 @@ uv run --frozen python tests/e2e/stack.py --origin http://127.0.0.1:4173
 VITE_API_BASE_URL=http://127.0.0.1:18081 npm run dev
 ```
 
-관리자 계정은 `curl http://127.0.0.1:18090/config`, 새 초대 회원은 `curl -X POST http://127.0.0.1:18090/user`로 받습니다. 시나리오 바꾸기·재시작 같은 제어 명령은 [`stack.py`](../backend/tests/e2e/stack.py) 머리말에 있습니다.
+관리자 계정은 `curl http://127.0.0.1:18090/config`, 바로 사용할 수 있는 승인된 테스트 회원은 `curl -X POST http://127.0.0.1:18090/user`로 받습니다. 시나리오 바꾸기·재시작 같은 제어 명령은 [`stack.py`](../backend/tests/e2e/stack.py) 머리말에 있습니다.
 
 다른 서버에 붙일 때는 서버의 `MOBILE_ORIGINS`에 개발 서버 주소(`http://127.0.0.1:4173`)를 더해야 브라우저 요청이 거절되지 않습니다.
 
@@ -94,6 +94,8 @@ uv run --frozen python ../scripts/smoke-backend.py
 bash ../scripts/test-deploy-backend.sh            # 배포 스크립트 회귀 검사
 ```
 
+다른 작업 트리의 e2e 스택이 기본 포트를 쓰고 있으면 `JARI_E2E_PORT_OFFSET=1000 npx playwright test --project=phone-light`처럼 포트 오프셋을 줍니다. `JARI_E2E_PORT_OFFSET=1000 npm run verify -- --ci`에도 같은 값이 전달되어 각 작업 트리의 API·제어·웹 포트를 함께 옮깁니다.
+
 `npm run verify -- --only=<단계 이름 일부>`로 한 단계만 돌릴 수 있습니다(기록은 남기지 않습니다).
 
 ## 화면을 바꿀 때
@@ -132,4 +134,4 @@ bash ../scripts/test-deploy-backend.sh            # 배포 스크립트 회귀 �
 
 - `README.md`(한국어)와 `README.en.md`(영어)는 함께 고칩니다.
 - 운영·빌드·개발 절차는 `docs/self-hosting.md`, `docs/android.md`, `docs/development.md`에, 제품 의도는 `docs/PRD.md`, 구조·계약은 `docs/SPEC.md`에 둡니다.
-- `docs/superpowers/`는 2026-09-14 좌석 선택·취소표 대기 작업의 설계·계획 기록입니다. 지금 기준은 SPEC이 대신합니다.
+- `docs/superpowers/`는 작업별 설계·계획 기록입니다. 현재 구현 기준은 SPEC을 봅니다.

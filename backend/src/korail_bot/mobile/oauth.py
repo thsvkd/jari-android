@@ -220,7 +220,8 @@ class AgentStore:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 "SELECT oauth_codes.*, oauth_grants.scope, oauth_grants.user_id AS owner,"
-                " users.storage_id, oauth_clients.name"
+                " users.storage_id, users.status AS user_status,"
+                " oauth_clients.name"
                 " FROM oauth_codes JOIN oauth_grants ON oauth_grants.id=oauth_codes.grant_id"
                 " JOIN users ON users.id=oauth_grants.user_id"
                 " JOIN oauth_clients ON oauth_clients.id=oauth_codes.client_id"
@@ -235,6 +236,7 @@ class AgentStore:
                 and row["expires"] > now
                 and row["client_id"] == form["client_id"]
                 and row["redirect_uri"] == form["redirect_uri"]
+                and row["user_status"] == "approved"
                 and VERIFIER.fullmatch(verifier)
                 and hmac.compare_digest(s256(verifier), row["code_challenge"])
             ):
@@ -279,8 +281,10 @@ class AgentStore:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 "SELECT oauth_tokens.*, oauth_grants.client_id, oauth_grants.scope,"
-                " oauth_grants.active, oauth_grants.expires AS grant_expires"
+                " oauth_grants.active, oauth_grants.expires AS grant_expires,"
+                " users.status AS user_status"
                 " FROM oauth_tokens JOIN oauth_grants ON oauth_grants.id=oauth_tokens.grant_id"
+                " JOIN users ON users.id=oauth_grants.user_id"
                 " WHERE hash=? AND kind='refresh'",
                 (digest(form["refresh_token"]),),
             ).fetchone()
@@ -294,6 +298,7 @@ class AgentStore:
                 and row["active"]
                 and row["client_id"] == form["client_id"]
                 and row["resource"] == self.resource
+                and row["user_status"] == "approved"
             ):
                 # Only this generation stays, as the replay tripwire; older ones and
                 # every access token of the connection go.
@@ -334,7 +339,8 @@ class AgentStore:
                 " FROM oauth_tokens JOIN oauth_grants ON oauth_grants.id=oauth_tokens.grant_id"
                 " JOIN users ON users.id=oauth_grants.user_id"
                 " WHERE hash=? AND kind='access' AND oauth_tokens.expires>? AND resource=?"
-                " AND active=1 AND oauth_grants.expires>?",
+                " AND active=1 AND oauth_grants.expires>?"
+                " AND users.status='approved'",
                 (digest(token), now, self.resource, now),
             ).fetchone()
             if row is None:
@@ -624,6 +630,14 @@ def install(app, identity, public_url, on_connect=None):
             # Never which of the two: that would tell whether the account exists.
             text = "아이디나 비밀번호를 다시 확인해 주세요."
             return consent(client, form, 401, username, text)
+        if identity._public_user(user)["status"] != "approved":
+            return consent(
+                client,
+                form,
+                403,
+                username,
+                "관리자 승인 후 에이전트를 연결할 수 있어요.",
+            )
         code = store.allow(user["id"], client["id"], form["redirect_uri"], form["code_challenge"])
         return back(form, code=code)
 

@@ -1,4 +1,4 @@
-"""Google login links an invited account explicitly and never exposes an app token in URLs."""
+"""Google login links an approved account explicitly and never exposes an app token in URLs."""
 
 import base64
 import json
@@ -80,7 +80,8 @@ def make_env(tmp_path, *, enabled=True):
 
 
 def register(identity, client, username="alice"):
-    session = identity.register(username, PASSWORD, identity.create_invite())
+    session = identity.register(username, PASSWORD)
+    identity.set_approval(session["user"]["id"], "approved")
     return session, {"Authorization": "Bearer " + session["token"]}
 
 

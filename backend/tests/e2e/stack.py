@@ -14,7 +14,7 @@ GET /health 가 200 을 돌려주고, 표준 출력에 E2E_READY {...} 한 줄�
     POST /scenario           가짜 코레일 시나리오를 통째로 바꿈 (기본값 위에 덮어씀)
     POST /reset              시나리오를 기본값으로, 코레일 호출 기록과 요청 한도를 비움
     GET  /log                가짜 코레일이 받은 호출 목록
-    POST /user               초대 코드로 새 사용자를 만들고 {username, password, token} 을 돌려줌
+    POST /user               승인된 새 사용자를 만들고 {username, password, token} 을 돌려줌
     POST /restart            서버를 SIGTERM 으로 내리고(워커는 서버가 스스로 멈춰요) 같은 환경·비밀·Redis·
                              데이터 폴더로 다시 띄움. 운영 배포(docker compose up)와 같은 재시작이에요.
                              새 서버가 답하면(재시작 복구가 끝난 뒤예요) {pid} 를 돌려줌
@@ -228,19 +228,17 @@ class Stack:
         with sqlite3.connect(self.data / "identity.sqlite3") as db:
             db.execute("DELETE FROM rate_limits")
 
-    def new_invite(self) -> str:
+    def new_user(self) -> dict:
+        user = {"username": f"u{secrets.token_hex(4)}", "password": secrets.token_urlsafe(16)}
+        registered = request("POST", f"{self.api}/api/mobile/auth/register", user)
         admin = request(
             "POST", f"{self.api}/api/mobile/auth/login", {**self.admin, "role": "admin"}
         )
-        return request("POST", f"{self.api}/api/mobile/invites", {"ttlHours": 1}, admin["token"])[
-            "invite"
-        ]
-
-    def new_user(self) -> dict:
-        invite = self.new_invite()
-        user = {"username": f"u{secrets.token_hex(4)}", "password": secrets.token_urlsafe(16)}
-        registered = request(
-            "POST", f"{self.api}/api/mobile/auth/register", {**user, "invite": invite}
+        request(
+            "POST",
+            f"{self.api}/api/mobile/admin/users/{registered['user']['id']}/approval",
+            {"status": "approved"},
+            admin["token"],
         )
         # 코레일 계정 연결도 실제 경로(/register → 가짜 코레일 로그인)로 해요.
         # 실존할 수 있는 전화번호 대신 쓰이지 않는 회원번호를 써요.
@@ -308,8 +306,6 @@ def control(stack: Stack):
                 return self.reply(200, {"reset": True})
             if self.path == "/user":
                 return self.reply(200, stack.new_user())
-            if self.path == "/invite":
-                return self.reply(200, {"invite": stack.new_invite()})
             self.reply(404, {})
 
     return ThreadingHTTPServer(("127.0.0.1", stack.args.control_port), Handler)

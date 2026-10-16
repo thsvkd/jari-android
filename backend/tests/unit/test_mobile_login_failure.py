@@ -17,9 +17,8 @@ def test_a_failed_korail_login_keeps_the_linked_account(tmp_path, monkeypatch):
     rail = MagicMock()
     rail.login.return_value = True
     monkeypatch.setattr(runtime.gateway.conversation, "_rail_service", lambda owner: rail)
-    alice = runtime.identity.register(
-        "alice", "a long secure passphrase", runtime.identity.create_invite()
-    )
+    alice = runtime.identity.register("alice", "a long secure passphrase")
+    runtime.identity.set_approval(alice["user"]["id"], "approved")
     owner = runtime.identity.authenticate(alice["token"])["storage_id"]
     http = runtime.app.test_client()
     headers = {"Authorization": "Bearer " + alice["token"]}
@@ -73,9 +72,8 @@ def test_korail_maintenance_is_said_as_it_is_and_keeps_the_linked_account(tmp_pa
     monkeypatch.setattr(down, "_build_modern_client", _korail_in_maintenance)
     rails = iter([down, up, down])
     monkeypatch.setattr(runtime.gateway.conversation, "_rail_service", lambda owner: next(rails))
-    alice = runtime.identity.register(
-        "alice", "a long secure passphrase", runtime.identity.create_invite()
-    )
+    alice = runtime.identity.register("alice", "a long secure passphrase")
+    runtime.identity.set_approval(alice["user"]["id"], "approved")
     owner = runtime.identity.authenticate(alice["token"])["storage_id"]
     http = runtime.app.test_client()
     headers = {"Authorization": "Bearer " + alice["token"]}

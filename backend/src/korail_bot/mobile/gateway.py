@@ -1,4 +1,4 @@
-"""Booking adapter: invited identities use their own encrypted railway login."""
+"""Booking adapter: approved identities use their own encrypted railway login."""
 
 import json
 from datetime import datetime, timedelta
@@ -109,7 +109,7 @@ class MobileSubmission(MiniAppSubmission):
 
 class InvitedAccess(AccessService):
     def evaluate(self, phone_number, is_developer=False):
-        # App registration itself required the operator's one-time invitation.
+        # Railway access is limited to app accounts approved by the operator.
         # It grants booking access, never developer or server-account rights.
         return AccessDecision(AccessLevel.APPROVED)
 

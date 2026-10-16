@@ -12,8 +12,6 @@ from pathlib import Path
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from .invite_words import WORDS
-
 PASSWORD_METHOD = "scrypt:32768:8:3"
 _DUMMY_HASH = generate_password_hash("no such account", method=PASSWORD_METHOD)
 
@@ -24,21 +22,14 @@ LAST_ADMIN_MESSAGE = (
 
 
 class AuthError(ValueError):
-    def __init__(self, message="아이디나 비밀번호를 확인해 주세요.", status=401):
+    def __init__(self, message="아이디나 비밀번호를 확인해 주세요.", status=401, code=None):
         super().__init__(message)
         self.status = status
+        self.code = code
 
 
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
-
-
-def invite_code(value: str) -> str | None:
-    """대소문자와 구분자를 무시하고 세 단어 초대 코드를 표준형으로 바꾼다."""
-    words = re.findall(r"[a-z]+", value.lower())
-    if len(words) == 3 and all(word in WORDS for word in words):
-        return "-".join(words)
-    return None
 
 
 def timestamp(value: float) -> str:
@@ -59,10 +50,10 @@ class IdentityStore:
                 CREATE TABLE IF NOT EXISTS users (
                     id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL, storage_id INTEGER UNIQUE NOT NULL,
-                    role TEXT NOT NULL DEFAULT 'member'
-                );
-                CREATE TABLE IF NOT EXISTS invites (
-                    hash TEXT PRIMARY KEY, expires REAL NOT NULL, redeemed REAL
+                    role TEXT NOT NULL DEFAULT 'member',
+                    status TEXT NOT NULL DEFAULT 'approved',
+                    application_note TEXT,
+                    created REAL
                 );
                 CREATE TABLE IF NOT EXISTS sessions (
                     hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
@@ -122,6 +113,14 @@ class IdentityStore:
             columns = {row[1] for row in db.execute("PRAGMA table_info(users)")}
             if "role" not in columns:
                 db.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'")
+            if "status" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'")
+            if "application_note" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN application_note TEXT")
+            if "created" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN created REAL")
+            db.execute("UPDATE users SET status='approved' WHERE role='admin'")
+            db.execute("DROP TABLE IF EXISTS invites")
 
     @contextmanager
     def connect(self):
@@ -134,24 +133,6 @@ class IdentityStore:
         finally:
             db.close()
 
-    def create_invite(self, ttl=86400):
-        if not 1 <= ttl <= 30 * 86400:
-            raise ValueError("Invitation lifetime must be 1 second to 30 days")
-        # 단어 1,295개 세 개라 약 2.2e9 가지다. 가입 시도는 전체 60회/5분으로 막혀
-        # (api.py auth-any) 7일짜리 코드를 맞힐 확률은 약 5e-5 이다.
-        for _ in range(5):
-            token = "-".join(secrets.choice(WORDS) for _ in range(3))
-            try:
-                with self.connect() as db:
-                    db.execute(
-                        "INSERT INTO invites VALUES (?, ?, NULL)",
-                        (digest(token), self.clock() + ttl),
-                    )
-                return token
-            except sqlite3.IntegrityError:
-                continue
-        raise RuntimeError("Could not allocate a unique invitation")
-
     @staticmethod
     def credentials(username, password):
         if not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_]{3,32}", username):
@@ -160,34 +141,38 @@ class IdentityStore:
             raise AuthError("앱 비밀번호는 8~128자로 입력해 주세요.", 400)
         return username.lower()
 
-    def register(self, username, password, invite):
+    def register(self, username, password, application_note=None):
         username = self.credentials(username, password)
-        if not isinstance(invite, str) or not invite.strip() or len(invite) > 128:
-            raise AuthError("초대 코드가 올바르지 않거나 만료됐어요.", 403)
-        # 예전 긴 토큰은 그대로, 세 단어 코드는 표준형으로 찾는다.
-        raw = invite.strip()
-        hashes = (digest(raw), digest(invite_code(raw) or raw))
+        if application_note is not None and (
+            not isinstance(application_note, str) or len(application_note) > 200
+        ):
+            raise AuthError("가입 신청 메모는 200자 이내로 입력해 주세요.", 400)
+        application_note = application_note or None
         # Hash before the write transaction: password stretching must not hold
         # SQLite's exclusive writer lock while another friend is signing up.
         hashed = generate_password_hash(password, method=PASSWORD_METHOD)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            changed = db.execute(
-                "UPDATE invites SET redeemed=? WHERE hash IN (?, ?) AND redeemed IS NULL"
-                " AND expires>?",
-                (self.clock(), *hashes, self.clock()),
-            ).rowcount
-            if not changed:
-                raise AuthError("초대 코드가 올바르지 않거나 만료됐어요.", 403)
-            user = {"id": "mobile_" + secrets.token_hex(16), "username": username, "role": "member"}
+            user = {
+                "id": "mobile_" + secrets.token_hex(16),
+                "username": username,
+                "role": "member",
+                "status": "pending",
+                "application_note": application_note,
+                "created": self.clock(),
+            }
             try:
                 db.execute(
-                    "INSERT INTO users (id, username, password_hash, storage_id, role) VALUES (?, ?, ?, ?, 'member')",
+                    "INSERT INTO users"
+                    " (id, username, password_hash, storage_id, role, status, application_note, created)"
+                    " VALUES (?, ?, ?, ?, 'member', 'pending', ?, ?)",
                     (
                         user["id"],
                         username,
                         hashed,
                         -(2**51 + secrets.randbelow(2**50)),
+                        application_note,
+                        user["created"],
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -202,7 +187,7 @@ class IdentityStore:
             existing = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
             if existing:
                 db.execute(
-                    "UPDATE users SET password_hash=?, role='admin' WHERE id=?",
+                    "UPDATE users SET password_hash=?, role='admin', status='approved' WHERE id=?",
                     (hashed, existing["id"]),
                 )
                 return {"id": existing["id"], "username": username, "role": "admin"}
@@ -210,23 +195,43 @@ class IdentityStore:
                 "id": "mobile_" + secrets.token_hex(16),
                 "username": username,
                 "role": "admin",
+                "status": "approved",
+                "application_note": None,
+                "created": self.clock(),
             }
             db.execute(
-                "INSERT INTO users (id, username, password_hash, storage_id, role) VALUES (?, ?, ?, ?, 'admin')",
+                "INSERT INTO users"
+                " (id, username, password_hash, storage_id, role, status, application_note, created)"
+                " VALUES (?, ?, ?, ?, 'admin', 'approved', NULL, ?)",
                 (
                     user["id"],
                     username,
                     hashed,
                     -(2**51 + secrets.randbelow(2**50)),
+                    user["created"],
                 ),
             )
             return user
 
     def _public_user(self, user):
-        role = dict(user).get("role", "member")
+        values = dict(user)
+        role = values.get("role", "member")
         if role not in {"admin", "member"}:
             role = "member"
-        return {"id": user["id"], "username": user["username"], "role": role}
+        status = values.get("status", "rejected")
+        if status not in {"pending", "approved", "rejected"}:
+            status = "rejected"
+        elif role == "admin":
+            status = "approved"
+        created = values.get("created")
+        return {
+            "id": user["id"],
+            "username": user["username"],
+            "role": role,
+            "status": status,
+            "applicationNote": values.get("application_note"),
+            "createdAt": timestamp(created) if created is not None else None,
+        }
 
     def _session(self, db, user):
         token = secrets.token_urlsafe(32)
@@ -245,7 +250,7 @@ class IdentityStore:
         with self.connect() as db:
             user = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
         # Same expensive primitive for unknown accounts; never disclose
-        # whether a particular invitation holder has registered.
+        # whether a particular username has registered.
         valid = check_password_hash(user["password_hash"] if user else _DUMMY_HASH, password)
         if user is None or not valid:
             raise AuthError()
@@ -258,7 +263,7 @@ class IdentityStore:
             raise AuthError(
                 "관리자 계정이 아니에요."
                 if expected_role == "admin"
-                else "초대 회원 로그인 화면에서는 관리자 계정으로 로그인할 수 없어요.",
+                else "회원 로그인 화면에서는 관리자 계정으로 로그인할 수 없어요.",
                 403,
             )
         with self.connect() as db:
@@ -276,9 +281,7 @@ class IdentityStore:
             raise AuthError("로그인이 만료됐어요. 다시 로그인해 주세요.")
         public = self._public_user(user)
         return {
-            "id": public["id"],
-            "username": public["username"],
-            "role": public["role"],
+            **public,
             "storage_id": user["storage_id"],
         }
 
@@ -301,6 +304,33 @@ class IdentityStore:
             ).fetchone()
         return user and {**self._public_user(user), "storage_id": user["storage_id"]}
 
+    def list_users(self):
+        with self.connect() as db:
+            users = db.execute(
+                "SELECT * FROM users ORDER BY"
+                " CASE status WHEN 'pending' THEN 0 WHEN 'rejected' THEN 1 ELSE 2 END,"
+                " created IS NULL, created, username"
+            ).fetchall()
+        return [self._public_user(user) for user in users]
+
+    def set_approval(self, user_id, status):
+        if not isinstance(status, str) or status not in {"approved", "rejected"}:
+            raise AuthError("승인 상태를 확인해 주세요.", 400)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+            if user is None:
+                raise AuthError("회원을 찾지 못했어요.", 404)
+            public = self._public_user(user)
+            if public["role"] == "admin":
+                raise AuthError("관리자 계정의 승인 상태는 바꿀 수 없어요.", 403)
+            if public["status"] == "approved" and status == "rejected":
+                raise AuthError("이용 중인 회원은 거절 상태로 바꿀 수 없어요.", 409)
+            if public["status"] != status:
+                db.execute("UPDATE users SET status=? WHERE id=?", (status, user_id))
+                user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+            return self._public_user(user)
+
     def admin_count(self):
         with self.connect() as db:
             return db.execute("SELECT count(*) FROM users WHERE role='admin'").fetchone()[0]
@@ -309,8 +339,8 @@ class IdentityStore:
         """
         Remove the account, every session it holds and its own rate-limit buckets.
 
-        The last admin is refused: invites come only from an admin, and the app
-        would be left with nobody able to let a friend in. The operator can
+        The last admin is refused: the app would be left with nobody able to
+        approve new members. The operator can
         still create another with `python -m korail_bot.mobile admin` first.
         """
         with self.connect() as db:

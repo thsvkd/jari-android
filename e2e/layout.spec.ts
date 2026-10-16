@@ -13,14 +13,13 @@ test.describe("레이아웃 @layout", () => {
     await openApp(page);
     await expectCleanLayout(page, "로그인 방법 고르기");
     await page.locator("[data-auth-gate='guest']").click();
-    await expectCleanLayout(page, "초대 회원 로그인");
+    await expectCleanLayout(page, "회원 로그인");
     await page.locator("[data-auth-mode='register']").click();
-    await expectCleanLayout(page, "초대 코드로 가입");
+    await expectCleanLayout(page, "승인 신청 가입");
     await page.locator("#auth-form [name='username']").fill("new_friend");
     await page.locator("#auth-form [name='password']").fill("a long secure passphrase");
     await page.locator("#auth-form [name='password_confirm']").fill("a different passphrase");
-    await page.locator("#auth-form [name='invite']").fill("apple river cloud");
-    await page.locator("#auth-form [name='invite']").press("Enter");
+    await page.locator("#auth-form [name='password_confirm']").press("Enter");
     await expect(page.locator(".form-error")).toBeVisible();
     await expectCleanLayout(page, "가입 비밀번호 불일치");
   });

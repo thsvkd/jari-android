@@ -76,7 +76,27 @@ describe("mobile API authentication boundary", () => {
     );
   });
 
-  it("does not send a stale session to login or invitation signup", async () => {
+  it("gives a swallowed bootstrap read up after 20 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const signedIn = createSessionStorage({ read: async () => "opaque-session", write: async () => {}, clear: async () => {} });
+      const api = createHttpApi({
+        baseUrl: "https://jari.example",
+        tokenStorage: signedIn,
+        fetcher: vi.fn<typeof fetch>((_input, init) => new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        })),
+      });
+
+      const bootstrap = expect(api.bootstrap()).rejects.toMatchObject({ kind: "timeout" });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await bootstrap;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not send a stale session to login or signup", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       response({ token: "new", user: { id: "u1", username: "mint" }, expiresAt: "future" }),
     );
@@ -90,6 +110,28 @@ describe("mobile API authentication boundary", () => {
       username: "mint",
       password: "long password",
     });
+  });
+
+  it("registers without an invitation and manages member approval through admin routes", async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ token: "new", user: { id: "u1", username: "mint", status: "pending" }, expiresAt: "future" }))
+      .mockResolvedValueOnce(response({ users: [] }))
+      .mockResolvedValueOnce(response({ user: { id: "u1", username: "mint", status: "approved" } }));
+    const api = createHttpApi({ baseUrl: "https://jari.example", tokenStorage, fetcher });
+
+    await api.registerApp({ username: "mint", password: "long password", applicationNote: "친구 소개" });
+    await api.users();
+    await api.setUserApproval("user / one", "approved");
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      username: "mint",
+      password: "long password",
+      applicationNote: "친구 소개",
+    });
+    expect(fetcher.mock.calls[1]?.[0]).toBe("https://jari.example/api/mobile/admin/users");
+    expect(fetcher.mock.calls[1]?.[1]?.method).toBe("GET");
+    expect(fetcher.mock.calls[2]?.[0]).toBe("https://jari.example/api/mobile/admin/users/user%20%2F%20one/approval");
+    expect(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body))).toEqual({ status: "approved" });
   });
 });
 

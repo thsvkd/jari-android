@@ -1,4 +1,4 @@
-"""python -m korail_bot.mobile {serve,invite,admin,running,seat-windows}; no BOTTOKEN required."""
+"""python -m korail_bot.mobile {serve,admin,running,seat-windows}; no BOTTOKEN required."""
 
 import argparse
 import json
@@ -13,8 +13,6 @@ from korail_bot.mobile.identity import IdentityStore
 def main():
     parser = argparse.ArgumentParser(description="Standalone 자리났다 API")
     commands = parser.add_subparsers(dest="command", required=True)
-    invite = commands.add_parser("invite", help="Create a one-use app invitation")
-    invite.add_argument("--ttl-hours", type=int, default=24)
     admin = commands.add_parser("admin", help="Create or update the operator app account")
     admin.add_argument("--username", required=True)
     admin.add_argument(
@@ -44,11 +42,8 @@ def main():
     args = parser.parse_args()
     try:
         config = MobileConfig.from_env(
-            auth_only=args.command in {"invite", "admin"} or getattr(args, "auth_only", False)
+            auth_only=args.command == "admin" or getattr(args, "auth_only", False)
         )
-        if args.command == "invite":
-            print(IdentityStore(config.database).create_invite(ttl=args.ttl_hours * 3600))
-            return
         if args.command == "admin":
             password = args.password or os.environ.get("MOBILE_ADMIN_PASSWORD") or ""
             if not password and not sys.stdin.isatty():

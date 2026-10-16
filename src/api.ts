@@ -7,7 +7,7 @@ import type {
   Favourite,
   GoogleAuthStart,
   GoogleAuthPoll,
-  InviteResult,
+  AppUser,
   MobileApi,
   NotificationItem,
   PendingReservation,
@@ -122,7 +122,7 @@ export function createConnectionMissLog(storage: MissStorage | null = null) {
   };
 }
 
-// Only the status poll has a deadline. It reads Redis, but waits behind the user's lock while a seat map or reservation
+// Status and bootstrap reads have a deadline. They can wait behind the user's lock while a seat map or reservation
 // talks to Korail. Requests that go to Korail get none: giving up on one can hide a reservation that went through.
 const POLL_TIMEOUT_MS = 20_000;
 
@@ -290,7 +290,8 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
     googlePoll: (ticket) => request<GoogleAuthPoll>("/auth/google/poll", { body: { ticket }, authenticated: false, timeoutMs: 10_000 }),
     registerApp: (input) => request<AuthResult>("/auth/register", { body: input, authenticated: false }),
     login: (input) => request<AuthResult>("/auth/login", { body: input, authenticated: false }),
-    createInvite: (input = {}) => request<InviteResult>("/invites", { body: input }),
+    users: () => request<{ users: AppUser[] }>("/admin/users", { method: "GET" }),
+    setUserApproval: (id, status) => request<{ user: AppUser }>(`/admin/users/${encodeURIComponent(id)}/approval`, { body: { status } }),
     logoutApp: async () => {
       const generation = options.tokenStorage.generation();
       const token = await options.tokenStorage.read();
@@ -309,7 +310,7 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
       return result;
     },
     bootstrap: async () => {
-      const state = await request<BootstrapState>("/bootstrap");
+      const state = await request<BootstrapState>("/bootstrap", { timeoutMs: POLL_TIMEOUT_MS });
       directionSupported = state.capabilities?.seatDirection === true;
       return state;
     },

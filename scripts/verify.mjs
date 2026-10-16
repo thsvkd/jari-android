@@ -20,7 +20,7 @@ const CI = process.argv.includes("--ci");
 // CI 에서도 기기(에뮬레이터)가 붙어 있으면 기기 단계를 돌려요.
 const DEVICE = !CI || process.argv.includes("--device");
 const ONLY = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length);
-const E2E_API_PORT = 18281; // playwright.config.ts 의 E2E.api
+const E2E_API_PORT = 18281 + Number(process.env.JARI_E2E_PORT_OFFSET || 0); // playwright.config.ts 의 E2E.api
 const DEVTOOLS_PORT = 9377; // 이 PC 의 9222 는 다른 프로그램이 써요.
 // 설치되는 패키지(applicationId)와 액티비티 클래스(코드의 namespace)는 달라요. Play 에서 com.jari.app 을 쓸 수 없어 패키지만 바꿨어요.
 const APP = "dev.thsvkd.jari";

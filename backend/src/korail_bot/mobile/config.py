@@ -18,7 +18,7 @@ class MobileConfig:
     fcm_credentials: str | None = None
     origins: tuple[str, ...] = ("https://localhost", "capacitor://localhost")
     # Shown on the public privacy and account-deletion pages. Unset, they point
-    # to the in-app deletion and the person who sent the invitation instead.
+    # to in-app deletion and the operator instead.
     privacy_contact: str | None = None
     # Where agents reach this API from outside (MOBILE_PUBLIC_URL). Unset,
     # agent connections (OAuth and MCP) are switched off entirely.

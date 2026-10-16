@@ -55,18 +55,30 @@ def main():
                 except URLError:
                     time.sleep(0.1)
             assert ready, "Auth-only CLI did not become ready"
-            invite = IdentityStore(str(Path(temporary) / "identity.sqlite3")).create_invite()
-            auth = post("/auth/register", {"username": "smoke_user", "password": secrets.token_hex(20), "invite": invite})
+            store = IdentityStore(str(Path(temporary) / "identity.sqlite3"))
+            admin_password = secrets.token_hex(20)
+            store.ensure_admin("smoke_admin", admin_password)
+            admin = post("/auth/login", {"username": "smoke_admin", "password": admin_password, "role": "admin"})
+            auth = post("/auth/register", {"username": "smoke_user", "password": secrets.token_hex(20)})
             state = post("/bootstrap", {}, auth["token"])
             assert state["user"]["username"] == "smoke_user"
+            assert state["user"]["status"] == "pending"
             assert state["capabilities"]["korail"] is False
+            try:
+                post("/trains", {}, auth["token"])
+                raise AssertionError("Unapproved member reached railway functions")
+            except HTTPError as error:
+                assert error.code == 403
+            approved = post(f"/admin/users/{auth['user']['id']}/approval", {"status": "approved"}, admin["token"])
+            assert approved["user"]["status"] == "approved"
+            assert post("/bootstrap", {}, auth["token"])["user"]["status"] == "approved"
             assert post("/auth/logout", {}, auth["token"])["ok"] is True
             try:
                 post("/bootstrap", {}, auth["token"])
                 raise AssertionError("Revoked session still authorized")
             except HTTPError as error:
                 assert error.code == 401
-            print("PASS: real auth-only CLI, HTTP registration/bootstrap/logout/revocation; no railway or Redis calls")
+            print("PASS: real auth-only CLI, pending registration/rail denial/admin approval/bootstrap/logout/revocation; no railway or Redis calls")
         finally:
             process.terminate()
             process.wait(timeout=10)

@@ -458,6 +458,27 @@ def test_authorize_page_asks_for_the_app_account_and_says_who_asked(env):
     assert 'value="deny" formnovalidate>거절</button>' in html
 
 
+def test_pending_member_cannot_authorize_an_agent(env):
+    pending_user = env.client.post(
+        "/api/mobile/auth/register",
+        json={"username": "waiting", "password": PASSWORD},
+    ).json
+    pending = start(env)
+    response = submit(env, pending.page, pending_user["user"]["username"])
+    assert response.status_code == 403
+    assert "승인" in response.get_data(as_text=True)
+
+
+def test_lost_approval_blocks_existing_mcp_and_refresh_tokens(env, alice):
+    tokens = connect(env, alice)
+    with env.identity.connect() as db:
+        db.execute("UPDATE users SET status='rejected' WHERE id=?", (alice["user"]["id"],))
+    assert mcp_status(env, tokens["access_token"]) == 401
+    response = refresh(env, tokens)
+    assert response.status_code == 400
+    assert oauth_error(response)["error"] == "invalid_grant"
+
+
 def test_authorize_page_for_a_local_program_says_so(env):
     registered = register_client(env, [LOOPBACK_CALLBACK])
     response = authorize(env, registered["client_id"], LOOPBACK_CALLBACK, pkce()[1])

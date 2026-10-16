@@ -31,6 +31,8 @@ import {
 } from "./seat-map";
 import type {
   AgentConnection,
+  AppUser,
+  AppUserStatus,
   BootstrapState,
   CancellationWaitPlan,
   Conditions,
@@ -60,6 +62,8 @@ export type AppView =
   | "favourites"
   | "notifications"
   | "settings"
+  | "approval"
+  | "members"
   | "rail-account"
   | "agents";
 
@@ -133,6 +137,7 @@ const SEAT_OPTIONS: Record<string, string> = {
 };
 
 const NOTIFY_STEPS = [0, 1, 3, 5, 10, 15, 30, 60, 120, 180];
+const userStatus = (user: AppUser | undefined): AppUserStatus => user?.status ?? "approved";
 
 // 이 폰에서 열차를 조회한 구간, 최근 것부터. 서버는 반쯤 쓴 여정 하나만 돌려줘서 목록은 기기에 둬요.
 const RECENT_KEY = "jari.recentRoutes";
@@ -299,10 +304,12 @@ export class JariApp {
   private agentsLoadFailed = false;
   private authGate: "choose" | "admin" | "guest" = "choose";
   private authMode: "login" | "register" = "login";
-  private invitePreview = "";
+  private memberUsers: AppUser[] | null = null;
+  private membersLoadFailed = false;
+  private memberApprovalBusy = "";
+  private membersLoadSeq = 0;
   /** 로그인 화면 위에 한 번 보여 줄 소식(탈퇴를 마쳤다는 것). 다음 세션 정리에서 지워요. */
   private authNotice = "";
-  private inviteLoading = false;
   private notifySaveVersion = 0;
   private scheduleOpen = false;
   // 찾기 시작 시각은 날짜와 시각을 따로 골라 #schedule-at 하나(YYYY-MM-DDTHH:MM)로 합쳐요.
@@ -328,6 +335,7 @@ export class JariApp {
   // on a poll sent before the pause, which Android may have cut off and which then hangs until its deadline.
   private pollSeq = 0;
   private pollOut = false;
+  private reloadSeq = 0;
   // Android pauses the app without always hiding the page, so the native lifecycle is kept separately.
   private background = false;
   private theme: "light" | "dark";
@@ -420,7 +428,10 @@ export class JariApp {
     // 다음 계정의 화면에 앞 계정의 연결이 한순간도 보이지 않게요.
     this.agentConnections = null;
     this.agentsLoadFailed = false;
-    this.inviteLoading = false;
+    this.memberUsers = null;
+    this.membersLoadFailed = false;
+    this.memberApprovalBusy = "";
+    this.membersLoadSeq += 1;
     this.notifySaveVersion += 1;
     this.cancellationTargets = [];
     this.notifications = [];
@@ -429,7 +440,6 @@ export class JariApp {
     this.unreadNotices = 0;
     this.authGate = "choose";
     this.authMode = "login";
-    this.invitePreview = "";
     this.authNotice = "";
     this.scheduleOpen = false;
     this.accessRequired = false;
@@ -471,7 +481,7 @@ export class JariApp {
     this.view = "home";
     const generation = this.generation;
     await this.reload();
-    if (generation === this.generation) await this.loadGoogle();
+    if (generation === this.generation && (this.state?.user?.role === "admin" || userStatus(this.state?.user) === "approved")) await this.loadGoogle();
 
   }
 
@@ -504,6 +514,7 @@ export class JariApp {
     if (screen) screen.scrollTop = 0;
     if (next === "notifications") void this.loadNotifications();
     if (next === "agents") void this.loadAgents();
+    if (next === "members") void this.loadMembers();
   }
 
   back(): boolean {
@@ -522,7 +533,8 @@ export class JariApp {
 
   /** 푸시가 도착했을 때: 다음 확인을 기다리지 않고 지금 상태와 새 알림을 봐요. */
   refreshAlerts(): void {
-    void this.pollStatus(true);
+    if (this.state?.user?.role !== "admin" && userStatus(this.state?.user) !== "approved") this.refreshApproval();
+    else void this.pollStatus(true);
   }
 
   notify(message: string): void {
@@ -532,15 +544,20 @@ export class JariApp {
 
   private async reload(): Promise<void> {
     const generation = this.generation;
+    const seq = ++this.reloadSeq;
     const hadState = this.state !== null;
+    const wasRestricted = this.state?.user?.role !== "admin" && userStatus(this.state?.user) !== "approved";
     this.busy = true;
     this.error = "";
     this.render();
     try {
       const state = await this.api.bootstrap();
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || seq !== this.reloadSeq) return;
       state.capabilities = normalizeCapabilities(state.capabilities);
       this.state = state;
+      const restricted = state.user?.role !== "admin" && userStatus(state.user) !== "approved";
+      if (restricted) this.view = "approval";
+      else if (this.view === "approval") this.view = "home";
       this.connection = "online";
       if (!hadState) {
         this.draft = conditionsToDraft(state.draft);
@@ -549,7 +566,7 @@ export class JariApp {
         this.cancellationTargets = state.draft?.seat_plan?.trains ?? [];
       }
       const interrupted = this.interruptedJourney;
-      if (interrupted && state.user) {
+      if (!restricted && interrupted && state.user) {
         this.interruptedJourney = null;
         if (state.user.id === interrupted.userId) {
           this.draft = interrupted.draft;
@@ -560,13 +577,14 @@ export class JariApp {
           this.view = "journey";
         }
       }
-      await this.options.onBootstrap?.(state);
-      if (generation !== this.generation) return;
+      if (!restricted) await this.options.onBootstrap?.(state);
+      if (generation !== this.generation || seq !== this.reloadSeq) return;
       this.startPolling();
+      if (wasRestricted && !restricted) await this.loadGoogle();
     } catch (error) {
-      if (generation === this.generation) this.handleError(error);
+      if (generation === this.generation && seq === this.reloadSeq) this.handleError(error);
     } finally {
-      if (generation === this.generation) {
+      if (generation === this.generation && seq === this.reloadSeq) {
         this.busy = false;
         this.render();
       }
@@ -575,13 +593,19 @@ export class JariApp {
 
   private startPolling(): void {
     if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
-    this.pollTimer = window.setInterval(() => void this.pollStatus(), 30_000);
-    this.deadlineTimer ??= window.setInterval(() => this.tickDeadlines(), 1_000);
+    const restricted = this.state?.user?.role !== "admin" && userStatus(this.state?.user) !== "approved";
+    this.pollTimer = window.setInterval(() => restricted ? void this.refreshApproval() : void this.pollStatus(), 30_000);
+    if (!restricted) this.deadlineTimer ??= window.setInterval(() => this.tickDeadlines(), 1_000);
   }
 
   setForeground(foreground: boolean): void {
     this.background = !foreground;
     if (foreground) this.resumeConnection();
+  }
+
+  private refreshApproval(): void {
+    if (this.busy || this.sheet || this.background || document.visibilityState === "hidden") return;
+    void this.reload();
   }
 
   /**
@@ -592,7 +616,8 @@ export class JariApp {
     if (this.googleFlow) void this.pollGoogle();
     if (this.background || document.visibilityState === "hidden") return;
     this.pollMisses = 0;
-    void this.pollStatus(true);
+    if (this.state?.user?.role !== "admin" && userStatus(this.state?.user) !== "approved") this.refreshApproval();
+    else void this.pollStatus(true);
   }
 
   private onVisibilityChange(): void {
@@ -608,7 +633,7 @@ export class JariApp {
 
   private async pollStatus(fresh = false): Promise<void> {
     const generation = this.generation;
-    if (!this.state || this.view === "auth") return;
+    if (!this.state || this.view === "auth" || (this.state.user?.role !== "admin" && userStatus(this.state.user) !== "approved")) return;
     // A backgrounded app may have no network at all; a poll from there says nothing about the server.
     if (this.background || document.visibilityState === "hidden") return;
     // The interval does not pile a second poll onto one still out; a resume does, and the older answer is dropped.
@@ -663,11 +688,11 @@ export class JariApp {
     if (preserveJourney) this.syncJourneyDraft();
     // Preserve controls outside the journey model during incidental rerenders.
     // Session reset removes their source DOM, so they cannot cross accounts.
-    const fields = Array.from(this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select"))
+    const fields = Array.from(this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea"))
       .filter((field) => !field.closest("#conditions-form"))
       .map((field) => ({ id: field.id, name: field.name, form: field.form?.id, value: field.value, checked: field instanceof HTMLInputElement && field.checked }));
     const restoreFields = () => {
-      for (const field of this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")) {
+      for (const field of this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea")) {
         const old = fields.find((item) => item.id === field.id && item.name === field.name && item.form === field.form?.id);
         if (!old) continue;
         field.value = old.value;
@@ -679,6 +704,11 @@ export class JariApp {
     document.documentElement.style.colorScheme = this.theme;
     if (this.view === "auth") {
       this.root.innerHTML = this.renderAuth();
+      restoreFields();
+      return;
+    }
+    if (this.state && this.state.user?.role !== "admin" && userStatus(this.state.user) !== "approved") {
+      this.root.innerHTML = `<div class="app-shell approval-shell"><main class="screen screen-approval">${this.renderApproval()}</main>${this.renderSheet()}${this.busy ? '<div class="blocker" role="status"><span class="spinner"></span><b>확인하고 있어요</b></div>' : ""}${this.renderToast()}</div>`;
       restoreFields();
       return;
     }
@@ -724,6 +754,10 @@ export class JariApp {
         return this.renderNotifications();
       case "settings":
         return this.renderSettings();
+      case "members":
+        return this.renderMembers();
+      case "approval":
+        return this.renderApproval();
       case "rail-account":
         return this.renderRailAccount();
       case "agents":
@@ -1686,15 +1720,40 @@ export class JariApp {
       state.notifications?.pushAvailable !== false &&
       state.pushAvailable !== false;
     const notifyAvailable = state.capabilities.notificationSettings;
-    return `<div class="settings-layout"><aside class="settings-profile"><section class="profile-card"><span class="profile-avatar">${escapeHtml((state.user?.username || "나").slice(0, 1))}</span><div><b>${escapeHtml(state.user?.username || "여행자")}</b><small>${state.user?.role === "admin" ? "관리자 계정" : "초대로 가입한 계정"}</small></div></section></aside>
+    return `<div class="settings-layout"><aside class="settings-profile"><section class="profile-card"><span class="profile-avatar">${escapeHtml((state.user?.username || "나").slice(0, 1))}</span><div><b>${escapeHtml(state.user?.username || "여행자")}</b><small>${state.user?.role === "admin" ? "관리자 계정" : "회원 계정"}</small></div></section></aside>
       <div class="settings-groups"><section class="settings-section"><p class="eyebrow">철도 계정</p>${listRow({ view: "rail-account", title: "코레일 계정", hint: state.rail.registered ? "연결됨 · 모든 고속열차 예약 준비 완료" : "연결되지 않음", value: `${state.rail.registered ? "관리" : "연결"} →` })}${listRow({ title: "수서 출발 고속열차", hint: "별도 SRT 계정 없이 코레일 계정으로 이용해요", trailing: badge({ tone: "success", className: "integrated-badge", label: "통합됨" }) })}</section>
       ${state.capabilities.agents ? `<section class="settings-section"><p class="eyebrow">AI 에이전트</p>${listRow({ view: "agents", title: "에이전트 연결", hint: "AI 에이전트가 열차를 찾고 예약하게 해요", value: "관리 →" })}</section>` : ""}
       ${this.googleEnabled && !this.demo ? `<section class="settings-section"><p class="eyebrow">로그인</p>${listRow({ action: this.googleLinked ? "google-unlink" : "google-link", title: this.googleLinked ? "구글 계정 연결됨" : "구글 계정 연결", hint: this.googleLinked ? "연결한 구글 계정으로도 로그인할 수 있어요" : "앱 비밀번호를 확인한 뒤 구글 로그인을 연결해요", value: this.googleLinked ? "연결 해제" : "연결 →" })}${this.renderGooglePending()}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">알림</p>${listRow({ title: "찾기 상황 알림", hint: notifyAvailable ? "찾는 중 진행 상황을 알려드리는 간격" : "현재 서버에서는 알림 간격을 바꿀 수 없어요", trailing: stepper({ small: true, label: "찾기 상황 알림 간격", value: notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가", decrease: "notify-minus", increase: "notify-plus", disabled: !notifyAvailable, atMin: state.notifyMinutes <= NOTIFY_STEPS[0]!, atMax: state.notifyMinutes >= NOTIFY_STEPS[NOTIFY_STEPS.length - 1]! }) })}${listRow({ action: "request-push", disabled: !pushAvailable, title: "휴대폰 알림", hint: pushAvailable ? "Android 알림 권한 열기" : "휴대폰 알림 서비스가 아직 준비되지 않았어요", value: pushAvailable ? "설정" : "이용 불가" })}</section>
-      ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p>${badge({ className: "admin-only-badge", label: "관리자 전용" })}</div><p class="settings-section-copy">회원 가입 권한은 관리자만 발급할 수 있어요.</p>${listRow({ action: "create-invite", disabled: this.inviteLoading, title: "회원 초대 코드", hint: "관리자만 만들 수 있는 일회용 가입 코드예요", trailing: this.inviteLoading ? '<em><span class="inline-spinner" aria-hidden="true"></span><span class="sr-only">만드는 중</span></em>' : undefined, value: "만들기 →" })}${this.invitePreview ? `<div class="invite-card"><p>코드는 이 화면을 닫으면 다시 볼 수 없어요. 가입할 분에게 바로 전달해 주세요. 띄어쓰기나 대소문자는 상관없어요.</p><code>${escapeHtml(this.invitePreview)}</code><div class="invite-actions">${button({ action: "copy-invite", label: "복사" })}${button({ variant: "ghost", action: "dismiss-invite", label: "닫기" })}</div></div>` : ""}</section>` : ""}
+      ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p>${badge({ className: "admin-only-badge", label: "관리자 전용" })}</div><p class="settings-section-copy">가입 신청을 확인하고 사용 여부를 결정해요.</p>${listRow({ view: "members", title: "회원 목록", hint: "승인 대기, 승인, 거절 상태를 확인해요", value: "관리 →" })}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">앱</p>${listRow({ action: "theme", title: "화면 테마", hint: "시스템과 별도로 바꿀 수 있어요", value: this.theme === "dark" ? "다크" : "라이트" })}${listRow({ title: "앱 버전", hint: `서버 ${state.version}`, value: `v${appPackage.version}` })}</section>
       <section class="settings-section policy-links"><p class="eyebrow">개인정보</p>${POLICY_LINKS.map(policyRow).join("")}</section>
       ${this.demo ? "" : `<section class="settings-section"><p class="eyebrow">계정</p>${listRow({ action: "delete-account", title: "회원 탈퇴", hint: "앱 계정과 저장된 정보를 모두 지워요", value: "탈퇴 →" })}</section>`}${this.trial ? button({ variant: "ghost-danger", action: "trial-exit", label: "체험 끝내기" }) : button({ variant: "ghost-danger", action: "app-logout", label: "앱에서 로그아웃" })}</div></div>`;
+  }
+
+  private renderApproval(): string {
+    const state = this.state!;
+    const rejected = userStatus(state.user) === "rejected";
+    return `<div class="approval-view"><section class="card approval-card"><span class="approval-mark" aria-hidden="true">${rejected ? "!" : "…"}</span><p class="eyebrow">자리났다 회원</p><h1>${rejected ? "사용 신청이 승인되지 않았어요" : "관리자 승인을 기다리고 있어요"}</h1><p>${rejected ? "관리자가 신청을 다시 승인하면 같은 계정으로 이용할 수 있어요." : "승인되면 같은 로그인 상태에서 바로 열차를 찾을 수 있어요."}</p><dl><div><dt>신청자</dt><dd>${escapeHtml(state.user?.username || "-")}</dd></div></dl>${this.renderError()}${button({ action: "refresh-approval", label: "승인 상태 새로고침", trailing: "↻" })}<div class="approval-account-actions">${button({ variant: "ghost-danger", action: "delete-account", label: "회원 탈퇴" })}${button({ variant: "text", action: "app-logout", label: "앱에서 로그아웃" })}</div></section></div>`;
+  }
+
+  private renderMembers(): string {
+    const list = this.memberUsers === null
+      ? emptyState({ title: this.membersLoadFailed ? "회원 목록을 불러오지 못했어요" : "회원 목록을 불러오고 있어요", text: this.membersLoadFailed ? "서버 연결을 확인하고 다시 시도해 주세요." : "잠시만 기다려 주세요.", action: this.membersLoadFailed ? button({ action: "reload-members", label: "다시 시도" }) : undefined })
+      : this.memberUsers.length
+        ? `<div class="member-list">${this.memberUsers.map((user) => this.renderMember(user)).join("")}</div>`
+        : emptyState({ title: "표시할 회원이 없어요", text: "새 가입 신청이 생기면 여기에 보여요." });
+    return `${this.renderSubhead("관리자 전용", "회원 관리")}${this.renderError()}${list}`;
+  }
+
+  private renderMember(user: AppUser): string {
+    const status = userStatus(user);
+    const labels: Record<AppUserStatus, string> = { pending: "승인 대기", approved: "승인됨", rejected: "거절됨" };
+    const busy = this.memberApprovalBusy === user.id;
+    const actions = status === "approved"
+      ? ""
+      : `<div class="member-actions">${button({ action: "approve-member", label: busy ? "처리 중" : "승인", disabled: busy })}${status === "pending" ? button({ variant: "ghost-danger", action: "reject-member", label: "거절", disabled: busy }) : ""}</div>`;
+    return `<article class="card member-card" data-member-id="${escapeHtml(user.id)}"><div class="member-head"><div><b>${escapeHtml(user.username)}</b><small>${escapeHtml(user.createdAt ? formatStamp(user.createdAt) : "신청 시각 없음")}</small></div>${badge({ tone: status === "approved" ? "success" : status === "rejected" ? "warning" : "accent", label: labels[status] })}</div>${user.applicationNote ? `<p class="member-note">${escapeHtml(user.applicationNote)}</p>` : '<p class="member-note muted">신청 메모 없음</p>'}${actions}</article>`;
   }
 
   private renderRailAccount(): string {
@@ -1753,30 +1812,30 @@ ${agentHost(agent)}`;
       : admin
         ? "관리자\n로그인"
         : register
-          ? "초대 코드로\n시작해요."
-          : "초대 회원\n로그인";
+          ? "가입을\n신청해요."
+          : "회원\n로그인";
     const copy = choosing
-      ? "관리자는 바로 로그인할 수 있고, 초대 회원은 받은 코드로 계정을 만들 수 있어요."
+      ? "관리자는 관리 계정으로, 회원은 가입한 계정으로 로그인해요."
       : admin
         ? "관리자 아이디와 비밀번호를 입력하세요."
         : register
-          ? "받은 코드와 사용할 아이디, 비밀번호를 입력하세요."
+          ? "아이디와 비밀번호를 만들면 관리자 승인 후 이용할 수 있어요."
           : "가입할 때 만든 아이디와 비밀번호를 입력하세요.";
     return `<div class="auth-shell ${this.options.demoMode ? "with-demo" : ""}">
       ${this.options.demoMode ? '<aside class="demo-banner" data-demo-banner aria-label="데모 상태"><b>데모 모드</b><span>실제 조회·예약 없음</span></aside>' : ""}
       <div class="auth-art"><span class="orbit one"></span><span class="orbit two"></span><i>자</i></div>
       <section class="auth-card"><p class="eyebrow">내 여행의 빈자리</p><h1>${title}</h1><p>${copy}</p>
         ${this.authNotice ? notice({ tone: "calm", className: "auth-notice", text: this.authNotice }) : ""}
-        ${choosing ? `<div class="gate-list"><button class="gate-card" data-auth-gate="admin" type="button"><b>관리자</b><small>관리자 계정으로 로그인해요</small></button><button class="gate-card" data-auth-gate="guest" type="button"><b>초대 회원</b><small>로그인하거나 초대 코드로 가입해요</small></button><button class="gate-card trial" data-action="trial-enter" type="button"><b>체험하기</b><small>샘플 데이터로 모든 화면을 둘러봐요. 실제 예약되지 않아요</small></button></div>` : ""}
+        ${choosing ? `<div class="gate-list"><button class="gate-card" data-auth-gate="admin" type="button"><b>관리자</b><small>관리자 계정으로 로그인해요</small></button><button class="gate-card" data-auth-gate="guest" type="button"><b>회원</b><small>로그인하거나 가입을 신청해요</small></button><button class="gate-card trial" data-action="trial-enter" type="button"><b>체험하기</b><small>샘플 데이터로 모든 화면을 둘러봐요. 실제 예약되지 않아요</small></button></div>` : ""}
         ${this.googleEnabled && !register ? `${button({ variant: "secondary", action: "google-login", label: "구글로 로그인", disabled: this.googleFlow !== null })}<p class="muted google-hint">설정에서 구글 계정을 연결한 뒤 이용할 수 있어요.</p>${this.renderGooglePending()}${choosing ? this.renderError() : ""}` : ""}
         ${admin ? `<form id="auth-form" class="form-stack"><label class="field"><span>관리자 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label><label class="field"><span>관리자 비밀번호</span><input name="password" type="password" minlength="8" maxlength="128" autocomplete="current-password" required></label>${this.renderError()}${button({ type: "submit", label: "관리자 로그인", trailing: "→" })}</form>${button({ variant: "text", label: "로그인 방법 바꾸기", attrs: { "data-auth-gate": "choose" } })}` : ""}
         ${this.authGate === "guest" ? `<div class="segmented"><button data-auth-mode="login" class="${register ? "" : "active"}" type="button">로그인</button><button data-auth-mode="register" class="${register ? "active" : ""}" type="button">처음 가입</button></div>
         <form id="auth-form" class="form-stack">
           <label class="field"><span>앱 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label>
           <label class="field"><span>앱 비밀번호</span><input name="password" type="password" minlength="8" maxlength="128" autocomplete="${register ? "new-password" : "current-password"}" required></label>
-          ${register ? '<label class="field"><span>비밀번호 확인</span><input name="password_confirm" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label><label class="field"><span>초대 코드</span><input name="invite" maxlength="128" placeholder="예: apple river cloud" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" required></label>' : ""}
+          ${register ? '<label class="field"><span>비밀번호 확인</span><input name="password_confirm" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label><label class="field"><span>신청 메모 <small>선택</small></span><textarea name="applicationNote" maxlength="200" rows="3" placeholder="관리자가 알아볼 수 있는 간단한 소개"></textarea></label><p class="muted approval-signup-hint">가입 후 관리자가 승인하면 바로 이용할 수 있어요.</p>' : ""}
           ${this.renderError()}
-          ${button({ type: "submit", label: register ? "가입하고 시작하기" : "로그인", trailing: "→" })}
+          ${button({ type: "submit", label: register ? "가입 신청하기" : "로그인", trailing: "→" })}
         </form>
         ${button({ variant: "text", label: "로그인 방법 바꾸기", attrs: { "data-auth-gate": "choose" } })}` : ""}
         ${this.options.demoMode ? button({ variant: "text", className: "demo-enter", action: "demo-enter", label: "샘플 화면 바로 보기" }) : ""}
@@ -2737,17 +2796,17 @@ ${agentHost(agent)}`;
       case "request-push":
         void this.options.onRequestPush?.();
         break;
-      case "create-invite":
-        void this.createInvite();
+      case "refresh-approval":
+        if (!this.busy) void this.reload();
         break;
-      case "copy-invite":
-        if (this.invitePreview) {
-          this.copyText(this.invitePreview, "초대 코드를 복사했어요.", "이 기기에서는 복사할 수 없어요. 코드를 직접 전달해 주세요.");
-        }
+      case "reload-members":
+        void this.loadMembers();
         break;
-      case "dismiss-invite":
-        this.invitePreview = "";
-        this.render();
+      case "approve-member":
+      case "reject-member": {
+        const id = button.closest<HTMLElement>("[data-member-id]")?.dataset.memberId;
+        if (id) void this.setMemberApproval(id, action === "approve-member" ? "approved" : "rejected");
+      }
         break;
       case "rail-logout":
         void this.railLogout();
@@ -3002,7 +3061,7 @@ ${agentHost(agent)}`;
     const data = new FormData(form);
     const username = String(data.get("username") || "").trim();
     const password = String(data.get("password") || "");
-    const invite = String(data.get("invite") || "").trim();
+    const applicationNote = String(data.get("applicationNote") || "").trim();
     const register = this.authMode === "register" && this.authGate === "guest";
     // 확인 칸은 앱에서만 비교하고 서버로 보내지 않아요.
     if (register && password !== String(data.get("password_confirm") || "")) {
@@ -3013,7 +3072,7 @@ ${agentHost(agent)}`;
     await this.run(async (isCurrent) => {
       const result =
         register
-          ? await this.api.registerApp({ username, password, invite })
+          ? await this.api.registerApp({ username, password, ...(applicationNote ? { applicationNote } : {}) })
           : await this.api.login({
               username,
               password,
@@ -3075,22 +3134,45 @@ ${agentHost(agent)}`;
     }
   }
 
-  private async createInvite(): Promise<void> {
-    if (this.inviteLoading) return;
+  private async loadMembers(): Promise<void> {
+    if (this.state?.user?.role !== "admin" || this.memberApprovalBusy) return;
     const generation = this.generation;
-    this.inviteLoading = true;
+    const seq = ++this.membersLoadSeq;
+    this.membersLoadFailed = false;
+    this.error = "";
     this.render();
     try {
-      const result = await this.api.createInvite({ ttlHours: 72 });
+      const result = await this.api.users();
+      if (generation !== this.generation || seq !== this.membersLoadSeq) return;
+      this.memberUsers = result.users;
+    } catch (error) {
+      if (generation !== this.generation || seq !== this.membersLoadSeq) return;
+      this.handleError(error);
+      this.membersLoadFailed = true;
+    }
+    if (generation === this.generation && seq === this.membersLoadSeq) this.render();
+  }
+
+  private async setMemberApproval(id: string, status: "approved" | "rejected"): Promise<void> {
+    if (this.memberApprovalBusy || !this.memberUsers) return;
+    const generation = this.generation;
+    this.membersLoadSeq += 1;
+    this.memberApprovalBusy = id;
+    this.error = "";
+    this.render();
+    try {
+      const result = await this.api.setUserApproval(id, status);
       if (generation !== this.generation) return;
-      this.invitePreview = result.invite;
-      this.showToast("초대 코드를 만들었어요. 이 화면에서만 확인할 수 있어요.");
+      this.memberUsers = this.memberUsers
+        ? this.memberUsers.map((user) => user.id === id ? result.user : user)
+        : [result.user];
+      this.showToast(status === "approved" ? "회원을 승인했어요." : "가입 신청을 거절했어요.");
     } catch (error) {
       if (generation !== this.generation) return;
       this.handleError(error);
     } finally {
       if (generation === this.generation) {
-        this.inviteLoading = false;
+        this.memberApprovalBusy = "";
         this.render();
       }
     }

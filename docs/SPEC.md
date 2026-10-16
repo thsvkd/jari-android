@@ -1,6 +1,6 @@
 # 자리났다 — 기술 명세 (SPEC)
 
-문서 기준일: 2026-10-02, 4.13.3(`fix/play-minsdk-24`). 제품 의도는 [PRD.md](PRD.md). 2026-09-14의 [좌석 선택·취소표 대기 설계](superpowers/specs/2026-09-14-seat-waitlist-flow-design.md)는 이 문서가 대체하되, 좌석 계획 도메인(연속 좌석·떨어져 앉기·결제 기한)은 그 문서의 "취소표 대기 동작" 절이 여전히 유효하다.
+문서 기준일: 2026-10-17. 제품 의도는 [PRD.md](PRD.md). 2026-09-14의 [좌석 선택·취소표 대기 설계](superpowers/specs/2026-09-14-seat-waitlist-flow-design.md)는 이 문서가 대체하되, 좌석 계획 도메인(연속 좌석·떨어져 앉기·결제 기한)은 그 문서의 "취소표 대기 동작" 절이 여전히 유효하다.
 
 ## 1. 구성
 
@@ -10,7 +10,7 @@
    ▼
 [API: Flask + waitress, python -m korail_bot.mobile serve]  ── 코레일 모바일 API ──▶ [코레일]
    ├─ Redis: 세션·조건·즐겨찾기·실행 기록·하트비트 (키 접두 jari:mobile:v1:)
-   ├─ SQLite: 초대·아이덴티티·레이트리밋 버킷
+   ├─ SQLite: 아이덴티티·회원 승인·레이트리밋 버킷
    └─ 워커: python -m korail_bot.mobile.worker (검색 1건 = 자식 프로세스 1개, API 컨테이너 안)
 ```
 
@@ -42,7 +42,7 @@
 ## 2. 앱 구조
 
 - `src/main.ts` 부트스트랩: 데모 모드(`?demo=1` 또는 `VITE_DEMO_MODE`)면 `createDemoApi()`, 아니면 `createHttpApi()`. 세션 토큰은 Android Keystore 기반 저장소.
-- `src/app.ts` `JariApp`: 뷰 상태기(home/journey/trains/confirm/activity/favourites/notifications/settings/rail-account/auth), 문자열 템플릿 `render()`, 30초 상태 폴링(`pollStatus`), 시트(`openSheet`/`confirmSheet`), 좌석 시트(`seatDialog`).
+- `src/app.ts` `JariApp`: 뷰 상태기(home/journey/trains/confirm/activity/favourites/notifications/settings/rail-account/auth/approval), 문자열 템플릿 `render()`, 30초 상태 폴링(`pollStatus`), 시트(`openSheet`/`confirmSheet`), 좌석 시트(`seatDialog`).
 - `src/model.ts`: `deriveRadarView`(상태 판정), 조건↔초안 변환, 좌석 필터.
 - `src/demo.ts`: 전 기능 목업 API(열차 3편, 좌석표, 즐겨찾기, 진행 중 검색에 seatPlan 포함).
 - **체험하기**(Play 심사처럼 코레일 계정 없이 모든 화면을 봐야 할 때): 실서버 앱의 로그인 선택 화면에 세 번째 카드. 누르면 `JariApp`이 같은 프로세스 안에서 `createDemoApi()`로 바꿔 쓴다(`this.trial`, `api` 게터가 `trial ?? liveApi`). 주소 쿼리나 재시작이 필요 없고 서버·Keystore 토큰·`onToken`을 건드리지 않는다. 최근 구간은 기기 저장소 대신 메모리(`trialRoutes`)에만 쌓는다. 화면 위에 "체험 중 · 샘플 데이터 · 실제 예약되지 않아요" 띠(`[data-trial-banner]`)가 계속 보이고, 설정의 맨 아래 버튼이 "체험 끝내기"(로그아웃 대신)이며 회원 탈퇴 줄은 숨긴다. 세션 정리(`resetSession`)가 체험을 함께 끝내므로 로그인 화면으로 돌아가는 모든 길에서 샘플 상태가 실사용과 섞이지 않는다. 주소의 `?demo=1` 데모 빌드는 그대로다.
@@ -52,8 +52,10 @@
 
 | 경로 | 메서드 | 용도 |
 |---|---|---|
-| `auth/register`, `auth/login`, `auth/logout`, `invites` | POST | 초대 기반 계정 |
-| `bootstrap` | POST | 전체 상태(capabilities, running, scheduled, pending, favourites, draft, notifyMinutes, paymentUrl) |
+| `auth/register`, `auth/login`, `auth/logout` | POST | 가입(선택 `applicationNote`, 최대 200자)·로그인·로그아웃 |
+| `bootstrap` | POST | 승인 회원은 전체 상태(capabilities, running, scheduled, pending, favourites, draft, notifyMinutes, paymentUrl). 대기·거절 회원은 빈 안전 상태와 사용자 승인 상태만 |
+| `admin/users` | GET | 관리자 회원 목록 `{users: AppUser[]}` |
+| `admin/users/<id>/approval` | POST | 관리자 승인 결정 `{status:"approved"|"rejected"}` → `{user: AppUser}` |
 | `status` | GET | running/scheduled/pending만 (폴링용) |
 | `register` | POST | 코레일 계정 연결 |
 | `trains` | POST | 열차 목록 조회 → `trainKey`(30분 TTL 불투명 키) |
@@ -68,6 +70,10 @@
 | `agents` GET, `agents/<id>` POST·DELETE | | 연결 목록 `{agents:[{id,name,host,local,allowBooking,createdAt,lastUsedAt}]}`, 예약 허용 바꾸기 `{allowBooking}`, 연결 끊기(그 연결의 토큰 모두 폐기) |
 | `mcp` | POST | 에이전트 전용 MCP 엔드포인트(§12). 앱 세션 토큰은 401, 에이전트 토큰은 그 밖의 경로에서 401 |
 | `diagnostics` | POST | 앱이 응답을 받지 못한 요청 기록(`misses`, 최대 50건, 사용자당 60초 6회)을 올린다. 서버는 한 건에 한 줄 `Client connection miss user=… at= method= path= reason= online= visible= elapsedMs=`로 로그에 남긴다 |
+
+**회원 승인 계약**: 사용자 `status`는 `pending | approved | rejected`, 공개 사용자에는 `applicationNote`와 `createdAt`도 포함한다. 기존 SQLite 회원은 마이그레이션에서 `approved`로 채우고 생성 시각은 추측하지 않아 `null`로 둔다. 새 가입은 `pending`, 관리자는 항상 `approved`다. 대기·거절 회원의 세션은 유효하지만 안전한 `bootstrap`·로그아웃·비밀번호를 다시 확인하는 `account/delete` 외 인증 API는 승인 상태를 검사해 거절한다. 이들의 `bootstrap`은 철도 저장소에 접근하지 않는다. OAuth 인가와 MCP 토큰 사용도 같은 승인 검사를 통과해야 한다.
+
+관리자 승인 API는 관리자 자신과 다른 관리자 계정의 상태 변경을 거절한다. 대기·거절 회원은 승인할 수 있고 같은 결정을 재시도할 수 있다. 승인된 회원을 `rejected`로 바꾸는 요청은 409다. 실행 중인 자리 찾기를 중지시키는 회원 정지 기능은 범위 밖이다. 관리자 화면은 목록을 읽지 못했을 때 빈 목록으로 보이지 않게 오류와 재시도를 제공하고, 아이디·신청 메모를 escape한다.
 
 ### 3.1 진행 중 검색(`running`)
 ```
@@ -119,7 +125,7 @@ seatPlanSummary: "015 일반실 3호차 5A·5B · 019 좌석 무관" | ""
 
 - `pollStatus` 30초 주기. 서버 오류(5xx)는 `unknown`(카드 "현재 상태를 확인할 수 없어요"), 네트워크 실패는 `noteConnectionMiss`: 첫 실패 5초 뒤 재확인, 연속 2회 또는 `navigator.onLine === false`면 `offline` 배너. 성공 즉시 해제.
 - 백그라운드(Capacitor `App` pause, 또는 `visibilityState === "hidden"`)에서는 폴링하지 않는다. Android가 백그라운드 앱의 네트워크를 끊어도 그것을 서버 장애로 판정하지 않기 위해서다. 앱 복귀(`resume`)·`visibilitychange`·`online` 때 바로 다시 묻는다. 이미 나간 폴링이 있으면 겹쳐 묻지 않는다.
-- 기한은 상태 폴링에만 있다(20초, 본문 읽기까지). 넘기면 `timeout`으로, `offline`이 아니라 `unknown`("현재 상태를 확인할 수 없어요")이 된다: `/status`도 사용자별 락을 거쳐, 같은 사용자의 좌석표·예약이 코레일을 기다리는 동안 서버에 닿은 채 기다릴 수 있다. 코레일로 가는 요청에는 기한이 없다(끊으면 성공한 예약을 실패로 보일 수 있다; Cloudflare의 100초가 상한).
+- 상태 폴링과 `bootstrap` 읽기는 본문 읽기까지 20초 제한이 있다. 넘기면 `timeout`으로, 상태 폴링은 `offline`이 아니라 `unknown`("현재 상태를 확인할 수 없어요")이 되고, 승인 상태 새로고침은 오류를 알린 뒤 재시도·로그아웃을 허용한다. `/status`도 사용자별 락을 거쳐, 같은 사용자의 좌석표·예약이 코레일을 기다리는 동안 서버에 닿은 채 기다릴 수 있다. 코레일로 가는 요청에는 기한이 없다(끊으면 성공한 예약을 실패로 보일 수 있다; Cloudflare의 100초가 상한).
 - 복귀·`online`은 나가 있는 폴링을 기다리지 않고 새로 묻고, 앞선 폴링의 답은 버린다(`pollSeq`). 30초 주기는 나가 있는 폴링 위에 겹쳐 묻지 않는다. 페이지가 보이게 되면(`visibilitychange`) 네이티브 resume을 놓쳤더라도 앞에 있는 것으로 본다. pause/resume 리스너는 `watchForeground`로 페이지 수명 동안 한 번만 건다.
 - HTTP 응답을 받지 못한 요청(네트워크 실패·기한 초과. CORS 헤더 없는 Cloudflare 오류 페이지도 여기로 온다)은 `jari.connectionMisses`(localStorage, 최근 50건)에 시각·경로(열차 키·즐겨찾기 id는 `:key`/`:id`)·원인(`network`/`timeout`)·실패 때의 `navigator.onLine`·보낼 때의 화면 표시 여부·걸린 시간을 남긴다. `timeout`은 서버에 닿았을 수 있다(위 락). 다음 인증 요청이 성공하면 `diagnostics`로 올리고 지운다(400이면 버리고, 그 밖의 실패는 다음 성공 때 다시 올린다). 이 기록이 휴대폰에서 Cloudflare 사이 구간의 유일한 증거다: 그 구간의 실패는 Caddy·API 로그에 남지 않는다.
 - 운영 점검: `docker logs jari-api-1 2>&1 | grep "Client connection miss"`로 앱이 본 실패를, `docker ps`의 `(healthy)`로 API 상태를 본다. 외부 감시는 `monitor/`의 Cloudflare Worker(`jari-monitor`)다: cron 1분마다 `https://jari.thsvkd.dev/api/mobile/health`를 앱과 같은 길(Cloudflare → 터널 → Caddy → API)로 부르고, 2분 연속 실패하면 장애, 풀리면 장애 시간과 함께 복구를 텔레그램으로 알린다. 원인은 Cloudflare 상태 코드로 가른다(530 터널, 502·504 Caddy→API, 503 API 자체 판정, 시간 초과). 상태는 KV에 바뀔 때만 쓴다(무료 한도 하루 1,000회). 배포는 `monitor/deploy.sh`(Doppler `CLOUDFLARE_API_THSVKD`, `JARI_MONITOR_TELEGRAM_BOT_TOKEN`, `JARI_MONITOR_TELEGRAM_CHAT_ID`), 시험 알림은 `monitor/deploy.sh --test-message`. 지금 상태는 Worker 주소(`https://jari-monitor.<서브도메인>.workers.dev/`)가 JSON으로 보여 준다.
@@ -146,7 +152,7 @@ seatPlanSummary: "015 일반실 3호차 5A·5B · 019 좌석 무관" | ""
 ## 10. 회원 탈퇴와 공개 페이지
 
 **탈퇴**(`POST /api/mobile/account/delete`, 앱: 설정 → 계정 → 회원 탈퇴 → 위험 확인 시트에서 앱 비밀번호): 순서는 다시 시도할 수 있게 철도 쪽 → 알림 → 아이디 순이다(`api.erase_account`). 아이디를 지우기 전까지는 다시 로그인해 재시도할 수 있다.
-1. 마지막 관리자면 409(`identity.delete_user`가 트랜잭션 안에서 다시 확인). 초대 코드는 관리자만 만들므로 관리자가 없어지면 아무도 들일 수 없다. 운영자가 `python -m korail_bot.mobile admin`으로 다른 관리자를 만든 뒤 탈퇴한다.
+1. 마지막 관리자면 409(`identity.delete_user`가 트랜잭션 안에서 다시 확인). 관리자가 없어지면 가입 신청을 승인할 수 없다. 운영자가 `python -m korail_bot.mobile admin`으로 다른 관리자를 만든 뒤 탈퇴한다.
 2. `MobileGateway.delete_account`(사용자별 락 안): 결제 대기 예약이 있으면 409(돌려주는 것은 사용자가 보아야 할 코레일 요청이고, 결제 감시가 지울 로그인으로 계속 코레일에 묻게 된다). 읽지 못하는 실행 기록(키는 있는데 PID를 모른다)이면 무엇이든 바꾸기 전에 409(지우면 그 워커가 없는 계정으로 계속 찾고 예약한다. 예약해 둔 찾기도 그대로 둔다). 그다음 그만 찾기와 같은 `cancel_search`로 워커를 PID로 멈추고 예약해 둔 찾기를 지운다. 그 뒤에도 키가 남으면 409. 워커는 락 없이 도는 따로의 프로세스라 처음 확인과 종료 사이에 좌석을 잡았을 수 있으므로, 결제 대기 예약이 생겼으면 "결제를 기다리는 예약"으로, 결제 기록 없이 그 워커 PID의 `search_held_seat` 표시만 있으면(좌석을 잡고 기록하기 전에 멈춤) "코레일 앱에서 예약 내역을 확인"하라는 문구로 409(찾기는 이미 멈췄고 계정·알림·기록은 남는다). 그 뒤 메모리의 코레일 세션을 버리고 `MobileStorage.delete_user_data`가 `*:{id}`·`*:{id}:*` 키를 모두 지운다(세션·조건·코레일 로그인·재개용 로그인·실행/멈춘/예약한 기록·즐겨찾기·알림 간격·시간대·결제 기록·하트비트·표시). 남기는 것은 `search_ended:{id}` 하나: 개인정보가 없고 7일 뒤 만료되며, 배포 확인이 사라진 검색을 "잃음"이 아니라 "사용자가 멈춤"으로 읽는 근거다.
 3. `Notifications.forget`: 알림함·기기 토큰·보내지 못한 알림.
 4. `identity.delete_user`: 세션·아이디, 그 계정의 레이트리밋 버킷(`api`·`rail`·`diag`·`account-delete`·`auth-user`). 에이전트 연결·토큰·아직 교환하지 않은 권한 코드는 외래 키 `ON DELETE CASCADE`로 함께 지워진다.
@@ -156,7 +162,7 @@ seatPlanSummary: "015 일반실 3호차 5A·5B · 019 좌석 무관" | ""
 - 앱은 탈퇴에 성공하면 이 폰의 연결 실패 기록(`jari.connectionMisses`)도 지운다(다음 사람의 이름으로 올라가지 않게).
 - 메일로 온 탈퇴 요청: API 옆에서 `docker compose exec -T api python -m korail_bot.mobile delete-account --username <앱 아이디>`. 같은 `erase_account`를 쓰고, 워커는 배포 확인처럼 프로세스 표로 찾아 멈춘다(워커가 API의 자식이라 멈춘 워커 하나당 약 6초 기다린다). 이 프로세스는 돌고 있는 API와 락을 나누지 않으므로 먼저 그 계정의 세션을 모두 끊어(새 요청은 401) 새 일이 시작되지 않게 하고, 계정을 지운 뒤 한 번 더 그만 찾기·`delete_user_data`·알림 지우기를 돌려 이미 들어와 있던 요청이 남긴 것(시작한 찾기, 폴링이 다시 쓴 시간대)을 치운다. 409로 거절되면 계정은 남고 로그아웃만 된 상태다. 돌고 있는 API의 메모리에 남은 코레일 세션(최대 30분)과 좌석표 열차 키(30분)는 저절로 사라진다.
 
-**공개 페이지**: `GET /privacy`(개인정보처리방침), `GET /delete-account`(Play 데이터 보안 양식의 계정 삭제 URL이자 데이터 삭제 URL). 두 페이지 모두 앱 이름 "자리났다"와 개발자 "SonPang"을 머리에 보이고, 앱 안 탈퇴(비밀번호 재입력)·앱 없이 메일로 요청(앱 아이디, 초대할 때의 연락처로 본인 확인, 30일 안에 처리)·지우는 정보·남는 정보와 기간(끝난 검색 표시 7일, 서버 로그 10MB×3 돌려 쓰기와 업데이트 때 삭제, 프록시·Cloudflare 접속 기록, DB 파일에서 덮어써지기까지의 지연, 사용자 데이터 별도 백업 없음, 코레일의 기록)·일부만 지우기(코레일 연결 해제, 즐겨찾기 삭제, 그만 찾기, 알림 끄기, 로그아웃)를 적는다. 개인정보처리방침의 표는 Play에 신고한 데이터 유형(사용자 ID·전화번호·기타 개인정보·구매 내역·앱 내 검색 기록·진단·기기 ID) 순서를 따른다. `/api/mobile` 밖이라 Caddy가 같은 호스트 전체를 넘기는 운영에서 `https://jari.thsvkd.dev/privacy`로 열린다. 세션이 필요 없고, Origin 검사를 건너뛰어 다른 사이트에서 연 링크도 열리며(CORS 헤더는 주지 않는다), `text/html; charset=utf-8`·`Cache-Control: public, max-age=3600`·`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`. 내용은 `mobile/pages.py`에 있고 저장·전송하는 것이 바뀌면 함께 고친다. 연락처는 `MOBILE_PRIVACY_CONTACT`(compose.yaml에 운영 주소), 없으면 앱의 설정 → 회원 탈퇴와 초대한 운영자를 안내한다.
+**공개 페이지**: `GET /privacy`(개인정보처리방침), `GET /delete-account`(Play 데이터 보안 양식의 계정 삭제 URL이자 데이터 삭제 URL). 두 페이지 모두 앱 이름 "자리났다"와 개발자 "SonPang"을 머리에 보이고, 앱 안 탈퇴(비밀번호 재입력)·앱 없이 메일로 요청(앱 아이디, 운영자에게 제공한 연락처로 본인 확인, 30일 안에 처리)·지우는 정보·남는 정보와 기간(끝난 검색 표시 7일, 서버 로그 10MB×3 돌려 쓰기와 업데이트 때 삭제, 프록시·Cloudflare 접속 기록, DB 파일에서 덮어써지기까지의 지연, 사용자 데이터 별도 백업 없음, 코레일의 기록)·일부만 지우기(코레일 연결 해제, 즐겨찾기 삭제, 그만 찾기, 알림 끄기, 로그아웃)를 적는다. 개인정보처리방침의 표는 Play에 신고한 데이터 유형(사용자 ID·전화번호·기타 개인정보·구매 내역·앱 내 검색 기록·진단·기기 ID) 순서를 따른다. `/api/mobile` 밖이라 Caddy가 같은 호스트 전체를 넘기는 운영에서 `https://jari.thsvkd.dev/privacy`로 열린다. 세션이 필요 없고, Origin 검사를 건너뛰어 다른 사이트에서 연 링크도 열리며(CORS 헤더는 주지 않는다), `text/html; charset=utf-8`·`Cache-Control: public, max-age=3600`·`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`. 내용은 `mobile/pages.py`에 있고 저장·전송하는 것이 바뀌면 함께 고친다. 연락처는 `MOBILE_PRIVACY_CONTACT`(compose.yaml에 운영 주소), 없으면 앱의 설정 → 회원 탈퇴와 운영자 문의를 안내한다.
 
 ## 11. Android 빌드·배포와 휴대폰 알림
 
@@ -197,7 +203,7 @@ seatPlanSummary: "015 일반실 3호차 5A·5B · 019 좌석 무관" | ""
 
 ## 구글 로그인과 입력 초안
 
-구글 로그인은 기존 초대 계정에 설정 화면에서 앱 비밀번호로 본인 확인 후 연결한다. 신규 가입·회원 탈퇴에는 기존 앱 계정 정책을 적용하며 이메일로 계정을 자동 병합하지 않는다. 제공자 `sub`만 계정 연결 키로 쓴다. 서버의 웹 OAuth 클라이언트가 인증 코드를 교환하고 ID 토큰의 RS256 서명·발급자·대상 클라이언트·만료·nonce를 검증한다. 앱은 외부 브라우저에서 인증한다. 앱에만 표시되는 확인 코드를 브라우저에서 입력하고 계정·요청 기기의 로그인을 명시적으로 허용해야 결과가 완성된다. 브라우저 확인 폼에는 그 브라우저만 가진 일회용 쿠키·폼 증명도 필요하며, 앱은 별도의 5분 유효 증명으로 결과를 POST 조회한다. 취소는 요청 증명을 확인해 진행 중 결과를 무효화하며, Google 연결 해제는 현재 본인 확인 세션을 제외한 다른 세션도 해제한다. 앱 세션 토큰은 URL이나 브라우저 저장소에 넣지 않으며 Android에서는 기존 Keystore 저장소에 둔다.
+구글 로그인은 승인된 기존 앱 계정에 설정 화면에서 앱 비밀번호로 본인 확인 후 연결한다. Google만으로 신규 가입하거나 대기 계정을 승인하지 않으며 이메일로 계정을 자동 병합하지 않는다. 제공자 `sub`만 계정 연결 키로 쓴다. 서버의 웹 OAuth 클라이언트가 인증 코드를 교환하고 ID 토큰의 RS256 서명·발급자·대상 클라이언트·만료·nonce를 검증한다. 앱은 외부 브라우저에서 인증한다. 앱에만 표시되는 확인 코드를 브라우저에서 입력하고 계정·요청 기기의 로그인을 명시적으로 허용해야 결과가 완성된다. 브라우저 확인 폼에는 그 브라우저만 가진 일회용 쿠키·폼 증명도 필요하며, 앱은 별도의 5분 유효 증명으로 결과를 POST 조회한다. 취소는 요청 증명을 확인해 진행 중 결과를 무효화하며, Google 연결 해제는 현재 본인 확인 세션을 제외한 다른 세션도 해제한다. 앱 세션 토큰은 URL이나 브라우저 저장소에 넣지 않으며 Android에서는 기존 Keystore 저장소에 둔다.
 
 미제출 여정은 홈·코레일 계정 연결 화면을 다녀와도 이어서 편집한다. 앱 인증 만료 시 입력 초안만 임시 보관하며 같은 계정으로 다시 로그인했을 때 복원한다. 명시적 로그아웃·다른 계정 로그인·체험 전환은 초안을 초기화한다. 선택 열차와 좌석표 키는 다시 조회한다.
 
