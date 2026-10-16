@@ -118,17 +118,19 @@ describe("연결 화면의 주소", () => {
     await vi.waitFor(() => expect(root.textContent).toContain(mcpUrl));
   });
 
-  it("코드 입력 없이 브라우저 로그인으로 연결한다고 안내해요", async () => {
+  it("연결 방법은 하네스별 명령과 복사 버튼만 보여요", async () => {
     const root = document.createElement("div");
     document.body.append(root);
     const app = new JariApp(root, createDemoApi(), { demoMode: false });
     mounted.push(app);
     await app.start(true);
     app.navigate("agents" as never);
-    await vi.waitFor(() => expect(root.textContent).toContain("브라우저에서 자리났다 계정으로 로그인해 허용해요"));
-    expect(root.textContent).toContain("새 연결은 조회만 할 수 있고, 예약은 아래 목록에서 켜요.");
-    expect(root.querySelector("form")).toBeNull();
-    expect(root.textContent).not.toContain("코드");
+    await vi.waitFor(() => expect(root.querySelectorAll("[data-agent-harness]")).toHaveLength(2));
+    expect(root.querySelector("[data-agent-harness='claude']")?.textContent).toContain("claude mcp add -s user --transport http jari");
+    expect(root.querySelector("[data-agent-harness='codex']")?.textContent).toContain("codex mcp login jari");
+    expect(root.querySelector("[data-action='copy-agent-url']")).toBeNull();
+    expect(root.textContent).not.toContain("설정 → 커넥터");
+    expect(root.querySelector(".agent-note")).toBeNull();
   });
 
   it("앱으로 돌아오면 연결 목록을 다시 읽어요", async () => {

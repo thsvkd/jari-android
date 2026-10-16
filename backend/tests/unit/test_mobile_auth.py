@@ -10,6 +10,23 @@ from korail_bot.mobile.identity import AuthError, IdentityStore, digest
 from korail_bot.mobile.invite_words import WORDS
 
 
+@pytest.mark.parametrize("password", ["x" * 7, "x" * 129])
+def test_password_length_rejects_values_outside_eight_to_128(tmp_path, password):
+    store = IdentityStore(tmp_path / "identity.sqlite3")
+    with pytest.raises(AuthError, match="8~128"):
+        store.credentials("alice", password)
+
+
+@pytest.mark.parametrize("password", ["x" * 8, "x" * 128])
+def test_password_length_accepts_eight_and_128_for_member_and_admin(tmp_path, password):
+    store = IdentityStore(tmp_path / "identity.sqlite3")
+    invite = store.create_invite()
+    member = store.register("alice", password, invite)
+    assert store.login("alice", password)["user"] == member["user"]
+    store.ensure_admin("operator", password)
+    assert store.login("operator", password)["user"]["role"] == "admin"
+
+
 def test_invitation_is_single_use_and_session_survives_restart(tmp_path):
     path = tmp_path / "identity.sqlite3"
     store = IdentityStore(path)

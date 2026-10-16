@@ -279,10 +279,18 @@ class FakeKorail:
         open_rows = [dict(row, general="11") for row in rows[:1]]
         return [_korail2_train(row, src_locate, dst_locate) for row in open_rows]
 
-    def reserve_train(self, train, option=None, passenger_count=1, seat_preference=None):
+    def reserve_train(
+        self, train, option=None, passenger_count=1, seat_preference=None, seat_direction=""
+    ):
         limit_date, limit_time = _deadline()
         rsv_id = _next_id("E2E")
-        _log("reserve_train", rsv_id=rsv_id, train_no=train.train_no, passengers=passenger_count)
+        _log(
+            "reserve_train",
+            rsv_id=rsv_id,
+            train_no=train.train_no,
+            passengers=passenger_count,
+            **({"seat_direction": seat_direction} if seat_direction else {}),
+        )
         return Reservation(
             {
                 "h_trn_clsf_cd": train.train_type,

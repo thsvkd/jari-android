@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import type { Locator, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import { E2E } from "../playwright.config";
 import { expect, openApp, test, type User } from "./fixtures";
@@ -13,9 +13,7 @@ const API = `http://127.0.0.1:${E2E.api}`;
 const MCP_URL = `${API}/mcp`;
 const CLAUDE = "https://claude.ai/api/mcp/auth_callback";
 const LOOPBACK = "http://127.0.0.1:53682/callback";
-const NOTE = "에이전트(Claude Code 등)에서 MCP 주소로 연결하면 브라우저에서 자리났다 계정으로 로그인해 허용해요. 새 연결은 조회만 할 수 있고, 예약은 아래 목록에서 켜요.";
 // §15 N7: 에이전트가 확인을 받는다는 말은 서버가 강제하지 않으니 낮춰서 말해요.
-const ASKS_FIRST = "Claude Code 같은 에이전트는 감시·예약·취소 전에 먼저 물어봐요.";
 const HIDDEN = /<input type="hidden" name="([a-z_]+)" value="([^"]*)">/g;
 
 const unescapeHtml = (text: string) =>
@@ -72,13 +70,6 @@ async function connectInBrowser(user: User, name = "e2e 에이전트", redirect 
   return (await exchanged.json()) as { access_token: string };
 }
 
-/** 보이게 될 때까지 기다린 뒤 화면에서의 위쪽 좌표. 다시 그려지는 중이면 null 이 나와서 기다려요. */
-async function top(locator: Locator): Promise<number> {
-  let y: number | undefined;
-  await expect.poll(async () => (y = (await locator.boundingBox())?.y)).toBeDefined();
-  return y!;
-}
-
 interface Connection {
   id: string;
   name: string;
@@ -97,41 +88,29 @@ async function openAgents(page: Page): Promise<void> {
   const row = page.getByRole("button", { name: /에이전트 연결/ });
   await expect(row).toContainText("AI 에이전트가 열차를 찾고 예약하게 해요");
   await row.click();
-  await expect(page.getByText(NOTE)).toBeVisible();
 }
 
 test.describe("에이전트 연결", () => {
-  test("설정에서 연결 화면을 열면 넣을 주소와 복사 버튼이 있어요 @layout", async ({ signedIn: page }) => {
+  test("연결 방법에는 하네스별 명령과 복사 버튼만 있어요 @layout", async ({ signedIn: page }) => {
     await openAgents(page);
-    // 기기 WebView(connectOverCDP)에서는 권한을 줄 수 없어요(grantPermissions 미지원). 클립보드 쓰기를 감싸
-    // 앱이 복사한 값을 기록해요. 모든 프로젝트에서 같은 방식이에요.
     await page.evaluate(() => {
       const copied: string[] = [];
       (window as unknown as { __copied: string[] }).__copied = copied;
       Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: { writeText: async (text: string) => void copied.push(text) },
+        configurable: true, value: { writeText: async (text: string) => void copied.push(text) },
       });
     });
-    await expect(page.getByText(MCP_URL, { exact: false }).first()).toBeVisible();
-    // §13 U10: 주소를 넣은 뒤 에이전트에서 연결을 시작해야 코드가 나와요(Claude Code 는 /mcp).
-    // MCP 주소(https://…/mcp)가 아니라 명령으로서의 /mcp 예요.
-    await expect(page.locator("main.screen")).toContainText(/(?<![\w./:-])\/mcp\b/);
-    await expectCleanLayout(page, "에이전트 연결");
-
-    await page.getByRole("button", { name: /복사/ }).first().click();
-    await expect
-      .poll(() => page.evaluate(() => (window as unknown as { __copied: string[] }).__copied.at(-1)))
-      .toBe(MCP_URL);
-
-    // 펼침 안의 Claude Code 명령과 claude.ai 안내.
-    const more = page.locator("details summary").first();
-    if (await more.count()) await more.click();
-    // §15 N1: 모든 프로젝트에서 쓰이게 사용자 범위(-s user)로 더해요.
-    await expect(page.getByText(`claude mcp add -s user --transport http jari ${MCP_URL}`)).toBeVisible();
-    await expect(page.locator("main.screen")).toContainText(ASKS_FIRST);
-    await expect(page.getByText("설정 → 커넥터 → 커스텀 커넥터 추가")).toBeVisible();
-    await expectCleanLayout(page, "에이전트 연결(연결 방법 펼침)");
+    const commands = [
+      ["Claude Code", `claude mcp add -s user --transport http jari ${MCP_URL}`],
+      ["Codex", `codex mcp add jari --url ${MCP_URL}\ncodex mcp login jari`],
+    ];
+    for (const [name, command] of commands) {
+      await page.getByRole("button", { name: `${name} 명령 복사`, exact: true }).click();
+      await expect.poll(() => page.evaluate(() => (window as unknown as { __copied: string[] }).__copied.at(-1))).toBe(command);
+    }
+    await expect(page.locator("[data-agent-harness]")).toHaveCount(2);
+    await expect(page.locator(".agent-note, .agent-howto")).toHaveCount(0);
+    await expectCleanLayout(page, "에이전트 연결 명령");
   });
 
   test("연결한 에이전트가 없으면 빈 상태를 보여요 @layout", async ({ signedIn: page }) => {
@@ -231,34 +210,18 @@ test.describe("에이전트 연결", () => {
     expect(shape(lastUsed!)).toBe(shape(connected!));
   });
 
-  test("연결이 없으면 연결 방법이 먼저 펼쳐져 있어요 @layout", async ({ signedIn: page }) => {
-    // §15 N9: 연결이 없을 때는 연결 방법 → 안내 → 목록 순서예요.
+  test("연결이 없으면 하네스별 명령이 바로 보여요 @layout", async ({ signedIn: page }) => {
     await openAgents(page);
-    // 주소만 있는 요소(Claude Code 명령 줄이 아니라).
-    const url = page.getByText(MCP_URL, { exact: true });
-    await expect(url).toBeVisible();
-    expect(await top(url)).toBeLessThan(await top(page.getByText(NOTE)));
+    await expect(page.locator("[data-agent-harness='claude'] pre")).toContainText(MCP_URL);
+    await expect(page.locator("[data-agent-harness='codex'] pre")).toContainText("codex mcp login jari");
   });
 
-  test("연결이 있으면 안내, 연결 목록, 접힌 연결 방법 순서예요 @layout", async ({ signedIn: page, user }) => {
-    // §15 N9.
+  test("연결이 있어도 하네스별 명령과 연결 목록을 보여요 @layout", async ({ signedIn: page, user }) => {
     await connectInBrowser(user, "Claude");
     await openAgents(page);
-
-    // 목록이 와야 순서가 바뀌어요. 줄이 보인 뒤에 안내를 재요.
-    const row = await top(page.getByRole("button", { name: "연결 끊기" }));
-    const note = await top(page.getByText(NOTE));
-    // 접힌 카드: 주소는 보이지 않고, 카드 자체(펼치는 줄)는 목록 아래에 있어요.
-    await expect(page.getByText(MCP_URL, { exact: true })).toBeHidden();
-    const card = page.locator("details", { has: page.getByText(MCP_URL, { exact: true }) });
-    await expect(card).toHaveCount(1);
-    expect(await card.evaluate((node) => (node as HTMLDetailsElement).open)).toBe(false);
-    expect(note).toBeLessThan(row);
-    expect(row).toBeLessThan(await top(card));
-    await expectCleanLayout(page, "에이전트 연결(연결 있음, 카드 접힘)");
-
-    await card.locator("summary").first().click();
-    await expect(page.getByText(MCP_URL, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "연결 끊기" })).toBeVisible();
+    await expect(page.locator("[data-agent-harness]")).toHaveCount(2);
+    await expectCleanLayout(page, "에이전트 연결(연결 있음)");
   });
 
   test("목록에서 예약 허용을 바꾸고 연결을 끊어요 @layout", async ({ signedIn: page, user }) => {

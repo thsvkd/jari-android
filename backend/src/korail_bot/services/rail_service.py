@@ -206,6 +206,7 @@ class RailService(ABC):
         option: Any = None,
         passenger_count: int = 1,
         seat_preference: SeatPreference | None = None,
+        seat_direction: str = "",
     ) -> Any:
         """
         Try to reserve one train.
@@ -609,6 +610,7 @@ class RailService(ABC):
         max_attempts: int | None = None,
         train_numbers: list[str] | None = None,
         seat_preference: SeatPreference | None = None,
+        seat_direction: str = "",
     ):
         """
         Continuously search for trains and attempt reservation until successful.
@@ -629,6 +631,8 @@ class RailService(ABC):
             seat_preference: Which seats will do; None or empty takes any.
                            Honoured only where the railway reports the seat it
                            assigned before payment - see keeps_seat
+            seat_direction: Korail request code 009 (forward), 010 (backward),
+                            or empty for either direction.
 
         Returns:
             Reservation object(s) when successful, None if max_attempts reached
@@ -660,6 +664,7 @@ class RailService(ABC):
                 max_attempts,
                 train_numbers,
                 seat_preference,
+                seat_direction,
             )
         else:  # random
             return self._search_and_reserve_random(
@@ -674,6 +679,7 @@ class RailService(ABC):
                 max_attempts,
                 train_numbers,
                 seat_preference,
+                seat_direction,
             )
 
     def _search_and_reserve_consecutive(
@@ -689,6 +695,7 @@ class RailService(ABC):
         max_attempts: int | None,
         train_numbers: list[str] | None = None,
         seat_preference: SeatPreference | None = None,
+        seat_direction: str = "",
     ):
         """Reserve seats consecutively (together)."""
         attempts = 0
@@ -749,6 +756,7 @@ class RailService(ABC):
                     option=reserve_option,
                     passenger_count=passenger_count,
                     seat_preference=seat_preference,
+                    seat_direction=seat_direction,
                 )
 
                 if reservation == "DUPLICATE":
@@ -794,6 +802,7 @@ class RailService(ABC):
         max_attempts: int | None,
         train_numbers: list[str] | None = None,
         seat_preference: SeatPreference | None = None,
+        seat_direction: str = "",
     ):
         """Reserve seats randomly (one at a time until target count reached)."""
         attempts = 0
@@ -858,6 +867,7 @@ class RailService(ABC):
                     option=reserve_option,
                     passenger_count=1,
                     seat_preference=seat_preference,
+                    seat_direction=seat_direction,
                 )
 
                 if reservation == "DUPLICATE":

@@ -172,6 +172,8 @@ class MobileRuntime:
             health=self.health,
             privacy_contact=config.privacy_contact,
             public_url=config.public_url,
+            google_client_id=config.google_client_id,
+            google_client_secret=config.google_client_secret,
         )
 
     def health(self):

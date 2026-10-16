@@ -26,6 +26,8 @@ Python 3.13 이상과 Redis가 필요합니다. Windows에는 시간대 데이�
 | `MOBILE_ORIGINS` | 허용할 앱 출처를 쉼표로 나열; 기본 `https://localhost,capacitor://localhost` |
 | `MOBILE_FCM_CREDENTIALS` | 선택 사항; 서버에 보관한 Firebase 서비스 계정 JSON 경로 |
 | `MOBILE_PUBLIC_URL` | 선택 사항; 에이전트(MCP)가 바깥에서 부르는 HTTPS 주소(경로 없이). 비우면 에이전트 연결(`/oauth/*`·`/.well-known/*`·`/mcp`)이 꺼짐 |
+| `MOBILE_GOOGLE_CLIENT_ID` | 선택 사항; Google Cloud의 웹 애플리케이션 OAuth 클라이언트 ID. Google 로그인을 쓰려면 아래 세 값을 모두 설정 |
+| `MOBILE_GOOGLE_CLIENT_SECRET` | 선택 사항; 같은 웹 OAuth 클라이언트의 서버 전용 비밀 값. 저장소와 앱 번들에 넣지 않음 |
 
 기존 봇 `.env`는 자동으로 읽지 않습니다. 봇의 계정·비밀 키를 모바일 설정으로 복사하지 않습니다.
 모바일 Redis 키에는 `jari:mobile:v1:` 접두어가 붙고, 앱 계정은 `mobile_...` ID 및
@@ -42,13 +44,28 @@ uv run --frozen python -m korail_bot.mobile serve --host 127.0.0.1 --port 8081
 명령줄에 비밀번호를 적으면 셸 기록에 남으므로 생략하는 쪽을 씁니다.
 
 `invite`가 출력한 코드는 한 번만 사용됩니다. 별도 전달은 운영자가 합니다.
-앱 아이디는 영문·숫자·밑줄 3~32자, 비밀번호는 12~128자입니다.
+앱 아이디는 영문·숫자·밑줄 3~32자, 비밀번호는 8~128자입니다.
 초대 발급·API 실행에는 같은 `MOBILE_DATA_DIR`를 사용해야 합니다.
 앱 계정 암호, 초대 코드, Bearer 토큰은 평문 저장하지 않습니다.
 계정 비밀번호는 scrypt `N=32768,r=8,p=3`으로, 초대와 무작위 256비트 세션 토큰은 SHA-256으로 저장합니다.
 세션은 30일 뒤 만료되고 `/auth/logout`에서 즉시 폐기됩니다.
 에이전트 연결의 권한 코드·access/refresh 토큰도 SHA-256으로만 저장합니다(docs/SPEC.md §12).
 에이전트 연결은 브라우저의 `/oauth/authorize` 페이지에서 앱 아이디·비밀번호로 로그인해 허용합니다. 이 로그인은 앱 로그인과 같은 인증 제한을 함께 쓰고 앱 세션을 만들지 않습니다.
+
+Google 로그인은 `MOBILE_PUBLIC_URL`, `MOBILE_GOOGLE_CLIENT_ID`,
+`MOBILE_GOOGLE_CLIENT_SECRET`을 모두 설정했을 때만 켜집니다. Google Cloud에서 클라이언트 유형을
+**웹 애플리케이션**으로 만들고 승인된 리디렉션 URI를
+`<MOBILE_PUBLIC_URL>/api/mobile/auth/google/callback`과 정확히 같게 등록합니다. 일부 값만 설정하면
+서버는 시작하지 않습니다. 기존 초대 계정으로 로그인한 뒤 설정에서 앱 비밀번호를 다시 입력해
+Google 계정을 연결해야 하며, Google 이메일만 같은 계정에 자동 연결하거나 Google만으로 새 회원을
+만들지 않습니다. 연결 뒤 로그인은 시스템 브라우저를 사용합니다. 브라우저 콜백에는 앱 Bearer
+토큰이 들어가지 않습니다. 시작 앱에는 5분짜리 일회용 티켓과 확인 코드가, 콜백 브라우저에는
+서로 다른 HttpOnly 쿠키와 숨은 확인 값이 주어집니다. 브라우저는 대상 앱 계정·요청 기기·IP와
+계정 및 예약 정보 접근 권한을 확인한 뒤 시작 앱에 표시된 코드를 입력하고 명시적으로 허용해야
+합니다. 이 확인이 끝나도 앱 세션은 생기지 않으며, 시작 앱이 티켓을 POST로 한 번 소비한 순간에만
+세션이 생깁니다. 앱이 완료 응답을 받기 전에 취소하면 같은 티켓으로 발급 세션이나 연결을 되돌립니다.
+앱이 완료 결과를 안전하게 저장한 뒤에는 같은 티켓으로 `/api/mobile/auth/google/ack`을 호출해
+5분짜리 되돌리기 영수증을 즉시 폐기합니다.
 
 외부에 제공할 때는 HTTPS 리버스 프록시가 위 loopback 포트로 연결해야 합니다.
 API는 쿠키 대신 `Authorization: Bearer ...`를 사용합니다. 프록시의 전달 IP 헤더를 무조건 신뢰하지 않으므로

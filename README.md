@@ -88,7 +88,7 @@ API 서버와 Redis를 Docker Compose로 띄우고, 그 서버에 연결되는 �
 docker compose up --build -d                     # API(127.0.0.1:8081)와 Redis
 curl http://127.0.0.1:8081/api/mobile/health     # {"ok":true,...} 이면 정상
 
-# 내 관리자 계정: 실행한 뒤 비밀번호(12자 이상)를 한 줄 입력하고 Enter
+# 내 관리자 계정: 실행한 뒤 비밀번호(8자 이상)를 한 줄 입력하고 Enter
 docker compose exec -T api python -m korail_bot.mobile admin --username <아이디>
 ```
 

@@ -7,7 +7,7 @@ from functools import wraps
 from flask import Flask, Response, g, jsonify, request
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 
-from korail_bot.mobile import mcp, oauth
+from korail_bot.mobile import google_auth, mcp, oauth
 from korail_bot.mobile.config import MAX_REQUEST_BYTES
 from korail_bot.mobile.identity import LAST_ADMIN_MESSAGE, AuthError, timestamp
 from korail_bot.mobile.pages import delete_account_page, privacy_page
@@ -71,6 +71,8 @@ def create_app(
     health=None,
     privacy_contact=None,
     public_url=None,
+    google_client_id=None,
+    google_client_secret=None,
 ):
     app = Flask(__name__)
     # This is what bounds the total size of a seat plan: one seat target is
@@ -136,7 +138,11 @@ def create_app(
 
     @app.before_request
     def validate_request():
-        if request.path in PUBLIC_PAGES or request.path.startswith(OAUTH_PREFIXES):
+        if (
+            request.path in PUBLIC_PAGES
+            or request.path in {google_auth.CALLBACK_PATH, google_auth.CONFIRM_PATH}
+            or request.path.startswith(OAUTH_PREFIXES)
+        ):
             return
         origin = request.headers.get("Origin")
         if origin and origin not in origins:
@@ -224,6 +230,17 @@ def create_app(
 
         return wrapped
 
+    google_auth.install(
+        app,
+        identity,
+        public_url=public_url,
+        client_id=google_client_id,
+        client_secret=google_client_secret,
+        body=body,
+        limited=limited,
+        authenticated=authenticated,
+    )
+
     for path, page in PUBLIC_PAGES.items():
 
         def public_page(page=page):
@@ -309,6 +326,7 @@ def create_app(
             "srt": False,
             "waitlist": booking_available,
             "scheduledSearch": booking_available,
+            "seatDirection": booking_available,
             "durableNotifications": notifications is not None,
             "favourites": booking_available,
             "notificationSettings": booking_available,

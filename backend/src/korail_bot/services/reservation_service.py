@@ -163,6 +163,7 @@ class ReservationService:
                 # honour the plan, and searching for any free seat would book
                 # one the user never picked.
                 "stdin" if search_params.seat_plan_json else "",
+                *([search_params.seat_direction] if search_params.seat_direction else []),
             ]
 
             # Start background process.
@@ -214,6 +215,7 @@ class ReservationService:
                     "username": username,
                     "password": password,
                     "seat_plan": search_params.seat_plan_json,
+                    "seat_direction": search_params.seat_direction,
                 }
             )
 

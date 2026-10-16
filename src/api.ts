@@ -5,6 +5,8 @@ import type {
   BootstrapState,
   Conditions,
   Favourite,
+  GoogleAuthStart,
+  GoogleAuthPoll,
   InviteResult,
   MobileApi,
   NotificationItem,
@@ -168,6 +170,12 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
   const timeZone = options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
   const misses = options.connectionMisses ?? createConnectionMissLog();
   let uploading = false;
+  let directionSupported = false;
+  const requireDirectionSupport = (conditions: Conditions) => {
+    if (conditions.seat_direction && conditions.seat_direction !== "any" && !directionSupported) {
+      throw new ApiError("연결된 서버가 좌석 방향 지정을 지원하지 않아요. 서버를 업데이트한 뒤 다시 시도해 주세요.", 0, "configuration");
+    }
+  };
   // After a 429 the upload waits a minute: every retry would count against the same per-user API limit as real requests.
   let uploadAfter = 0;
 
@@ -272,6 +280,14 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
   }
 
   return {
+    googleConfiguration: () => request<{ enabled: boolean }>("/auth/google", { method: "GET", authenticated: false, timeoutMs: 10_000 }),
+    googleStatus: () => request<{ enabled: boolean; linked: boolean }>("/account/google", { method: "GET" }),
+    googleStart: () => request<GoogleAuthStart>("/auth/google/start", { body: {}, authenticated: false, timeoutMs: 10_000 }),
+    googleLink: (password) => request<GoogleAuthStart>("/account/google/link", { body: { password }, timeoutMs: 10_000 }),
+    googleUnlink: (password) => request<{ linked: false }>("/account/google/unlink", { body: { password } }),
+    googleAcknowledge: (ticket) => request<{ acknowledged: boolean }>("/auth/google/ack", { body: { ticket }, authenticated: false, timeoutMs: 10_000 }),
+    googleCancel: (ticket) => request<{ cancelled: boolean }>("/auth/google/cancel", { body: { ticket }, authenticated: false, timeoutMs: 10_000 }),
+    googlePoll: (ticket) => request<GoogleAuthPoll>("/auth/google/poll", { body: { ticket }, authenticated: false, timeoutMs: 10_000 }),
     registerApp: (input) => request<AuthResult>("/auth/register", { body: input, authenticated: false }),
     login: (input) => request<AuthResult>("/auth/login", { body: input, authenticated: false }),
     createInvite: (input = {}) => request<InviteResult>("/invites", { body: input }),
@@ -292,10 +308,17 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
       await options.tokenStorage.clear();
       return result;
     },
-    bootstrap: () => request<BootstrapState>("/bootstrap"),
+    bootstrap: async () => {
+      const state = await request<BootstrapState>("/bootstrap");
+      directionSupported = state.capabilities?.seatDirection === true;
+      return state;
+    },
     railwayRegister: (input) => request<{ registered: boolean }>("/register", { body: input }),
     railwayLogout: () => request<{ registered: boolean }>("/logout", { body: {} }),
-    trains: (payload: { conditions: Conditions }) => request<TrainsResult>("/trains", { body: payload }),
+    trains: (payload: { conditions: Conditions }) => {
+      requireDirectionSupport(payload.conditions);
+      return request<TrainsResult>("/trains", { body: payload });
+    },
     seatCars: (trainKey: string, seatClass: SeatClass, passengerCount: number) =>
       request<{ cars: SeatCarOption[] }>(
         `/trains/${encodeURIComponent(trainKey)}/cars?seatClass=${encodeURIComponent(seatClass)}&passengerCount=${passengerCount}`,
@@ -313,9 +336,14 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
       ),
     reserveDesignated: (payload: { trainKey: string; seatClass: SeatClass; passengerCount: number; carNo: number; seats: SeatMapSeat[] }) =>
       request("/reservations/designated", { body: payload }),
-    search: (payload: BookingPayload) => request<SearchResult>("/search", { body: payload }),
-    schedule: (payload) =>
-      request<{ scheduled: boolean; startAt: string }>("/schedule", { body: payload }),
+    search: (payload: BookingPayload) => {
+      requireDirectionSupport(payload.conditions);
+      return request<SearchResult>("/search", { body: payload });
+    },
+    schedule: (payload) => {
+      requireDirectionSupport(payload.conditions);
+      return request<{ scheduled: boolean; startAt: string }>("/schedule", { body: payload });
+    },
     cancelSearch: () => request<{ stopped: boolean; unscheduled: boolean }>("/search/cancel", { body: {} }),
     cancelReservations: () =>
       request<{ cancelled: boolean; pending: PendingReservation[] }>("/reservations/cancel", { body: {} }),

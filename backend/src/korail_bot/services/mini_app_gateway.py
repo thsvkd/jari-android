@@ -305,6 +305,7 @@ class MiniAppGateway:
             "passenger_count": info.get("passengerCount", 1),
             "seat_strategy": "1" if info.get("seatStrategy") == "consecutive" else "2",
             "seat_preference": info.get("seatPreference", ""),
+            "seat_direction": info.get("seatDirection", "any"),
             "trains": list(info.get("selectedTrains") or []),
         }
         # The cabins chosen on the journey form. Without them a favourite of
@@ -939,6 +940,9 @@ class MiniAppGateway:
             "passengerCount": params.passenger_count,
             "seatStrategy": params.seat_strategy,
             "seatPreference": params.seats_wanted.describe(),
+            "seatDirection": {"009": "forward", "010": "backward"}.get(
+                params.seat_direction, "any"
+            ),
             "selectedTrains": list(params.train_numbers),
             "trainLabels": dict(params.train_labels),
         }

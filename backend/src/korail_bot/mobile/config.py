@@ -23,6 +23,12 @@ class MobileConfig:
     # Where agents reach this API from outside (MOBILE_PUBLIC_URL). Unset,
     # agent connections (OAuth and MCP) are switched off entirely.
     public_url: str | None = None
+    google_client_id: str | None = None
+    google_client_secret: str | None = field(default=None, repr=False)
+
+    @property
+    def google_enabled(self):
+        return bool(self.public_url and self.google_client_id and self.google_client_secret)
 
     @classmethod
     def from_env(cls, *, auth_only=False):
@@ -61,6 +67,15 @@ class MobileConfig:
         # real key exists. Empty means "no push", not a key to load.
         if fcm and Path(fcm).is_file() and Path(fcm).stat().st_size == 0:
             fcm = None
+        google_client_id = os.environ.get("MOBILE_GOOGLE_CLIENT_ID", "").strip() or None
+        google_client_secret = os.environ.get("MOBILE_GOOGLE_CLIENT_SECRET", "").strip() or None
+        external_url = public_url(os.environ.get("MOBILE_PUBLIC_URL", ""))
+        google_parts = (external_url, google_client_id, google_client_secret)
+        if (google_client_id or google_client_secret) and not all(google_parts):
+            raise ValueError(
+                "Google login requires MOBILE_PUBLIC_URL, MOBILE_GOOGLE_CLIENT_ID, and "
+                "MOBILE_GOOGLE_CLIENT_SECRET together"
+            )
         return cls(
             str(data / "identity.sqlite3"),
             secret,
@@ -68,7 +83,9 @@ class MobileConfig:
             fcm,
             origins,
             os.environ.get("MOBILE_PRIVACY_CONTACT", "").strip() or None,
-            public_url(os.environ.get("MOBILE_PUBLIC_URL", "")),
+            external_url,
+            google_client_id,
+            google_client_secret,
         )
 
 

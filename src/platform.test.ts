@@ -136,3 +136,13 @@ describe("push registration", () => {
     nativePlatform.active = false;
   });
 });
+
+it("only opens the Google authorization origin in an external browser", async () => {
+  const { openGoogleBrowser } = await import("./platform");
+  const open = vi.spyOn(window, "open").mockReturnValue({ opener: null } as unknown as Window);
+  await expect(openGoogleBrowser("javascript:alert(1)")).rejects.toThrow();
+  await expect(openGoogleBrowser("https://accounts.google.com.evil.example/auth")).rejects.toThrow();
+  await openGoogleBrowser("https://accounts.google.com/o/oauth2/v2/auth?state=one-time");
+  expect(open).toHaveBeenCalledWith("https://accounts.google.com/o/oauth2/v2/auth?state=one-time", "_blank");
+  open.mockRestore();
+});

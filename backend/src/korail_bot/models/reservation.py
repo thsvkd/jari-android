@@ -179,6 +179,10 @@ class TrainSearchParams:
     # a plain dataclass of strings and numbers - the same thing argv carries
     # and the same thing Redis stores.
     seat_preference: str = ""
+    # Korail's seat-direction request attribute: 009 (forward), 010
+    # (backward). Empty means the railway default/any direction. This is a
+    # request-side value; inventory response codes are intentionally kept raw.
+    seat_direction: str = ""
     # Structured physical-seat candidates for the mobile cancellation wait.
     # Empty keeps every search written before the seat-map flow compatible.
     seat_plan_json: str = ""
@@ -220,6 +224,9 @@ class TrainSearchParams:
         # Validate time format
         if not self.dep_time[:4].isdigit() or len(self.dep_time) != 6:
             return False, "시간 형식이 올바르지 않습니다 (HHMMSS)"
+
+        if self.seat_direction not in {"", "009", "010"}:
+            return False, "좌석 방향은 순방향, 역방향 또는 지정 없음이어야 합니다"
 
         # The stations are not checked here. Korail's list is fetched and
         # cached rather than published with the client, and it lives behind

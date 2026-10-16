@@ -90,7 +90,7 @@ Run the API server and Redis with Docker Compose, then build an app that connect
 docker compose up --build -d                     # API (127.0.0.1:8081) and Redis
 curl http://127.0.0.1:8081/api/mobile/health     # {"ok":true,...} means it's up
 
-# Your admin account: run it, then type the password (12+ characters) on one line and press Enter
+# Your admin account: run it, then type the password (8+ characters) on one line and press Enter
 docker compose exec -T api python -m korail_bot.mobile admin --username <your-id>
 ```
 

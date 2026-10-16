@@ -4,6 +4,7 @@ import type {
   Conditions,
   RunningSearch,
   SeatClass,
+  SeatDirection,
   SeatGradeMode,
 } from "./types";
 
@@ -24,6 +25,7 @@ export interface BookingDraft {
   waitlist?: boolean;
   seatGradeMode?: SeatGradeMode;
   seatClasses?: SeatClass[];
+  seatDirection?: SeatDirection;
 }
 
 const compact = (value: string): string => value.replaceAll("-", "").replaceAll(":", "");
@@ -68,6 +70,7 @@ export function buildConditions(draft: BookingDraft): Conditions {
       draft.seatRowMin,
       draft.seatRowMax,
     ),
+    seat_direction: specific ? "any" : (draft.seatDirection ?? "any"),
     waitlist: draft.waitlist === true,
     ...(specific ? { seat_classes: classes } : {}),
   };
@@ -89,6 +92,7 @@ export function normalizeCapabilities(raw: Partial<Capabilities> | null | undefi
     push: raw?.push === true,
     lastChecked: raw?.lastChecked === true,
     agents: raw?.agents === true,
+    seatDirection: raw?.seatDirection === true,
   };
 }
 
@@ -279,6 +283,10 @@ export function conditionsToDraft(conditions?: Conditions | null): BookingDraft 
     waitlist: conditions?.waitlist === true,
     seatGradeMode: seatClasses.length ? "specific" : "any",
     seatClasses,
+    seatDirection:
+      conditions?.seat_direction === "forward" || conditions?.seat_direction === "backward"
+        ? conditions.seat_direction
+        : "any",
   };
 }
 

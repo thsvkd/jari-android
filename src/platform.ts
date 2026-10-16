@@ -7,6 +7,7 @@ interface SecureSessionPlugin {
   clear(): Promise<void>;
   pushConfigured(): Promise<{ configured: boolean }>;
   openNotificationSettings(): Promise<void>;
+  openGoogleBrowser(options: { url: string }): Promise<void>;
 }
 
 const SecureSession = registerPlugin<SecureSessionPlugin>("SecureSession");
@@ -81,6 +82,21 @@ export async function clearToken(): Promise<void> {
   if (isNative()) {
     await SecureSession.clear();
   }
+}
+
+/** Google requires its authorization page to run outside the app WebView. */
+export async function openGoogleBrowser(raw: string): Promise<void> {
+  const url = new URL(raw);
+  if (url.origin !== "https://accounts.google.com" || url.username || url.password) {
+    throw new Error("구글 로그인 주소가 올바르지 않아요.");
+  }
+  if (isNative()) {
+    await SecureSession.openGoogleBrowser({ url: url.href });
+    return;
+  }
+  const popup = window.open(url.href, "_blank");
+  if (!popup) throw new Error("브라우저 팝업을 허용한 뒤 다시 로그인해 주세요.");
+  popup.opener = null;
 }
 
 // The app's theme is its own toggle, not the system's, so the status bar icons follow it here:

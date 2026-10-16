@@ -82,7 +82,7 @@ uv run --env-file .env --frozen python -m korail_bot.mobile serve --host 127.0.0
 
 ## 3. 관리자 계정과 초대 코드
 
-가입은 초대제입니다. 먼저 운영자 본인의 관리자 계정을 만듭니다. 아이디는 영문·숫자·밑줄 3~32자, 비밀번호는 12~128자입니다.
+가입은 초대제입니다. 먼저 운영자 본인의 관리자 계정을 만듭니다. 아이디는 영문·숫자·밑줄 3~32자, 비밀번호는 8~128자입니다.
 
 ```bash
 docker compose exec -T api python -m korail_bot.mobile admin --username <아이디>
@@ -193,3 +193,11 @@ Docker 이미지에는 알림 의존성이 이미 들어 있습니다. Docker �
 ## 10. 외부 감시(선택)
 
 [`monitor/`](../monitor/)는 1분마다 `/api/mobile/health`를 앱과 같은 경로로 불러 보고, 2분 연속 실패하면 텔레그램으로 장애를, 풀리면 복구를 알리는 Cloudflare Worker입니다. 배포는 `monitor/deploy.sh`(비밀값은 Doppler에서 꺼냄), 시험 알림은 `monitor/deploy.sh --test-message`입니다. 자세한 판정 기준은 [SPEC §6](SPEC.md#6-연결-상태)에 있습니다.
+
+## 구글 로그인 설정
+
+기존 초대 계정에 구글 로그인을 연결할 수 있습니다. Google Cloud에서 **웹 애플리케이션** OAuth 클라이언트를 만들고 승인된 리디렉션 URI를 `https://<MOBILE_PUBLIC_URL의 호스트>/api/mobile/auth/google/callback`으로 정확히 등록합니다. 서버에 `MOBILE_PUBLIC_URL`, `MOBILE_GOOGLE_CLIENT_ID`, `MOBILE_GOOGLE_CLIENT_SECRET`을 함께 설정합니다. Docker Compose는 셸 또는 비공개 `.env`의 두 Google 값을 API 컨테이너로 전달합니다. 비밀키를 앱의 `VITE_` 설정이나 저장소에 넣지 않습니다.
+
+설정이 없으면 구글 로그인 버튼을 표시하지 않고, 일부 값만 설정하면 서버가 시작 오류를 냅니다. Firebase 푸시용 `google-services.json`만으로는 구글 로그인이 활성화되지 않습니다. 설정 후 앱 계정으로 로그인해 **설정 → 구글 계정 연결**에서 앱 비밀번호를 확인하고 구글 계정을 고릅니다. 다음부터 로그인 화면의 **구글로 로그인**을 사용할 수 있습니다. 앱에 표시된 확인 코드를 인증 브라우저에 직접 입력하고, 표시된 계정과 요청 기기를 확인한 뒤 로그인을 허용합니다. 연결 해제도 앱 비밀번호를 확인하며 현재 기기를 제외한 다른 앱 세션을 해제합니다. 새 회원은 먼저 초대 코드로 기존 앱 계정을 만듭니다. 운영 서버에 설정을 적용하거나 재시작하는 것은 별도 운영 승인 절차를 따릅니다.
+
+인증 페이지는 Android WebView 밖의 브라우저에서 열립니다. 새 앱 의존성·Android용 Google OAuth 클라이언트·서명 지문 추가는 필요하지 않습니다. [Google 웹 서버 OAuth 문서](https://developers.google.com/identity/protocols/oauth2/web-server)와 [OpenID Connect 검증 문서](https://developers.google.com/identity/openid-connect/openid-connect)를 기준으로 합니다.

@@ -48,6 +48,22 @@ describe("booking payload", () => {
       }),
     ).toMatchObject({ seat_option: "1", seat_classes: ["general", "special"] });
   });
+
+  it("round-trips a seat direction and drops it for designated-seat mode", () => {
+    const base = conditionsToDraft(null);
+    const forward = buildConditions({ ...base, seatDirection: "forward" });
+
+    expect(forward.seat_direction).toBe("forward");
+    expect(conditionsToDraft(forward).seatDirection).toBe("forward");
+    expect(
+      buildConditions({
+        ...base,
+        seatDirection: "backward",
+        seatGradeMode: "specific",
+        seatClasses: ["general"],
+      }).seat_direction,
+    ).toBe("any");
+  });
   it("serializes every supported gateway condition exactly once", () => {
     const conditions = buildConditions({
       depDate: "2026-09-19",
@@ -78,6 +94,7 @@ describe("booking payload", () => {
       passenger_count: 3,
       seat_strategy: "2",
       seat_preference: "A,D:1-15",
+      seat_direction: "any",
       waitlist: false,
     });
     expect(buildBookingPayload(conditions, ["015", "019"])).toEqual({
@@ -122,6 +139,7 @@ describe("capability truth", () => {
       push: false,
       lastChecked: false,
       agents: false,
+      seatDirection: false,
     });
   });
 });

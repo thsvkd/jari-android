@@ -10,6 +10,7 @@ import {
   clearToken,
   followKeyboard,
   initializePlatform,
+  openGoogleBrowser,
   readToken,
   watchForeground,
   writeToken,
@@ -41,7 +42,7 @@ async function launch(): Promise<void> {
       : createHttpApi({
           baseUrl: apiBase,
           tokenStorage: session,
-          onAuthExpired: () => app?.start(false),
+          onAuthExpired: () => app?.expireSession(),
           connectionMisses: createConnectionMissLog(window.localStorage),
         });
 
@@ -68,6 +69,7 @@ async function launch(): Promise<void> {
         await initialize(true);
       },
       onTheme: applyStatusBarStyle,
+      onOpenExternal: openGoogleBrowser,
     });
 
     await watchForeground((foreground) => app?.setForeground(foreground));

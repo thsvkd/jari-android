@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.provider.Settings;
+import android.net.Uri;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
@@ -94,6 +95,26 @@ public class SecureSessionPlugin extends Plugin {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         getContext().startActivity(intent);
         call.resolve();
+    }
+
+    @PluginMethod
+    public void openGoogleBrowser(PluginCall call) {
+        String raw = call.getString("url", "");
+        Uri uri = Uri.parse(raw);
+        if (!"https".equals(uri.getScheme()) || !"accounts.google.com".equals(uri.getHost())
+                || uri.getUserInfo() != null || (uri.getPort() != -1 && uri.getPort() != 443)) {
+            call.reject("구글 로그인 주소가 올바르지 않아요.");
+            return;
+        }
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+            intent.addCategory(Intent.CATEGORY_BROWSABLE);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (android.content.ActivityNotFoundException error) {
+            call.reject("구글 로그인을 열 브라우저가 없어요.");
+        }
     }
 
     private SharedPreferences preferences() {

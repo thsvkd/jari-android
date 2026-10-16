@@ -69,6 +69,7 @@ interface AppOptions {
   onLogout?: () => Promise<void>;
   onBootstrap?: (state: BootstrapState) => Promise<void> | void;
   onRequestPush?: () => Promise<void>;
+  onOpenExternal?: (url: string) => Promise<void>;
   onTheme?: (theme: "light" | "dark") => Promise<void> | void;
 }
 
@@ -274,6 +275,12 @@ export class JariApp {
   private history: AppView[] = [];
   private connection: ConnectionState = "unknown";
   private draft: BookingDraft = conditionsToDraft(null);
+  private googleEnabled = false;
+  private googleLinked = false;
+  private googleFlow: { ticket: string; verificationCode: string; expires: number; purpose: "login" | "link"; polling: boolean; cancelRequested?: boolean; cancelling?: boolean; cancelError?: string } | null = null;
+  private googleTimer: number | null = null;
+  private journeyDirty = false;
+  private interruptedJourney: { userId: string; draft: BookingDraft } | null = null;
   private conditions: Conditions | null = null;
   private selectedTrains: string[] = [];
   private trainOptions: TrainOption[] = [];
@@ -382,6 +389,8 @@ export class JariApp {
   }
 
   private resetSession(): void {
+    this.cancelGoogle();
+    this.googleLinked = false;
     this.generation += 1;
     this.trial = null;
     this.trialRoutes = [];
@@ -398,6 +407,8 @@ export class JariApp {
     this.history = [];
     this.connection = "unknown";
     this.draft = conditionsToDraft(null);
+    this.journeyDirty = false;
+    this.interruptedJourney = null;
     this.conditions = null;
     this.selectedTrains = [];
     this.trainOptions = [];
@@ -434,16 +445,34 @@ export class JariApp {
     this.root.replaceChildren();
   }
 
-  async start(authenticated: boolean): Promise<void> {
+  /** Preserve only editable trip fields for the same account while it signs in again. */
+  expireSession(): void {
+    this.syncJourneyDraft();
+    const interrupted = !this.demo && this.journeyDirty && this.state?.user
+      ? { userId: this.state.user.id, draft: structuredClone(this.draft) }
+      : this.interruptedJourney;
     this.resetSession();
+    this.interruptedJourney = interrupted;
+    this.error = "로그인이 만료됐어요. 다시 로그인해 주세요.";
+    this.render();
+  }
+
+  async start(authenticated: boolean): Promise<void> {
+    const interrupted = authenticated ? this.interruptedJourney : null;
+    this.resetSession();
+    this.interruptedJourney = interrupted;
     if (!authenticated && !this.options.demoMode) {
       this.view = "auth";
       this.connection = "unknown";
       this.render();
+      await this.loadGoogle();
       return;
     }
     this.view = "home";
+    const generation = this.generation;
     await this.reload();
+    if (generation === this.generation) await this.loadGoogle();
+
   }
 
   dispose(): void {
@@ -519,6 +548,18 @@ export class JariApp {
         this.selectedTrains = state.draft?.trains?.map(String) ?? [];
         this.cancellationTargets = state.draft?.seat_plan?.trains ?? [];
       }
+      const interrupted = this.interruptedJourney;
+      if (interrupted && state.user) {
+        this.interruptedJourney = null;
+        if (state.user.id === interrupted.userId) {
+          this.draft = interrupted.draft;
+          this.conditions = null;
+          this.selectedTrains = [];
+          this.cancellationTargets = [];
+          this.journeyDirty = true;
+          this.view = "journey";
+        }
+      }
       await this.options.onBootstrap?.(state);
       if (generation !== this.generation) return;
       this.startPolling();
@@ -548,6 +589,7 @@ export class JariApp {
    * until the next scheduled poll, up to half a minute after the network is fine again.
    */
   resumeConnection(): void {
+    if (this.googleFlow) void this.pollGoogle();
     if (this.background || document.visibilityState === "hidden") return;
     this.pollMisses = 0;
     void this.pollStatus(true);
@@ -731,7 +773,7 @@ export class JariApp {
       ${chips.length ? `<section class="chip-shelf">${this.renderChipShelf(chips)}</section>` : ""}
       ${paymentFirst ? `${this.renderPendingCard(true)}${statusCard}` : statusCard}
       ${state.scheduled ? this.renderScheduledCard() : ""}
-      ${button({ roomy: true, action: "new-journey", disabled: !state.capabilities.korail, content: `<span>${state.capabilities.korail ? "새 여정 찾기" : "예약 서버에 연결해 주세요"}</span><b>＋</b>` })}
+      ${button({ roomy: true, action: "new-journey", disabled: !state.capabilities.korail, content: `<span>${state.capabilities.korail ? this.journeyDirty ? "입력하던 여정 이어서 찾기" : "새 여정 찾기" : "예약 서버에 연결해 주세요"}</span><b>＋</b>` })}
       </div><aside class="home-secondary">
       <section class="section-head"><div><p class="eyebrow">빠른 실행</p><h2>자주 가는 구간</h2></div>${button({ variant: "text", view: "favourites", label: "전체 보기" })}</section>
       <div class="route-list">${state.favourites.length ? state.favourites.slice(0, 2).map((favourite) => this.renderFavouriteRow(favourite, true)).join("") : emptyState({ compact: true, text: "아직 저장한 구간이 없어요." })}</div>
@@ -877,6 +919,11 @@ export class JariApp {
             ${choice({ type: "checkbox", look: "tile", name: "seat_class", value: "general", title: "일반실", hint: "일반 좌석", checked: (this.draft.seatClasses ?? []).includes("general") })}
             ${choice({ type: "checkbox", look: "tile", name: "seat_class", value: "special", title: "특실", hint: "넓은 좌석", checked: (this.draft.seatClasses ?? []).includes("special") })}
           </fieldset>${notice({ tone: "calm", className: "seat-detail-note", title: "세부 좌석은 다음 단계에서 골라요.", text: "열차별 실제 좌석표에서 맨 앞·맨 뒤를 빼거나, 가족석만 고르거나 빼고, 원하는 자리를 선택할 수 있어요." })}` : ""}
+          ${capabilities.seatDirection && this.draft.seatGradeMode !== "specific" ? `<fieldset class="choice-grid direction-picker"><legend>좌석 방향</legend>
+            ${choice({ type: "radio", look: "tile", name: "seat_direction", value: "any", title: "방향 무관", checked: !this.draft.seatDirection || this.draft.seatDirection === "any" })}
+            ${choice({ type: "radio", look: "tile", name: "seat_direction", value: "forward", title: "순방향", checked: this.draft.seatDirection === "forward" })}
+            ${choice({ type: "radio", look: "tile", name: "seat_direction", value: "backward", title: "역방향", checked: this.draft.seatDirection === "backward" })}
+          </fieldset><p class="muted direction-hint">방향을 고르면 자동 배정으로 해당 방향만 예약해요. 좌석 지정·코레일 예약 대기는 방향 무관에서 이용할 수 있어요.</p>` : ""}
           <div class="passenger-row"><span><b>인원</b><small>최대 9명</small></span>${stepper({ label: "인원", value: `${this.draft.passengerCount}명`, decrease: "passenger-minus", increase: "passenger-plus", atMin: this.draft.passengerCount <= 1, atMax: this.draft.passengerCount >= 9 })}</div>
           ${this.draft.passengerCount > 1 ? `<fieldset class="choice-grid"><legend>좌석 배치</legend>${this.radioCard("seat_strategy", "1", "연속 좌석", "같은 열차·호차에서 붙은 자리만", this.draft.seatStrategy === "1")}${this.radioCard("seat_strategy", "2", "따로 앉아도 괜찮아요", "한 자리만 잡혀도 바로 알려드려요", this.draft.seatStrategy === "2")}</fieldset>` : ""}
         </section>
@@ -904,6 +951,7 @@ export class JariApp {
             const departure = train.dep_time ? clockFromCompact(train.dep_time) : "";
             const arrival = train.arr_time ? clockFromCompact(train.arr_time) : "";
             const specificGrade = this.draft.seatGradeMode === "specific";
+            const directionSelected = conditions.seat_direction === "forward" || conditions.seat_direction === "backward";
             const configuredClasses = conditions.seat_classes?.length
               ? conditions.seat_classes
               : (["general", "special"] as SeatClass[]);
@@ -939,14 +987,14 @@ export class JariApp {
               : anyAvailable
                 ? `${button({ variant: "seat", label: "바로 예약", attrs: { "data-immediate-any": train.no } })}`
                 // An older draft may already hold special-class seats; keep their button so they stay editable.
-                : `${seatButton("general", false, false)}${this.cancellationTargets.some((target) => target.trainNo === train.no && target.seatClass === "special") ? seatButton("special", false, true) : ""}`;
-            const official = train.waitlistEligible
+                : directionSelected ? "" : `${seatButton("general", false, false)}${this.cancellationTargets.some((target) => target.trainNo === train.no && target.seatClass === "special") ? seatButton("special", false, true) : ""}`;
+            const official = train.waitlistEligible && !directionSelected
               ? `${button({ variant: "text", label: "코레일 예약 대기", attrs: { "data-official-waitlist": train.no } })}`
               : "";
             const targets = this.cancellationTargets.filter((target) => target.trainNo === train.no);
             const selectedCount = targets.reduce((sum, target) => sum + target.targets.length, 0);
             const wholeTrain = targets.some((target) => !target.targets.length);
-            return `<article class="train-card ${targets.length ? "selected" : ""}" data-train-card="${escapeHtml(train.no)}"><button type="button" class="train-main" data-train-toggle="${escapeHtml(train.no)}" aria-pressed="${wholeTrain}"><span class="train-check" aria-hidden="true"></span><span class="train-main-text"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b></span></button>${badge({ shape: "tag", className: "seat-badge", tone: wholeTrain ? "solid" : anyAvailable ? "success" : "danger", label: wholeTrain ? "좌석 무관 선택" : selectedCount ? `${selectedCount}석 지정` : anyAvailable ? "좌석 있음" : "매진" })}<div class="train-actions">${anyAction}${official}</div></article>`;
+            return `<article class="train-card ${targets.length ? "selected" : ""}" data-train-card="${escapeHtml(train.no)}"><button type="button" class="train-main" data-train-toggle="${escapeHtml(train.no)}" aria-pressed="${wholeTrain}"><span class="train-check" aria-hidden="true"></span><span class="train-main-text"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b></span></button>${badge({ shape: "tag", className: "seat-badge", tone: wholeTrain ? "solid" : anyAvailable ? "success" : "danger", label: wholeTrain ? directionSelected ? "방향 조건으로 선택" : "좌석 무관 선택" : selectedCount ? `${selectedCount}석 지정` : anyAvailable ? "좌석 있음" : "매진" })}<div class="train-actions">${anyAction}${official}</div></article>`;
           })
           .join("")
       : emptyState({ mark: "train", title: "조회된 열차가 없어요", text: "시간이나 구간을 바꿔 다시 조회해 주세요." });
@@ -1558,6 +1606,7 @@ export class JariApp {
           <dt>출발</dt><dd>${escapeHtml(formatWindow(conditions))}</dd>
           <dt>열차</dt><dd>${conditions.train_type === "1" ? "KTX 계열만" : "모든 열차"} · ${this.selectedTrains.length ? `${this.selectedTrains.length}편 선택${this.describePlannedTrains(conditions.seat_plan)}` : "시간대 전체"}</dd>
           <dt>좌석</dt><dd>${escapeHtml(SEAT_OPTIONS[conditions.seat_option])} · ${conditions.passenger_count}명</dd>
+          ${conditions.seat_direction && conditions.seat_direction !== "any" ? `<dt>방향</dt><dd>${conditions.seat_direction === "forward" ? "순방향" : "역방향"}</dd>` : ""}
           ${conditions.passenger_count > 1 ? `<dt>배치</dt><dd>${conditions.seat_strategy === "1" ? "연속 좌석" : "랜덤 배치"}</dd>` : ""}
           ${seatSummary ? `<dt>좌석 지정</dt><dd>${escapeHtml(seatSummary)}</dd>` : ""}
           ${waitlist ? "<dt>신청 방식</dt><dd>코레일 예약 대기</dd>" : ""}
@@ -1640,6 +1689,7 @@ export class JariApp {
     return `<div class="settings-layout"><aside class="settings-profile"><section class="profile-card"><span class="profile-avatar">${escapeHtml((state.user?.username || "나").slice(0, 1))}</span><div><b>${escapeHtml(state.user?.username || "여행자")}</b><small>${state.user?.role === "admin" ? "관리자 계정" : "초대로 가입한 계정"}</small></div></section></aside>
       <div class="settings-groups"><section class="settings-section"><p class="eyebrow">철도 계정</p>${listRow({ view: "rail-account", title: "코레일 계정", hint: state.rail.registered ? "연결됨 · 모든 고속열차 예약 준비 완료" : "연결되지 않음", value: `${state.rail.registered ? "관리" : "연결"} →` })}${listRow({ title: "수서 출발 고속열차", hint: "별도 SRT 계정 없이 코레일 계정으로 이용해요", trailing: badge({ tone: "success", className: "integrated-badge", label: "통합됨" }) })}</section>
       ${state.capabilities.agents ? `<section class="settings-section"><p class="eyebrow">AI 에이전트</p>${listRow({ view: "agents", title: "에이전트 연결", hint: "AI 에이전트가 열차를 찾고 예약하게 해요", value: "관리 →" })}</section>` : ""}
+      ${this.googleEnabled && !this.demo ? `<section class="settings-section"><p class="eyebrow">로그인</p>${listRow({ action: this.googleLinked ? "google-unlink" : "google-link", title: this.googleLinked ? "구글 계정 연결됨" : "구글 계정 연결", hint: this.googleLinked ? "연결한 구글 계정으로도 로그인할 수 있어요" : "앱 비밀번호를 확인한 뒤 구글 로그인을 연결해요", value: this.googleLinked ? "연결 해제" : "연결 →" })}${this.renderGooglePending()}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">알림</p>${listRow({ title: "찾기 상황 알림", hint: notifyAvailable ? "찾는 중 진행 상황을 알려드리는 간격" : "현재 서버에서는 알림 간격을 바꿀 수 없어요", trailing: stepper({ small: true, label: "찾기 상황 알림 간격", value: notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가", decrease: "notify-minus", increase: "notify-plus", disabled: !notifyAvailable, atMin: state.notifyMinutes <= NOTIFY_STEPS[0]!, atMax: state.notifyMinutes >= NOTIFY_STEPS[NOTIFY_STEPS.length - 1]! }) })}${listRow({ action: "request-push", disabled: !pushAvailable, title: "휴대폰 알림", hint: pushAvailable ? "Android 알림 권한 열기" : "휴대폰 알림 서비스가 아직 준비되지 않았어요", value: pushAvailable ? "설정" : "이용 불가" })}</section>
       ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p>${badge({ className: "admin-only-badge", label: "관리자 전용" })}</div><p class="settings-section-copy">회원 가입 권한은 관리자만 발급할 수 있어요.</p>${listRow({ action: "create-invite", disabled: this.inviteLoading, title: "회원 초대 코드", hint: "관리자만 만들 수 있는 일회용 가입 코드예요", trailing: this.inviteLoading ? '<em><span class="inline-spinner" aria-hidden="true"></span><span class="sr-only">만드는 중</span></em>' : undefined, value: "만들기 →" })}${this.invitePreview ? `<div class="invite-card"><p>코드는 이 화면을 닫으면 다시 볼 수 없어요. 가입할 분에게 바로 전달해 주세요. 띄어쓰기나 대소문자는 상관없어요.</p><code>${escapeHtml(this.invitePreview)}</code><div class="invite-actions">${button({ action: "copy-invite", label: "복사" })}${button({ variant: "ghost", action: "dismiss-invite", label: "닫기" })}</div></div>` : ""}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">앱</p>${listRow({ action: "theme", title: "화면 테마", hint: "시스템과 별도로 바꿀 수 있어요", value: this.theme === "dark" ? "다크" : "라이트" })}${listRow({ title: "앱 버전", hint: `서버 ${state.version}`, value: `v${appPackage.version}` })}</section>
@@ -1677,17 +1727,14 @@ ${agentHost(agent)}`;
       : connections.length
         ? connections.map((agent) => this.renderAgentRow(agent, repeated.has(agent.id))).join("")
         : emptyState({ compact: true, text: "아직 연결한 에이전트가 없어요." });
-    const howto = `<code class="agent-url">${escapeHtml(url)}</code>${button({ variant: "secondary", action: "copy-agent-url", label: "주소 복사" })}
-        <div class="agent-howto"><p><b>Claude Code</b> 터미널에서 이 명령을 실행한 뒤, Claude Code 에서 /mcp 를 열어 jari 를 고르고 인증을 시작해 주세요.</p><code class="agent-url">claude mcp add -s user --transport http jari ${escapeHtml(url)}</code>${button({ variant: "ghost", action: "copy-agent-command", label: "명령 복사" })}<p><b>claude.ai</b> 설정 → 커넥터 → 커스텀 커넥터 추가에서 위 주소를 넣고 연결을 눌러 주세요.</p><p>Claude Code 같은 에이전트는 감시·예약·취소 전에 먼저 물어봐요. 에이전트에 따라 묻지 않을 수도 있으니, 예약까지 맡기기는 필요할 때만 켜 주세요.</p></div>`;
-    const listSection = `<section class="settings-section agent-list"><p class="eyebrow">연결한 에이전트</p>${list}</section>`;
-    // 이미 연결이 있으면 안내와 목록을 먼저, 연결 방법은 접어 둬요.
-    const connected = Boolean(connections?.length);
-    const card = connected
-      ? `<details class="card agent-connect"><summary>에이전트에 이 주소를 넣어 주세요</summary>${howto}</details>`
-      : `<section class="card agent-connect"><h2>에이전트에 이 주소를 넣어 주세요</h2>${howto}</section>`;
-    const note = `<p class="card agent-note">에이전트(Claude Code 등)에서 MCP 주소로 연결하면 브라우저에서 자리났다 계정으로 로그인해 허용해요. 새 연결은 조회만 할 수 있고, 예약은 아래 목록에서 켜요.</p>`;
+    const commands = [
+      { id: "claude", name: "Claude Code", command: `claude mcp add -s user --transport http jari ${url}` },
+      { id: "codex", name: "Codex", command: `codex mcp add jari --url ${url}\ncodex mcp login jari` },
+    ];
+    const howto = commands.map(({ id, name, command }) => `<section data-agent-harness="${id}"><h3>${name}</h3><pre class="agent-url">${escapeHtml(command)}</pre>${button({ variant: "ghost", label: `${name} 명령 복사`, attrs: { "data-agent-command": id } })}</section>`).join("");
     return `${this.renderSubhead("AI 에이전트", "에이전트 연결")}
-      ${connected ? `${note}${listSection}${card}` : `${card}${note}${listSection}`}`;
+      <section class="card agent-connect">${howto}</section>
+      <section class="settings-section agent-list"><p class="eyebrow">연결한 에이전트</p>${list}</section>`;
   }
 
   private renderAgentRow(agent: AgentConnection, newest: boolean): string {
@@ -1721,12 +1768,13 @@ ${agentHost(agent)}`;
       <section class="auth-card"><p class="eyebrow">내 여행의 빈자리</p><h1>${title}</h1><p>${copy}</p>
         ${this.authNotice ? notice({ tone: "calm", className: "auth-notice", text: this.authNotice }) : ""}
         ${choosing ? `<div class="gate-list"><button class="gate-card" data-auth-gate="admin" type="button"><b>관리자</b><small>관리자 계정으로 로그인해요</small></button><button class="gate-card" data-auth-gate="guest" type="button"><b>초대 회원</b><small>로그인하거나 초대 코드로 가입해요</small></button><button class="gate-card trial" data-action="trial-enter" type="button"><b>체험하기</b><small>샘플 데이터로 모든 화면을 둘러봐요. 실제 예약되지 않아요</small></button></div>` : ""}
-        ${admin ? `<form id="auth-form" class="form-stack"><label class="field"><span>관리자 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label><label class="field"><span>관리자 비밀번호</span><input name="password" type="password" minlength="12" maxlength="128" autocomplete="current-password" required></label>${this.renderError()}${button({ type: "submit", label: "관리자 로그인", trailing: "→" })}</form>${button({ variant: "text", label: "로그인 방법 바꾸기", attrs: { "data-auth-gate": "choose" } })}` : ""}
+        ${this.googleEnabled && !register ? `${button({ variant: "secondary", action: "google-login", label: "구글로 로그인", disabled: this.googleFlow !== null })}<p class="muted google-hint">설정에서 구글 계정을 연결한 뒤 이용할 수 있어요.</p>${this.renderGooglePending()}${choosing ? this.renderError() : ""}` : ""}
+        ${admin ? `<form id="auth-form" class="form-stack"><label class="field"><span>관리자 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label><label class="field"><span>관리자 비밀번호</span><input name="password" type="password" minlength="8" maxlength="128" autocomplete="current-password" required></label>${this.renderError()}${button({ type: "submit", label: "관리자 로그인", trailing: "→" })}</form>${button({ variant: "text", label: "로그인 방법 바꾸기", attrs: { "data-auth-gate": "choose" } })}` : ""}
         ${this.authGate === "guest" ? `<div class="segmented"><button data-auth-mode="login" class="${register ? "" : "active"}" type="button">로그인</button><button data-auth-mode="register" class="${register ? "active" : ""}" type="button">처음 가입</button></div>
         <form id="auth-form" class="form-stack">
           <label class="field"><span>앱 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label>
-          <label class="field"><span>앱 비밀번호</span><input name="password" type="password" minlength="12" maxlength="128" autocomplete="${register ? "new-password" : "current-password"}" required></label>
-          ${register ? '<label class="field"><span>비밀번호 확인</span><input name="password_confirm" type="password" minlength="12" maxlength="128" autocomplete="new-password" required></label><label class="field"><span>초대 코드</span><input name="invite" maxlength="128" placeholder="예: apple river cloud" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" required></label>' : ""}
+          <label class="field"><span>앱 비밀번호</span><input name="password" type="password" minlength="8" maxlength="128" autocomplete="${register ? "new-password" : "current-password"}" required></label>
+          ${register ? '<label class="field"><span>비밀번호 확인</span><input name="password_confirm" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label><label class="field"><span>초대 코드</span><input name="invite" maxlength="128" placeholder="예: apple river cloud" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" required></label>' : ""}
           ${this.renderError()}
           ${button({ type: "submit", label: register ? "가입하고 시작하기" : "로그인", trailing: "→" })}
         </form>
@@ -1798,6 +1846,7 @@ ${agentHost(agent)}`;
     return `<dl class="activity-conditions">
       ${running.startedAt ? `<dt>시작</dt><dd>${escapeHtml(formatStamp(running.startedAt))}</dd>` : ""}
       <dt>출발</dt><dd>${escapeHtml(formatWindow(running))}</dd>
+      ${running.seatDirection && running.seatDirection !== "any" ? `<dt>방향</dt><dd>${running.seatDirection === "forward" ? "순방향" : "역방향"}</dd>` : ""}
       <dt>열차</dt><dd>${escapeHtml(running.trainTypeShow)} · ${trainCount ? `${trainCount}편 선택` : "시간대 전체"}</dd>
       ${trainRows.length ? `<dd class="activity-trains"><ul>${trainRows.join("")}</ul></dd>` : ""}
       <dt>좌석</dt><dd>${escapeHtml(seatLabels[running.specialInfoShow] ?? running.specialInfoShow)} · ${running.passengerCount}명${running.passengerCount > 1 ? ` · ${running.seatStrategy === "consecutive" ? "연속 좌석" : "랜덤 배치"}` : ""}</dd>
@@ -1851,6 +1900,7 @@ ${agentHost(agent)}`;
       unlimitedTime: data.has("unlimited_time"),
       trainType: value("train_type") === "2" ? "2" : "1",
       seatOption: this.draft.seatOption,
+      seatDirection: value("seat_grade_mode") === "specific" ? "any" : value("seat_direction") === "forward" ? "forward" : value("seat_direction") === "backward" ? "backward" : "any",
       passengerCount: this.draft.passengerCount,
       seatStrategy: data.has("seat_strategy")
         ? value("seat_strategy") === "2" ? "2" : "1"
@@ -1912,6 +1962,7 @@ ${agentHost(agent)}`;
         result.trains.some((train) => train.no === target.trainNo),
       );
       this.navigate("trains");
+      this.journeyDirty = false;
     });
   }
 
@@ -2084,7 +2135,7 @@ ${agentHost(agent)}`;
     const label = this.trainOptions.find((train) => train.no === trainNo)?.label || `열차 ${trainNo}`;
     const confirmed = await this.confirmSheet({
       title,
-      body: `${label} · ${SEAT_OPTIONS[conditions.seat_option]} · ${conditions.passenger_count}명`,
+      body: `${label} · ${SEAT_OPTIONS[conditions.seat_option]} · ${conditions.passenger_count}명${conditions.seat_direction === "forward" ? " · 순방향" : conditions.seat_direction === "backward" ? " · 역방향" : ""}`,
       confirmLabel,
     });
     if (!confirmed) return;
@@ -2348,9 +2399,7 @@ ${agentHost(agent)}`;
     if (error instanceof ApiError) {
       if (error.kind === "stale") return;
       if (error.kind === "auth") {
-        this.resetSession();
-        this.error = "로그인이 만료됐어요. 다시 로그인해 주세요.";
-        this.render();
+        this.expireSession();
         return;
       }
       if (error.kind === "offline") this.noteConnectionMiss();
@@ -2532,6 +2581,14 @@ ${agentHost(agent)}`;
       }
       return;
     }
+    if (button.dataset.agentCommand) {
+      const url = this.state?.agents?.mcpUrl ?? "";
+      const command = button.dataset.agentCommand === "codex"
+        ? `codex mcp add jari --url ${url}\ncodex mcp login jari`
+        : `claude mcp add -s user --transport http jari ${url}`;
+      this.copyText(command, "명령을 복사했어요.");
+      return;
+    }
     if (button.dataset.agentBooking) {
       void this.setAgentBooking(button.dataset.agentBooking);
       return;
@@ -2563,7 +2620,23 @@ ${agentHost(agent)}`;
       case "trial-exit":
         this.exitTrial();
         break;
+      case "google-login":
+        void this.beginGoogle("login");
+        break;
+      case "google-link":
+        void this.changeGoogleLink(false);
+        break;
+      case "google-unlink":
+        void this.changeGoogleLink(true);
+        break;
+      case "google-cancel":
+        void this.requestGoogleCancel();
+        break;
       case "new-journey":
+        if (this.journeyDirty) {
+          this.navigate("journey");
+          break;
+        }
         this.draft = conditionsToDraft(null);
         this.conditions = null;
         this.selectedTrains = [];
@@ -2679,12 +2752,6 @@ ${agentHost(agent)}`;
       case "rail-logout":
         void this.railLogout();
         break;
-      case "copy-agent-url":
-        this.copyText(this.state?.agents?.mcpUrl ?? "", "주소를 복사했어요.");
-        break;
-      case "copy-agent-command":
-        this.copyText(`claude mcp add -s user --transport http jari ${this.state?.agents?.mcpUrl ?? ""}`, "명령을 복사했어요.");
-        break;
       case "sheet-cancel":
         this.closeSheet(null);
         break;
@@ -2753,7 +2820,10 @@ ${agentHost(agent)}`;
 
   private syncJourneyDraft(): void {
     const form = this.root.querySelector<HTMLFormElement>("#conditions-form");
-    if (form) this.draft = this.readDraftFromForm(form);
+    if (form) {
+      this.draft = this.readDraftFromForm(form);
+      this.journeyDirty = true;
+    }
   }
 
   private onSubmit(event: Event): void {
@@ -2765,6 +2835,166 @@ ${agentHost(agent)}`;
       void this.submitAuth(form);
     } else if (form.id === "rail-form") {
       void this.submitRail(form);
+    }
+  }
+
+  private async loadGoogle(): Promise<void> {
+    if (this.demo) return;
+    const generation = this.generation;
+    try {
+      const result = this.state ? await this.api.googleStatus() : await this.api.googleConfiguration();
+      if (generation !== this.generation) return;
+      this.googleEnabled = result.enabled;
+      this.googleLinked = "linked" in result && result.linked === true;
+      this.render();
+    } catch {
+      // Older servers have no provider endpoint. Password login remains available.
+    }
+  }
+
+  private renderGooglePending(): string {
+    if (!this.googleFlow) return "";
+    if (this.googleFlow.cancelRequested) {
+      return `<div class="google-pending" role="status"><p>${escapeHtml(this.googleFlow.cancelError || "구글 로그인 취소를 확인하고 있어요.")}</p>${button({ variant: "text", action: "google-cancel", label: "구글 로그인 취소 다시 확인", disabled: this.googleFlow.cancelling === true })}</div>`;
+    }
+    return `<div class="google-pending" role="status"><p>구글 로그인 후 브라우저에 이 확인 코드를 입력해 주세요.</p><code class="google-code" data-google-code>${escapeHtml(this.googleFlow.verificationCode)}</code><p>이 앱에서 시작한 로그인에만 입력해 주세요.</p>${button({ variant: "text", action: "google-cancel", label: "구글 로그인 취소" })}</div>`;
+  }
+
+  private async requestGoogleCancel(): Promise<void> {
+    const flow = this.googleFlow;
+    if (!flow || flow.cancelling) return;
+    flow.cancelRequested = true;
+    flow.cancelling = true;
+    flow.cancelError = "";
+    if (this.googleTimer !== null) window.clearTimeout(this.googleTimer);
+    this.googleTimer = null;
+    this.render();
+    try {
+      const result = await this.liveApi.googleCancel(flow.ticket);
+      if (this.googleFlow !== flow) return;
+      if (!result.cancelled) throw new Error("Cancellation was not confirmed");
+      this.cancelGoogle(false);
+    } catch {
+      if (this.googleFlow !== flow) return;
+      flow.cancelError = "취소를 확인하지 못했어요. 연결을 확인한 뒤 다시 눌러 주세요.";
+    } finally {
+      flow.cancelling = false;
+      if (this.googleFlow === flow || this.googleFlow === null) this.render();
+    }
+  }
+
+  private cancelGoogle(abandon = true): void {
+    const ticket = this.googleFlow?.ticket;
+    if (this.googleTimer !== null) window.clearTimeout(this.googleTimer);
+    this.googleTimer = null;
+    this.googleFlow = null;
+    if (abandon && ticket) void this.liveApi.googleCancel(ticket).catch(() => undefined);
+  }
+
+  private async changeGoogleLink(unlink: boolean): Promise<void> {
+    if (this.googleFlow) return;
+    const generation = this.generation;
+    const password = await this.openSheet({
+      title: unlink ? "구글 계정 연결을 해제할까요?" : "구글 계정을 연결할까요?",
+      body: "본인 확인을 위해 앱 비밀번호를 입력해 주세요.",
+      content: '<label class="field"><span>앱 비밀번호</span><input id="sheet-password" type="password" maxlength="128" autocomplete="current-password" required></label>',
+      confirmLabel: unlink ? "연결 해제" : "구글 계정 선택",
+    });
+    if (generation !== this.generation || password === null) return;
+    if (!password) { this.error = "앱 비밀번호를 입력해 주세요."; this.render(); return; }
+    if (!unlink) { await this.beginGoogle("link", password); return; }
+    await this.run(async () => {
+      await this.api.googleUnlink(password);
+      if (generation !== this.generation) return;
+      this.googleLinked = false;
+      this.showToast("구글 계정 연결을 해제했어요.");
+    });
+  }
+
+  private async beginGoogle(purpose: "login" | "link", password = ""): Promise<void> {
+    if (!this.googleEnabled || this.googleFlow || this.busy) return;
+    const generation = this.generation;
+    this.error = "";
+    this.busy = true;
+    this.render();
+    try {
+      const result = purpose === "link" ? await this.api.googleLink(password) : await this.api.googleStart();
+      if (generation !== this.generation) return;
+      this.googleFlow = { ticket: result.ticket, verificationCode: result.verificationCode, expires: Date.now() + result.expiresIn * 1000, purpose, polling: false };
+      if (!this.options.onOpenExternal) throw new Error("구글 로그인을 열 수 없어요. 앱을 다시 열어 주세요.");
+      await this.options.onOpenExternal(result.authorizationUrl);
+      if (generation !== this.generation) return;
+      void this.pollGoogle();
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.cancelGoogle();
+      this.handleError(error);
+    } finally {
+      if (generation === this.generation) { this.busy = false; this.render(); }
+    }
+  }
+
+  private async pollGoogle(): Promise<void> {
+    const flow = this.googleFlow;
+    if (!flow || flow.polling || flow.cancelRequested) return;
+    if (this.googleTimer !== null) window.clearTimeout(this.googleTimer);
+    this.googleTimer = null;
+    if (Date.now() >= flow.expires) {
+      this.cancelGoogle();
+      this.error = "구글 로그인 시간이 지났어요. 다시 시작해 주세요.";
+      this.render();
+      return;
+    }
+    flow.polling = true;
+    try {
+      const result = await this.api.googlePoll(flow.ticket);
+      if (this.googleFlow !== flow || flow.cancelRequested) return;
+      if (result.status === "pending") {
+        this.googleTimer = window.setTimeout(() => void this.pollGoogle(), 2000);
+        return;
+      }
+      if (flow.purpose === "login" && "auth" in result && result.auth.token) {
+        const generation = this.generation;
+        this.cancelGoogle(false);
+        this.busy = true;
+        this.render();
+        try {
+          await this.options.onToken?.(result.auth.token);
+        } catch (error) {
+          void this.liveApi.googleCancel(flow.ticket).catch(() => undefined);
+          if (generation === this.generation) {
+            this.busy = false;
+            this.handleError(error);
+            this.render();
+          }
+          return;
+        }
+        if (generation !== this.generation) {
+          void this.liveApi.googleCancel(flow.ticket).catch(() => undefined);
+          return;
+        }
+        void this.liveApi.googleAcknowledge(flow.ticket).catch(() => undefined);
+        await this.start(true);
+      } else if (flow.purpose === "link" && "linked" in result && result.linked) {
+        this.cancelGoogle(false);
+        void this.liveApi.googleAcknowledge(flow.ticket).catch(() => undefined);
+        this.googleLinked = true;
+        this.showToast("구글 계정을 연결했어요.");
+        this.render();
+      } else {
+        throw new Error("구글 로그인을 완료하지 못했어요. 다시 시작해 주세요.");
+      }
+    } catch (error) {
+      if (this.googleFlow !== flow || flow.cancelRequested) return;
+      if (error instanceof ApiError && (error.kind === "offline" || error.kind === "timeout") && Date.now() < flow.expires) {
+        this.googleTimer = window.setTimeout(() => void this.pollGoogle(), 2000);
+        return;
+      }
+      this.cancelGoogle();
+      this.handleError(error);
+      this.render();
+    } finally {
+      flow.polling = false;
     }
   }
 

@@ -143,6 +143,9 @@ class BackgroundReservationProcess:
         # absent, which is how a search started before seats could be asked
         # for arrives - means any seat, the behaviour that predates this.
         self.seat_preference = SeatPreference.decode(sys.argv[12] if len(sys.argv) > 12 else None)
+        self.seat_direction = (
+            sys.argv[14] if len(sys.argv) > 14 and sys.argv[14] in {"009", "010"} else ""
+        )
         self.seat_plan: CancellationWaitPlan | None = self._seat_plan_from(stdin_seat_plan)
 
         # Parse train type
@@ -479,6 +482,7 @@ class BackgroundReservationProcess:
                     seat_strategy=self.seat_strategy,
                     train_numbers=self.train_numbers,
                     seat_preference=self.seat_preference,
+                    seat_direction=self.seat_direction,
                 )
             except requests.exceptions.RequestException as e:
                 logger.error(f"Network error during reservation: {e}")
@@ -1558,6 +1562,7 @@ class BackgroundReservationProcess:
                     option=self.reserve_option,
                     passenger_count=1,
                     seat_preference=self.seat_preference,
+                    seat_direction=self.seat_direction,
                 )
 
                 if reservation == "DUPLICATE":

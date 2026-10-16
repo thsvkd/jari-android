@@ -71,6 +71,25 @@ class IdentityStore:
                 CREATE TABLE IF NOT EXISTS rate_limits (
                     key TEXT PRIMARY KEY, expires REAL NOT NULL, count INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS google_identities (
+                    subject TEXT PRIMARY KEY,
+                    user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS google_flows (
+                    id TEXT PRIMARY KEY, proof_hash TEXT NOT NULL,
+                    state_hash TEXT UNIQUE NOT NULL, nonce TEXT NOT NULL,
+                    code_verifier TEXT NOT NULL,
+                    verification_hash TEXT NOT NULL,
+                    initiator_label TEXT NOT NULL, initiator_ip TEXT NOT NULL,
+                    mode TEXT NOT NULL, user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+                    session_hash TEXT, expires REAL NOT NULL,
+                    callback_used INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'pending', subject TEXT, error TEXT,
+                    confirmation_hash TEXT, confirmation_cookie_hash TEXT,
+                    confirmation_cookie_name TEXT, confirmation_attempts INTEGER NOT NULL DEFAULT 0,
+                    delivered_session_hash TEXT, delivered_link INTEGER NOT NULL DEFAULT 0
+                );
                 -- Agent connections (oauth.py). Secrets are kept as digests only, and deleting
                 -- a user cascades to its connections, their codes and their tokens.
                 CREATE TABLE IF NOT EXISTS oauth_clients (
@@ -137,8 +156,8 @@ class IdentityStore:
     def credentials(username, password):
         if not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_]{3,32}", username):
             raise AuthError("앱 아이디는 영문, 숫자, 밑줄로 3~32자까지 입력해 주세요.", 400)
-        if not isinstance(password, str) or not 12 <= len(password) <= 128:
-            raise AuthError("앱 비밀번호는 12~128자로 입력해 주세요.", 400)
+        if not isinstance(password, str) or not 8 <= len(password) <= 128:
+            raise AuthError("앱 비밀번호는 8~128자로 입력해 주세요.", 400)
         return username.lower()
 
     def register(self, username, password, invite):
@@ -318,6 +337,430 @@ class IdentityStore:
     def revoke(self, token):
         with self.connect() as db:
             db.execute("DELETE FROM sessions WHERE hash=?", (digest(token),))
+
+    def google_start(
+        self,
+        mode,
+        *,
+        user_id=None,
+        session_token=None,
+        initiator_label="알 수 없는 앱",
+        initiator_ip="알 수 없음",
+        ttl=300,
+    ):
+        """Create a provider flow whose selector and proof are both held only by the app."""
+        if mode not in {"login", "link"} or (mode == "link") != bool(user_id and session_token):
+            raise ValueError("Invalid Google flow")
+        selector = secrets.token_urlsafe(32)
+        proof = secrets.token_urlsafe(32)
+        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
+        code_verifier = secrets.token_urlsafe(48)
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        verification = "".join(secrets.choice(alphabet) for _ in range(8))
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM google_flows WHERE expires<=?", (self.clock(),))
+            if mode == "link":
+                session_hash = digest(session_token)
+                valid = db.execute(
+                    "SELECT 1 FROM sessions WHERE hash=? AND user_id=? AND expires>?",
+                    (session_hash, user_id, self.clock()),
+                ).fetchone()
+                if not valid:
+                    raise AuthError("로그인이 만료됐어요. 다시 로그인해 주세요.")
+            else:
+                session_hash = None
+            db.execute(
+                "INSERT INTO google_flows"
+                " (id, proof_hash, state_hash, nonce, code_verifier, verification_hash,"
+                " initiator_label, initiator_ip, mode, user_id, session_hash, expires)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    digest(selector),
+                    digest(proof),
+                    digest(state),
+                    nonce,
+                    code_verifier,
+                    digest(verification),
+                    initiator_label,
+                    initiator_ip,
+                    mode,
+                    user_id,
+                    session_hash,
+                    self.clock() + ttl,
+                ),
+            )
+        return {
+            "ticket": selector + "." + proof,
+            "state": state,
+            "nonce": nonce,
+            "codeVerifier": code_verifier,
+            "verificationCode": verification[:4] + "-" + verification[4:],
+            "expiresIn": ttl,
+        }
+
+    def google_take_callback(self, state):
+        """Consume callback state before contacting Google, making callback replay impossible."""
+        if not isinstance(state, str) or not 32 <= len(state) <= 128:
+            raise AuthError("Google 로그인 요청을 다시 시작해 주세요.", 400)
+        expired_session = False
+        result = None
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT google_flows.*, users.username FROM google_flows"
+                " LEFT JOIN users ON users.id=google_flows.user_id"
+                " WHERE state_hash=? AND expires>? AND callback_used=0",
+                (digest(state), self.clock()),
+            ).fetchone()
+            if row is None:
+                raise AuthError("Google 로그인 요청이 만료됐거나 이미 사용됐어요.", 400)
+            db.execute("UPDATE google_flows SET callback_used=1 WHERE id=?", (row["id"],))
+            if row["mode"] == "link":
+                valid = db.execute(
+                    "SELECT 1 FROM sessions WHERE hash=? AND user_id=? AND expires>?",
+                    (row["session_hash"], row["user_id"], self.clock()),
+                ).fetchone()
+                if not valid:
+                    db.execute(
+                        "UPDATE google_flows SET status='failed', error='session' WHERE id=?",
+                        (row["id"],),
+                    )
+                    expired_session = True
+            result = dict(row)
+        if expired_session:
+            raise AuthError("로그인이 만료됐어요. 다시 로그인해 주세요.", 403)
+        return result
+
+    def google_prepare_confirmation(self, flow_id, subject, *, secure_cookie=True):
+        if not isinstance(subject, str) or not 1 <= len(subject) <= 255:
+            raise AuthError("Google 계정 정보를 확인할 수 없어요.", 400)
+        confirmation = secrets.token_urlsafe(32)
+        cookie = secrets.token_urlsafe(32)
+        cookie_name = ("__Host-" if secure_cookie else "") + "jari_google_" + secrets.token_hex(6)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM google_flows WHERE id=? AND callback_used=1 AND status='pending'",
+                (flow_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if (
+                row["mode"] == "link"
+                and not db.execute(
+                    "SELECT 1 FROM sessions WHERE hash=? AND user_id=? AND expires>?",
+                    (row["session_hash"], row["user_id"], self.clock()),
+                ).fetchone()
+            ):
+                db.execute(
+                    "UPDATE google_flows SET status='failed', error='session' WHERE id=?",
+                    (flow_id,),
+                )
+                return False
+            if row["mode"] == "login":
+                account = db.execute(
+                    "SELECT users.id, users.username FROM google_identities"
+                    " JOIN users ON users.id=google_identities.user_id"
+                    " WHERE google_identities.subject=?",
+                    (subject,),
+                ).fetchone()
+                if account is None:
+                    db.execute(
+                        "UPDATE google_flows SET status='failed', error='unlinked' WHERE id=?",
+                        (flow_id,),
+                    )
+                    return {"error": "unlinked"}
+                account_id = account["id"]
+                account_username = account["username"]
+            else:
+                account = db.execute(
+                    "SELECT username FROM users WHERE id=?", (row["user_id"],)
+                ).fetchone()
+                if account is None:
+                    return False
+                account_id = row["user_id"]
+                account_username = account["username"]
+            changed = db.execute(
+                "UPDATE google_flows SET status='confirmation', subject=?,"
+                " user_id=?, confirmation_hash=?, confirmation_cookie_hash=?,"
+                " confirmation_cookie_name=?"
+                " WHERE id=? AND callback_used=1 AND status='pending'",
+                (
+                    subject,
+                    account_id,
+                    digest(confirmation),
+                    digest(cookie),
+                    cookie_name,
+                    flow_id,
+                ),
+            ).rowcount
+            return changed == 1 and {
+                "confirmation": confirmation,
+                "cookie": cookie,
+                "cookieName": cookie_name,
+                "username": account_username,
+                "initiatorLabel": row["initiator_label"],
+                "initiatorIp": row["initiator_ip"],
+            }
+
+    def google_fail_callback(self, flow_id):
+        with self.connect() as db:
+            db.execute(
+                "UPDATE google_flows SET status='failed', error='provider' WHERE id=?",
+                (flow_id,),
+            )
+
+    @staticmethod
+    def _google_ticket(ticket):
+        if not isinstance(ticket, str) or ticket.count(".") != 1:
+            raise AuthError("Google 로그인 요청을 다시 시작해 주세요.", 400)
+        selector, proof = ticket.split(".")
+        if not 32 <= len(selector) <= 128 or not 32 <= len(proof) <= 128:
+            raise AuthError("Google 로그인 요청을 다시 시작해 주세요.", 400)
+        return selector, proof
+
+    def google_poll(self, ticket):
+        """Atomically consume a completed flow; login sessions are born only here."""
+        selector, proof = self._google_ticket(ticket)
+        result = None
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM google_flows WHERE id=?", (digest(selector),)
+            ).fetchone()
+            if row is None or not secrets.compare_digest(row["proof_hash"], digest(proof)):
+                raise AuthError("Google 로그인 요청을 다시 시작해 주세요.", 400)
+            if row["expires"] <= self.clock():
+                db.execute("DELETE FROM google_flows WHERE id=?", (row["id"],))
+                result = {"error": "Google 로그인 요청이 만료됐어요.", "statusCode": 400}
+            elif row["status"] in {"pending", "confirmation"}:
+                return {"status": "pending"}
+            elif row["status"] == "failed":
+                db.execute("DELETE FROM google_flows WHERE id=?", (row["id"],))
+                result = {"error": "Google 로그인을 완료할 수 없어요.", "statusCode": 403}
+            elif row["status"] == "delivered":
+                result = {"error": "Google 로그인 결과가 이미 전달됐어요.", "statusCode": 400}
+            elif row["status"] == "cancelled":
+                result = {"error": "Google 로그인 요청이 취소됐어요.", "statusCode": 403}
+            elif row["mode"] == "link":
+                valid = db.execute(
+                    "SELECT 1 FROM sessions WHERE hash=? AND user_id=? AND expires>?",
+                    (row["session_hash"], row["user_id"], self.clock()),
+                ).fetchone()
+                if not valid:
+                    db.execute("DELETE FROM google_flows WHERE id=?", (row["id"],))
+                    result = {
+                        "error": "로그인이 만료됐어요. 다시 로그인해 주세요.",
+                        "statusCode": 403,
+                    }
+                else:
+                    try:
+                        db.execute(
+                            "INSERT INTO google_identities VALUES (?, ?, ?)",
+                            (row["subject"], row["user_id"], self.clock()),
+                        )
+                    except sqlite3.IntegrityError:
+                        result = {
+                            "error": "이 Google 계정 또는 앱 계정은 이미 연결되어 있어요.",
+                            "statusCode": 409,
+                        }
+                    if result is None:
+                        db.execute(
+                            "UPDATE google_flows SET status='delivered', delivered_link=1"
+                            " WHERE id=?",
+                            (row["id"],),
+                        )
+                        result = {"status": "complete", "linked": True}
+                    else:
+                        db.execute("DELETE FROM google_flows WHERE id=?", (row["id"],))
+            else:
+                user = db.execute(
+                    "SELECT users.* FROM google_identities"
+                    " JOIN users ON users.id=google_identities.user_id"
+                    " WHERE google_identities.subject=?",
+                    (row["subject"],),
+                ).fetchone()
+                if user is None:
+                    db.execute("DELETE FROM google_flows WHERE id=?", (row["id"],))
+                    result = {
+                        "error": "먼저 앱 설정에서 기존 계정에 Google 계정을 연결해 주세요.",
+                        "statusCode": 403,
+                    }
+                else:
+                    auth = self._session(db, user)
+                    db.execute(
+                        "UPDATE google_flows SET status='delivered', delivered_session_hash=?"
+                        " WHERE id=?",
+                        (digest(auth["token"]), row["id"]),
+                    )
+                    result = {"status": "complete", "auth": auth}
+        return result
+
+    @staticmethod
+    def _google_verification_code(value):
+        if not isinstance(value, str):
+            return None
+        normalized = value.replace("-", "").replace(" ", "").upper()
+        return normalized if re.fullmatch(r"[A-Z2-9]{8}", normalized) else None
+
+    def google_confirm(self, confirmation, cookies, verification_code):
+        if not isinstance(confirmation, str) or not 32 <= len(confirmation) <= 128:
+            return {"error": "Google 확인 요청을 다시 시작해 주세요.", "statusCode": 400}
+        normalized = self._google_verification_code(verification_code)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM google_flows WHERE confirmation_hash=? AND status='confirmation'",
+                (digest(confirmation),),
+            ).fetchone()
+            if row is None:
+                return {"error": "Google 확인 요청을 다시 시작해 주세요.", "statusCode": 400}
+            cookie = cookies.get(row["confirmation_cookie_name"])
+            if not isinstance(cookie, str) or not secrets.compare_digest(
+                row["confirmation_cookie_hash"], digest(cookie)
+            ):
+                return {"error": "이 브라우저의 Google 확인 요청이 아니에요.", "statusCode": 400}
+            if row["expires"] <= self.clock():
+                db.execute("DELETE FROM google_flows WHERE id=?", (row["id"],))
+                return {"error": "Google 로그인 요청이 만료됐어요.", "statusCode": 400}
+            if (
+                row["mode"] == "link"
+                and not db.execute(
+                    "SELECT 1 FROM sessions WHERE hash=? AND user_id=? AND expires>?",
+                    (row["session_hash"], row["user_id"], self.clock()),
+                ).fetchone()
+            ):
+                db.execute(
+                    "UPDATE google_flows SET status='failed', error='session' WHERE id=?",
+                    (row["id"],),
+                )
+                return {"error": "앱 로그인이 만료됐어요.", "statusCode": 403}
+            if row["confirmation_attempts"] >= 5:
+                return {"error": "확인 코드를 너무 많이 틀렸어요.", "statusCode": 429}
+            attempts = row["confirmation_attempts"] + 1
+            valid = normalized is not None and secrets.compare_digest(
+                row["verification_hash"], digest(normalized)
+            )
+            if not valid:
+                db.execute(
+                    "UPDATE google_flows SET confirmation_attempts=?, status=? WHERE id=?",
+                    (attempts, "failed" if attempts >= 5 else "confirmation", row["id"]),
+                )
+                return {
+                    "error": "앱에 표시된 확인 코드가 맞지 않아요.",
+                    "statusCode": 429 if attempts >= 5 else 403,
+                }
+            changed = db.execute(
+                "UPDATE google_flows SET status='complete', confirmation_attempts=?,"
+                " confirmation_hash=NULL, confirmation_cookie_hash=NULL"
+                " WHERE id=? AND status='confirmation'",
+                (attempts, row["id"]),
+            ).rowcount
+            return {"confirmed": changed == 1, "cookieName": row["confirmation_cookie_name"]}
+
+    def google_deny(self, confirmation, cookies):
+        if not isinstance(confirmation, str) or not 32 <= len(confirmation) <= 128:
+            return False
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM google_flows WHERE confirmation_hash=? AND status='confirmation'",
+                (digest(confirmation),),
+            ).fetchone()
+            if row is None:
+                return False
+            cookie = cookies.get(row["confirmation_cookie_name"])
+            if not isinstance(cookie, str) or not secrets.compare_digest(
+                row["confirmation_cookie_hash"], digest(cookie)
+            ):
+                return False
+            db.execute("DELETE FROM google_flows WHERE id=?", (row["id"],))
+            return row["confirmation_cookie_name"]
+
+    def google_cancel(self, ticket):
+        selector, proof = self._google_ticket(ticket)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM google_flows WHERE id=?", (digest(selector),)
+            ).fetchone()
+            if row is None or not secrets.compare_digest(row["proof_hash"], digest(proof)):
+                raise AuthError("Google 로그인 요청을 다시 시작해 주세요.", 400)
+            if row["expires"] <= self.clock():
+                db.execute("DELETE FROM google_flows WHERE id=?", (row["id"],))
+                return True
+            if row["status"] == "cancelled":
+                return True
+            if row["delivered_session_hash"]:
+                db.execute("DELETE FROM sessions WHERE hash=?", (row["delivered_session_hash"],))
+            if row["delivered_link"]:
+                db.execute(
+                    "DELETE FROM google_identities WHERE user_id=? AND subject=?",
+                    (row["user_id"], row["subject"]),
+                )
+            db.execute(
+                "UPDATE google_flows SET status='cancelled', subject=NULL, error=NULL,"
+                " confirmation_hash=NULL, confirmation_cookie_hash=NULL,"
+                " delivered_session_hash=NULL, delivered_link=0, callback_used=1 WHERE id=?",
+                (row["id"],),
+            )
+            return True
+
+    def google_acknowledge(self, ticket):
+        """Forget a delivered rollback receipt after the app persists its result."""
+        selector, proof = self._google_ticket(ticket)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT proof_hash, status FROM google_flows WHERE id=?", (digest(selector),)
+            ).fetchone()
+            if (
+                row is None
+                or not secrets.compare_digest(row["proof_hash"], digest(proof))
+                or row["status"] != "delivered"
+            ):
+                raise AuthError("Google 로그인 요청을 다시 시작해 주세요.", 400)
+            db.execute("DELETE FROM google_flows WHERE id=?", (digest(selector),))
+            return True
+
+    def google_link(self, user_id, subject):
+        """Link one subject to one existing account; used by the atomic flow and migrations/tests."""
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO google_identities VALUES (?, ?, ?)",
+                (subject, user_id, self.clock()),
+            )
+
+    def google_linked(self, subject):
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT user_id FROM google_identities WHERE subject=?", (subject,)
+            ).fetchone()
+        return row and row["user_id"]
+
+    def google_status(self, user_id):
+        with self.connect() as db:
+            return (
+                db.execute("SELECT 1 FROM google_identities WHERE user_id=?", (user_id,)).fetchone()
+                is not None
+            )
+
+    def google_unlink(self, user_id, *, keep_token=None):
+        with self.connect() as db:
+            db.execute("DELETE FROM google_flows WHERE user_id=?", (user_id,))
+            unlinked = (
+                db.execute("DELETE FROM google_identities WHERE user_id=?", (user_id,)).rowcount > 0
+            )
+            if keep_token:
+                db.execute(
+                    "DELETE FROM sessions WHERE user_id=? AND hash<>?",
+                    (user_id, digest(keep_token)),
+                )
+            else:
+                db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+            return unlinked
 
     def allow(self, key, limit, window):
         with self.connect() as db:

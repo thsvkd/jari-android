@@ -226,6 +226,7 @@ __all__ = [
     "KorailService",
     "SearchProgress",
     "SearchUnavailableError",
+    "direction_seat_att_cd",
     "location_seat_att_cd",
 ]
 
@@ -247,6 +248,17 @@ def location_seat_att_cd(preference: SeatPreference | None) -> str:
     return "000"
 
 
+def direction_seat_att_cd(direction: str | None) -> str:
+    """Return Korail's request code for the requested seat direction.
+
+    These are the documented request attributes (009/010), not the opaque
+    ``dir_seat_att_cd`` values returned by a seat inventory response.
+    """
+    if direction in {"009", "010"}:
+        return direction
+    return "000"
+
+
 class _TimedSession(requests.Session):
     """
     korail2 never passes a timeout, so a search loop that hits a Korail
@@ -263,13 +275,13 @@ class _TimedSession(requests.Session):
 
 
 @contextmanager
-def _ticket_reservation_seat_att(session, att_cd: str):
+def _ticket_reservation_seat_att(session, att_cd: str, direction_cd: str = "000"):
     """
     Slip txtSeatAttCd3 onto korail2's TicketReservation GET without copying
     the rest of the payload. korail2 hard-codes 000; wrapping the session
     for the one call is the same seam cancel_reservation already uses.
     """
-    if att_cd == "000":
+    if att_cd == "000" and direction_cd == "000":
         yield
         return
 
@@ -278,7 +290,12 @@ def _ticket_reservation_seat_att(session, att_cd: str):
     def get(url, *args, **kwargs):
         params = kwargs.get("params")
         if url == KORAIL_TICKETRESERVATION and isinstance(params, dict):
-            kwargs = {**kwargs, "params": {**params, "txtSeatAttCd3": att_cd}}
+            updated = {**params}
+            if att_cd != "000":
+                updated["txtSeatAttCd3"] = att_cd
+            if direction_cd != "000":
+                updated["txtSeatAttCd2"] = direction_cd
+            kwargs = {**kwargs, "params": updated}
         return original_get(url, *args, **kwargs)
 
     session.get = get
@@ -1467,6 +1484,7 @@ class KorailService(RailService):
         option: ReserveOption = ReserveOption.GENERAL_FIRST,
         passenger_count: int = 1,
         seat_preference: SeatPreference | None = None,
+        seat_direction: str = "",
     ):
         """
         Attempt to reserve a specific train.
@@ -1512,6 +1530,7 @@ class KorailService(RailService):
             # Create passenger list
             passengers = [AdultPassenger(passenger_count)]
             att_cd = location_seat_att_cd(seat_preference)
+            direction_cd = direction_seat_att_cd(seat_direction)
 
             logger.debug("🎫 Attempting reservation:")
             logger.debug(f"  Train: {train}")
@@ -1519,7 +1538,7 @@ class KorailService(RailService):
             logger.debug(f"  Passengers: {passenger_count}")
             logger.debug(f"  Seat att cd3: {att_cd}")
 
-            with _ticket_reservation_seat_att(self._korail_instance._session, att_cd):
+            with _ticket_reservation_seat_att(self._korail_instance._session, att_cd, direction_cd):
                 reservation = self._korail_instance.reserve(
                     train, passengers=passengers, option=option
                 )

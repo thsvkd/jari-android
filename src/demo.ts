@@ -130,6 +130,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     passengerCount: conditions.passenger_count,
     seatStrategy: conditions.seat_strategy === "1" ? "consecutive" : "random",
     seatPreference: conditions.seat_preference,
+    seatDirection: conditions.seat_direction ?? "any",
     selectedTrains: trains,
     // What the real server reads back from the worker's plan: seats picked on the first train, the rest taken whole.
     seatPlan: trains.length
@@ -183,6 +184,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
       notificationSettings: true,
       lastChecked: true,
       agents: true,
+      seatDirection: true,
     }),
     agents: { mcpUrl: "https://jari.example/mcp" },
     pushAvailable: false,
@@ -191,6 +193,14 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
   });
 
   return {
+    googleConfiguration: async () => ({ enabled: false }),
+    googleStatus: async () => ({ enabled: false, linked: false }),
+    googleStart: async () => { throw new Error("데모에서는 구글에 로그인하지 않아요."); },
+    googleLink: async () => { throw new Error("데모에서는 구글 계정을 연결하지 않아요."); },
+    googleUnlink: async () => ({ linked: false }),
+    googleAcknowledge: async () => ({ acknowledged: true }),
+    googleCancel: async () => ({ cancelled: true }),
+    googlePoll: async () => ({ status: "pending" }),
     registerApp: async (input) => auth(input.username, "member"),
     login: async (input) => auth(input.username, input.role ?? "member"),
     createInvite: async () => ({

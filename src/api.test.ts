@@ -378,3 +378,14 @@ describe("connection misses", () => {
     expect(store.size).toBe(0);
   });
 });
+
+it("refuses direction-constrained booking when an older server cannot enforce it", async () => {
+  const { buildConditions, conditionsToDraft } = await import("./model");
+  const tokenStorage = createSessionStorage({ read: async () => "session", write: async () => undefined, clear: async () => undefined });
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ capabilities: { korail: true } }));
+  const api = createHttpApi({ baseUrl: "https://jari.example", tokenStorage, fetcher });
+  await api.bootstrap();
+  const conditions = buildConditions({ ...conditionsToDraft(null), seatDirection: "backward" });
+  expect(() => api.search({ conditions, trains: ["00101"] })).toThrow("서버가 좌석 방향 지정을 지원하지 않아요");
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});

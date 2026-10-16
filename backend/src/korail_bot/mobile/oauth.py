@@ -567,7 +567,7 @@ def install(app, identity, public_url, on_connect=None):
             '<label>아이디<input name="username" autocomplete="username" autocapitalize="none"'
             f' spellcheck="false" maxlength="32" required value="{escape(username)}"></label>'
             '<label>비밀번호<input type="password" name="password" autocomplete="current-password"'
-            ' maxlength="128" required></label>'
+            ' minlength="8" maxlength="128" required></label>'
             '<button type="submit" name="decision" value="allow">로그인하고 허용</button>'
             '<button type="submit" name="decision" value="deny" formnovalidate>거절</button>'
             "</form>"

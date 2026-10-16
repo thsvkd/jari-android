@@ -97,6 +97,7 @@ class MiniAppSubmission:
     # or the fixed-width /start parameter - parses as asking for nothing in
     # particular rather than failing.
     seat_preference: str = ""
+    seat_direction: str = ""
     waitlist: bool = False
     seat_classes: tuple[str, ...] = ()
     seat_plan_json: str = ""
@@ -159,6 +160,10 @@ class MiniAppSubmission:
                 raise MiniAppDataError(error)
 
         seat_preference = SeatPreference.decode(cls._text(payload, "seat_preference")).encode()
+        direction = cls._text(payload, "seat_direction")
+        if direction not in {"", "any", "forward", "backward"}:
+            raise MiniAppDataError("좌석 방향을 확인해 주세요.")
+        seat_direction = {"": "", "any": "", "forward": "009", "backward": "010"}[direction]
         waitlist = payload.get("waitlist", False)
         if type(waitlist) is not bool:
             raise MiniAppDataError("예약 대기 신청 여부를 확인해 주세요.")
@@ -169,6 +174,10 @@ class MiniAppSubmission:
         ):
             raise MiniAppDataError("좌석 등급을 확인해 주세요.")
         seat_classes = tuple(dict.fromkeys(raw_classes))
+        if seat_direction and waitlist:
+            raise MiniAppDataError("코레일 예약 대기에서는 좌석 방향을 지정할 수 없어요.")
+        if seat_direction and seat_classes:
+            raise MiniAppDataError("지정 좌석 선택에서는 좌석 방향을 지정할 수 없어요.")
 
         seat_plan_json = ""
         raw_plan = payload.get("seat_plan")
@@ -181,6 +190,8 @@ class MiniAppSubmission:
                 raise MiniAppDataError("좌석 계획의 승객 수가 검색 인원과 달라요.")
             if waitlist:
                 raise MiniAppDataError("취소표 대기와 코레일 예약 대기를 함께 신청할 수 없어요.")
+            if seat_direction:
+                raise MiniAppDataError("지정 좌석 취소표 대기에서는 좌석 방향을 지정할 수 없어요.")
             seat_plan_json = plan.to_json()
 
         return cls(
@@ -194,6 +205,7 @@ class MiniAppSubmission:
             passenger_count=int(passenger),
             seat_strategy=seat_strategy,
             seat_preference=seat_preference,
+            seat_direction=seat_direction,
             waitlist=waitlist,
             seat_classes=seat_classes,
             seat_plan_json=seat_plan_json,
@@ -313,6 +325,9 @@ class MiniAppSubmission:
             "seatStrategy": strategy,
             "seatStrategyShow": strategy_display,
             "seatPreference": self.seat_preference,
+            "seatDirection": {"": "any", "009": "forward", "010": "backward"}.get(
+                self.seat_direction, "any"
+            ),
             "seatClasses": list(self.seat_classes),
             "seatPlan": self.seat_plan_json,
             "waitlist": self.waitlist,

@@ -612,7 +612,7 @@ describe("concept C application shell", () => {
     const password = root.querySelector<HTMLInputElement>("[name='password']")!;
     expect(username.maxLength).toBe(32);
     expect(username.pattern).toBe("[A-Za-z0-9_]{3,32}");
-    expect(password.minLength).toBe(12);
+    expect(password.minLength).toBe(8);
     expect(password.maxLength).toBe(128);
     root.querySelector<HTMLButtonElement>("[data-auth-mode='register']")?.click();
     const invite = root.querySelector<HTMLInputElement>("[name='invite']")!;
@@ -621,7 +621,7 @@ describe("concept C application shell", () => {
     expect(invite.getAttribute("autocapitalize")).toBe("off");
     expect(invite.getAttribute("spellcheck")).toBe("false");
     const confirm = root.querySelector<HTMLInputElement>("[name='password_confirm']")!;
-    expect([confirm.type, confirm.autocomplete, confirm.minLength, confirm.maxLength]).toEqual(["password", "new-password", 12, 128]);
+    expect([confirm.type, confirm.autocomplete, confirm.minLength, confirm.maxLength]).toEqual(["password", "new-password", 8, 128]);
     root.querySelector<HTMLButtonElement>("[data-auth-mode='login']")?.click();
     expect(root.querySelector("[name='password_confirm']")).toBeNull();
   });
@@ -721,6 +721,69 @@ describe("account isolation regressions", () => {
     pending.resolve(state);
     await first;
     expect(app).toMatchObject({ conditions: null, state: { draft: null } });
+  });
+});
+
+describe("booking draft login regressions", () => {
+  it("keeps an interrupted draft when post-login bootstrap fails until retry identifies the owner", async () => {
+    const demo = createDemoApi();
+    const state = { ...await demo.bootstrap(), draft: null };
+    const bootstrap = vi.fn().mockResolvedValueOnce(state).mockRejectedValueOnce(new ApiError("잠시 연결할 수 없어요.", 503)).mockResolvedValue(state);
+    const { app, root } = await mountLive({ bootstrap });
+    app.navigate("journey");
+    edit(root, "src_station", "광명");
+    edit(root, "dep_time", "13:00");
+    app.expireSession();
+    root.querySelector<HTMLButtonElement>("[data-auth-gate='guest']")!.click();
+    edit(root, "username", "tester"); edit(root, "password", "password8");
+    root.querySelector("#auth-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(root.querySelector("[data-action='reload']")).not.toBeNull());
+    root.querySelector<HTMLButtonElement>("[data-action='reload']")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".screen-journey")).not.toBeNull());
+    expect(root.querySelector<HTMLInputElement>("[name='src_station']")!.value).toBe("광명");
+    expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value).toBe("13:00");
+  });
+
+  it("resumes unsent journey fields from home after connecting a railway account", async () => {
+    const { app, root } = await mountLive();
+    root.querySelector<HTMLButtonElement>("[data-action='new-journey']")!.click();
+    edit(root, "src_station", "광명");
+    edit(root, "dst_station", "동대구");
+    edit(root, "dep_time", "13:00");
+    root.querySelector<HTMLButtonElement>("[data-action='passenger-plus']")!.click();
+    app.navigate("rail-account");
+    app.navigate("home");
+    root.querySelector<HTMLButtonElement>("[data-action='new-journey']")!.click();
+    expect(root.querySelector<HTMLInputElement>("[name='src_station']")!.value).toBe("광명");
+    expect(root.querySelector<HTMLInputElement>("[name='dst_station']")!.value).toBe("동대구");
+    expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value).toBe("13:00");
+    expect(root.textContent).toContain("2명");
+  });
+
+  it.each([true, false])("restores an expired draft only for its owner (same user: %s)", async (sameUser) => {
+    const demo = createDemoApi();
+    const state = await demo.bootstrap();
+    const originalId = state.user!.id;
+    const api = { ...demo, bootstrap: async () => ({ ...state, draft: null }) };
+    const root = document.createElement("div");
+    document.body.append(root);
+    const app = new JariApp(root, api, { demoMode: false });
+    mounted.push(app);
+    await app.start(true);
+    app.navigate("journey");
+    edit(root, "src_station", "광명");
+    edit(root, "dep_time", "13:00");
+    app.expireSession();
+    expect(root.querySelector(".auth-shell")).not.toBeNull();
+    state.user = { ...state.user!, id: sameUser ? originalId : "other-account" };
+    root.querySelector<HTMLButtonElement>("[data-auth-gate='guest']")!.click();
+    edit(root, "username", "tester");
+    edit(root, "password", "password8");
+    root.querySelector("#auth-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(root.querySelector(".screen-home, .screen-journey")).not.toBeNull());
+    if (!sameUser) app.navigate("journey");
+    expect(root.querySelector<HTMLInputElement>("[name='src_station']")!.value).toBe(sameUser ? "광명" : "서울");
+    if (sameUser) expect(root.querySelector<HTMLInputElement>("[name='dep_time']")!.value).toBe("13:00");
   });
 });
 
@@ -2245,6 +2308,8 @@ describe("체험하기", () => {
     mounted.push(app);
     await app.start(false);
 
+    expect(liveCalls).toEqual(["googleConfiguration"]);
+    liveCalls.length = 0;
     const gates = [...root.querySelectorAll<HTMLButtonElement>(".gate-card")];
     expect(gates.map((gate) => gate.querySelector("b")?.textContent)).toEqual(["관리자", "초대 회원", "체험하기"]);
     gates[2]!.click();

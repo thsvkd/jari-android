@@ -11,6 +11,7 @@ export interface Capabilities {
   push: boolean;
   lastChecked: boolean;
   agents: boolean;
+  seatDirection: boolean;
 }
 
 /** 사용자가 브라우저에서 허용한 에이전트 연결 하나. */
@@ -38,6 +39,15 @@ export interface AuthResult {
   expiresAt: string;
 }
 
+export interface GoogleAuthStart {
+  ticket: string;
+  authorizationUrl: string;
+  expiresIn: number;
+  verificationCode: string;
+}
+
+export type GoogleAuthPoll = { status: "pending" } | { status: "complete"; auth: AuthResult } | { status: "complete"; linked: true };
+
 export interface RailState {
   registered: boolean;
   stations: string[];
@@ -58,6 +68,7 @@ export interface Conditions {
   passenger_count: number;
   seat_strategy: "1" | "2";
   seat_preference: string;
+  seat_direction?: SeatDirection;
   waitlist?: boolean;
   trains?: string[];
   seat_classes?: SeatClass[];
@@ -75,6 +86,7 @@ export interface SearchDescription {
   passengerCount: number;
   seatStrategy: string;
   seatPreference: string;
+  seatDirection?: SeatDirection;
   selectedTrains: string[];
   /** 열차 번호별 "07:00→09:40 KTX". 검색을 시작할 때 서버가 적어 둬요. 옛 서버에는 없어요. */
   trainLabels?: Record<string, string>;
@@ -164,6 +176,7 @@ export interface TrainOption {
 }
 
 export type SeatClass = "general" | "special";
+export type SeatDirection = "any" | "forward" | "backward";
 export type SeatGradeMode = "any" | "specific";
 export type SeatSelectionMode = "immediate" | "wait";
 
@@ -281,6 +294,14 @@ export interface InviteResult {
 }
 
 export interface MobileApi {
+  googleConfiguration(): Promise<{ enabled: boolean }>;
+  googleStatus(): Promise<{ enabled: boolean; linked: boolean }>;
+  googleStart(): Promise<GoogleAuthStart>;
+  googleLink(password: string): Promise<GoogleAuthStart>;
+  googleUnlink(password: string): Promise<{ linked: false }>;
+  googleAcknowledge(ticket: string): Promise<{ acknowledged: boolean }>;
+  googleCancel(ticket: string): Promise<{ cancelled: boolean }>;
+  googlePoll(ticket: string): Promise<GoogleAuthPoll>;
   registerApp(input: { username: string; password: string; invite: string }): Promise<AuthResult>;
   login(input: { username: string; password: string; role?: AppRole }): Promise<AuthResult>;
   createInvite(input?: { ttlHours?: number }): Promise<InviteResult>;
