@@ -69,6 +69,13 @@ export type AppView =
   | "rail-account"
   | "agents";
 
+// The last browser handoff this phone handled; a spent one-time value, kept only to ignore its repeats.
+const LAST_GOOGLE_HANDOFF = "jari.google.lastHandoff";
+
+function readLastGoogleHandoff(): string {
+  try { return window.localStorage.getItem(LAST_GOOGLE_HANDOFF) ?? ""; } catch { return ""; }
+}
+
 interface AppOptions {
   demoMode: boolean;
   onToken?: (token: string) => Promise<void>;
@@ -76,6 +83,8 @@ interface AppOptions {
   onBootstrap?: (state: BootstrapState) => Promise<void> | void;
   onRequestPush?: () => Promise<void>;
   onOpenExternal?: (url: string) => Promise<void>;
+  /** The Android app can receive the browser's result directly, so Google sign-in needs no code. */
+  googleAppReturn?: boolean;
   onTheme?: (theme: "light" | "dark") => Promise<void> | void;
 }
 
@@ -284,8 +293,9 @@ export class JariApp {
   private draft: BookingDraft = conditionsToDraft(null);
   private googleEnabled = false;
   private googleLinked = false;
-  private googleFlow: { ticket: string; verificationCode: string; expires: number; purpose: "login" | "link"; polling: boolean; cancelRequested?: boolean; cancelling?: boolean; cancelError?: string } | null = null;
+  private googleFlow: { ticket: string; verificationCode?: string; handoff?: string; expires: number; purpose: "login" | "link"; polling: boolean; cancelRequested?: boolean; cancelling?: boolean; cancelError?: string } | null = null;
   private googleTimer: number | null = null;
+  private lastGoogleHandoff = readLastGoogleHandoff();
   private journeyDirty = false;
   private interruptedJourney: { userId: string; draft: BookingDraft } | null = null;
   private conditions: Conditions | null = null;
@@ -2918,6 +2928,9 @@ ${agentHost(agent)}`;
     if (this.googleFlow.cancelRequested) {
       return `<div class="google-pending" role="status"><p>${escapeHtml(this.googleFlow.cancelError || "구글 로그인 취소를 확인하고 있어요.")}</p>${button({ variant: "text", action: "google-cancel", label: "구글 로그인 취소 다시 확인", disabled: this.googleFlow.cancelling === true })}</div>`;
     }
+    if (!this.googleFlow.verificationCode) {
+      return `<div class="google-pending" role="status"><p>브라우저에서 구글 로그인을 마치면 이 앱으로 돌아와 완료돼요.</p><p>앱이 열리지 않으면 브라우저의 <strong>자리났다 앱 열기</strong>를 눌러 주세요.</p>${button({ variant: "text", action: "google-cancel", label: "구글 로그인 취소" })}</div>`;
+    }
     return `<div class="google-pending" role="status"><p>구글 로그인 후 브라우저에 이 확인 코드를 입력해 주세요.</p><code class="google-code" data-google-code>${escapeHtml(this.googleFlow.verificationCode)}</code><p>이 앱에서 시작한 로그인에만 입력해 주세요.</p>${button({ variant: "text", action: "google-cancel", label: "구글 로그인 취소" })}</div>`;
   }
 
@@ -2984,7 +2997,10 @@ ${agentHost(agent)}`;
     this.busy = true;
     this.render();
     try {
-      const result = purpose === "link" ? await this.api.googleLink() : await this.api.googleStart();
+      const appReturn = this.options.googleAppReturn === true;
+      const result = purpose === "link"
+        ? await (appReturn ? this.api.googleLink({ appReturn }) : this.api.googleLink())
+        : await (appReturn ? this.api.googleStart({ appReturn }) : this.api.googleStart());
       if (generation !== this.generation) return;
       this.googleFlow = { ticket: result.ticket, verificationCode: result.verificationCode, expires: Date.now() + result.expiresIn * 1000, purpose, polling: false };
       if (!this.options.onOpenExternal) throw new Error("구글 로그인을 열 수 없어요. 앱을 다시 열어 주세요.");
@@ -3000,6 +3016,29 @@ ${agentHost(agent)}`;
     }
   }
 
+  /**
+   * The browser came back to this app with the one-time value of a finished Google sign-in. It completes only the
+   * flow this app started: the server refuses a value from anyone else's sign-in link.
+   */
+  receiveGoogleHandoff(handoff: string): void {
+    // The browser page opens the app automatically and again by its button, an old browser tab can be tapped later, and
+    // Android replays the launch address when the app is reopened from recents. One value is handled once.
+    if (handoff === this.lastGoogleHandoff) return;
+    this.lastGoogleHandoff = handoff;
+    try { window.localStorage.setItem(LAST_GOOGLE_HANDOFF, handoff); } catch { /* best effort */ }
+    const flow = this.googleFlow;
+    if (!flow || flow.cancelRequested || flow.verificationCode) {
+      const message = "진행 중인 구글 로그인이 없어요. 앱에서 다시 시작해 주세요.";
+      // The sign-in screen has no toast; it shows errors in place.
+      if (this.state) this.showToast(message);
+      else this.error = message;
+      this.render();
+      return;
+    }
+    flow.handoff = handoff;
+    if (!flow.polling) void this.pollGoogle();
+  }
+
   private async pollGoogle(): Promise<void> {
     const flow = this.googleFlow;
     if (!flow || flow.polling || flow.cancelRequested) return;
@@ -3012,11 +3051,13 @@ ${agentHost(agent)}`;
       return;
     }
     flow.polling = true;
+    const handoff = flow.handoff;
     try {
-      const result = await this.api.googlePoll(flow.ticket);
+      const result = await this.api.googlePoll(flow.ticket, handoff);
       if (this.googleFlow !== flow || flow.cancelRequested) return;
       if (result.status === "pending") {
-        this.googleTimer = window.setTimeout(() => void this.pollGoogle(), 2000);
+        // A handoff that arrived while this poll was in flight goes out right away.
+        this.googleTimer = window.setTimeout(() => void this.pollGoogle(), flow.handoff !== handoff ? 0 : 2000);
         return;
       }
       if (flow.purpose === "login" && "auth" in result && result.auth.token) {

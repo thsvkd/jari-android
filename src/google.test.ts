@@ -5,7 +5,7 @@ import type { GoogleAuthPoll } from "./types";
 import { ApiError } from "./api";
 
 const mounted: JariApp[] = [];
-afterEach(() => { mounted.splice(0).forEach((app) => app.dispose()); vi.useRealTimers(); document.body.replaceChildren(); });
+afterEach(() => { mounted.splice(0).forEach((app) => app.dispose()); vi.useRealTimers(); document.body.replaceChildren(); window.localStorage.clear(); });
 
 it("opens Google externally and saves only the resulting app session", async () => {
   const demo = createDemoApi();
@@ -123,4 +123,111 @@ it("keeps cancellation retry visible when cancellation fails during an in-flight
   await vi.waitFor(() => expect(root.querySelector(".google-pending")).toBeNull());
   expect(googleCancel).toHaveBeenNthCalledWith(1, "proof");
   expect(googleCancel).toHaveBeenNthCalledWith(2, "proof");
+});
+
+const HANDOFF = "h".repeat(43);
+
+it("on Android signs in with no code once the browser hands the result back to this app", async () => {
+  const demo = createDemoApi();
+  const auth = await demo.login({ username: "friend", password: "password8" });
+  const onToken = vi.fn(async () => undefined);
+  const googleStart = vi.fn(async () => ({ ticket: "private-proof", authorizationUrl: "https://accounts.google.com/auth", expiresIn: 300 }));
+  const googlePoll = vi.fn(async (_ticket: string, handoff?: string): Promise<GoogleAuthPoll> => handoff === HANDOFF ? { status: "complete", auth } : { status: "pending" });
+  const googleAcknowledge = vi.fn(async () => ({ acknowledged: true }));
+  const root = document.createElement("div"); document.body.append(root);
+  const app = new JariApp(root, { ...demo, googleConfiguration: async () => ({ enabled: true }), googleStart, googlePoll, googleAcknowledge },
+    { demoMode: false, onToken, onOpenExternal: async () => undefined, googleAppReturn: true });
+  mounted.push(app);
+  await app.start(false);
+  root.querySelector<HTMLButtonElement>("[data-action='google-login']")!.click();
+  await vi.waitFor(() => expect(googlePoll).toHaveBeenCalledWith("private-proof", undefined));
+  expect(googleStart).toHaveBeenCalledWith({ appReturn: true });
+  expect(root.querySelector("[data-google-code]")).toBeNull();
+  expect(root.querySelector(".google-pending")?.textContent).toContain("자리났다 앱 열기");
+  expect(onToken).not.toHaveBeenCalled();
+
+  app.receiveGoogleHandoff(HANDOFF);
+  await vi.waitFor(() => expect(onToken).toHaveBeenCalledWith(auth.token));
+  expect(googlePoll).toHaveBeenLastCalledWith("private-proof", HANDOFF);
+  expect(googleAcknowledge).toHaveBeenCalledWith("private-proof");
+  await vi.waitFor(() => expect(root.querySelector(".screen-home")).not.toBeNull());
+  // The browser page may reopen the app with the same value; it is not a new sign-in.
+  app.receiveGoogleHandoff(HANDOFF);
+  expect(root.textContent).not.toContain("진행 중인 구글 로그인이 없어요");
+});
+
+it("sends a handoff that arrives during an in-flight poll right after it", async () => {
+  vi.useFakeTimers();
+  const demo = createDemoApi();
+  let answer!: (value: GoogleAuthPoll) => void;
+  const googlePoll = vi.fn((_ticket: string, handoff?: string) => handoff
+    ? Promise.resolve<GoogleAuthPoll>({ status: "complete", linked: true })
+    : new Promise<GoogleAuthPoll>((resolve) => { answer = resolve; }));
+  const googleLink = vi.fn(async () => ({ ticket: "link-proof", authorizationUrl: "https://accounts.google.com/auth", expiresIn: 300 }));
+  const root = document.createElement("div"); document.body.append(root);
+  const app = new JariApp(root, { ...demo, googleStatus: async () => ({ enabled: true, linked: false }), googleLink, googlePoll },
+    { demoMode: false, onOpenExternal: async () => undefined, googleAppReturn: true });
+  mounted.push(app);
+  await app.start(true);
+  app.navigate("settings");
+  root.querySelector<HTMLButtonElement>("[data-action='google-link']")!.click();
+  await vi.waitFor(() => expect(googlePoll).toHaveBeenCalledTimes(1));
+  expect(googleLink).toHaveBeenCalledWith({ appReturn: true });
+  app.receiveGoogleHandoff(HANDOFF);
+  expect(googlePoll).toHaveBeenCalledTimes(1);
+  answer({ status: "pending" });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(googlePoll).toHaveBeenLastCalledWith("link-proof", HANDOFF);
+  await vi.waitFor(() => expect(root.textContent).toContain("구글 계정을 연결했어요."));
+});
+
+it("refuses a handoff from someone else's sign-in link and says there is nothing to finish", async () => {
+  const demo = createDemoApi();
+  const onToken = vi.fn(async () => undefined);
+  const googleCancel = vi.fn(async () => ({ cancelled: true }));
+  const googlePoll = vi.fn(async (_ticket: string, handoff?: string): Promise<GoogleAuthPoll> => {
+    if (handoff) throw new ApiError("이 앱에서 시작한 구글 로그인이 아니에요. 다시 시작해 주세요.", 403, "server");
+    return { status: "pending" };
+  });
+  const root = document.createElement("div"); document.body.append(root);
+  const app = new JariApp(root, { ...demo, googleConfiguration: async () => ({ enabled: true }), googlePoll, googleCancel,
+    googleStart: async () => ({ ticket: "own-proof", authorizationUrl: "https://accounts.google.com/auth", expiresIn: 300 }),
+  }, { demoMode: false, onToken, onOpenExternal: async () => undefined, googleAppReturn: true });
+  mounted.push(app);
+  await app.start(false);
+
+  app.receiveGoogleHandoff(HANDOFF);
+  expect(root.textContent).toContain("진행 중인 구글 로그인이 없어요. 앱에서 다시 시작해 주세요.");
+  expect(googlePoll).not.toHaveBeenCalled();
+
+  // The same spent value again (the page's button, an old tab, a replayed launch) is not sent with a new flow.
+  root.querySelector<HTMLButtonElement>("[data-action='google-login']")!.click();
+  await vi.waitFor(() => expect(googlePoll).toHaveBeenCalledTimes(1));
+  app.receiveGoogleHandoff(HANDOFF);
+  await Promise.resolve();
+  expect(googlePoll).toHaveBeenCalledTimes(1);
+  expect(googlePoll).not.toHaveBeenCalledWith("own-proof", HANDOFF);
+  root.querySelector<HTMLButtonElement>("[data-action='google-cancel']")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".google-pending")).toBeNull());
+
+  root.querySelector<HTMLButtonElement>("[data-action='google-login']")!.click();
+  await vi.waitFor(() => expect(googlePoll).toHaveBeenCalledTimes(2));
+  app.receiveGoogleHandoff("o".repeat(43));
+  await vi.waitFor(() => expect(root.textContent).toContain("이 앱에서 시작한 구글 로그인이 아니에요."));
+  expect(root.querySelector(".google-pending")).toBeNull();
+  expect(onToken).not.toHaveBeenCalled();
+});
+
+it("keeps the browser code when the server predates the app return", async () => {
+  const demo = createDemoApi();
+  const root = document.createElement("div"); document.body.append(root);
+  const app = new JariApp(root, { ...demo, googleConfiguration: async () => ({ enabled: true }), googlePoll: async () => ({ status: "pending" }),
+    googleStart: async () => ({ ticket: "old-proof", authorizationUrl: "https://accounts.google.com/auth", expiresIn: 300, verificationCode: "ABCD-EFGH" }),
+  }, { demoMode: false, onOpenExternal: async () => undefined, googleAppReturn: true });
+  mounted.push(app);
+  await app.start(false);
+  root.querySelector<HTMLButtonElement>("[data-action='google-login']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-google-code]")?.textContent).toBe("ABCD-EFGH"));
+  app.receiveGoogleHandoff(HANDOFF);
+  expect(root.querySelector("[data-google-code]")?.textContent).toBe("ABCD-EFGH");
 });

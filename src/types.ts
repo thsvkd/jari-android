@@ -48,7 +48,8 @@ export interface GoogleAuthStart {
   ticket: string;
   authorizationUrl: string;
   expiresIn: number;
-  verificationCode: string;
+  /** Servers before the app-return flow (and browser builds) still ask for this code in the browser. */
+  verificationCode?: string;
 }
 
 export type GoogleAuthPoll = { status: "pending" } | { status: "complete"; auth: AuthResult } | { status: "complete"; linked: true };
@@ -295,12 +296,13 @@ export interface StatusResult {
 export interface MobileApi {
   googleConfiguration(): Promise<{ enabled: boolean }>;
   googleStatus(): Promise<{ enabled: boolean; linked: boolean; reauthenticationRequired?: boolean }>;
-  googleStart(): Promise<GoogleAuthStart>;
-  googleLink(): Promise<GoogleAuthStart>;
+  /** appReturn: the browser hands the result back to this app instead of asking for a code. */
+  googleStart(options?: { appReturn: boolean }): Promise<GoogleAuthStart>;
+  googleLink(options?: { appReturn: boolean }): Promise<GoogleAuthStart>;
   googleUnlink(password: string): Promise<{ linked: false }>;
   googleAcknowledge(ticket: string): Promise<{ acknowledged: boolean }>;
   googleCancel(ticket: string): Promise<{ cancelled: boolean }>;
-  googlePoll(ticket: string): Promise<GoogleAuthPoll>;
+  googlePoll(ticket: string, handoff?: string): Promise<GoogleAuthPoll>;
   registerApp(input: { username: string; password: string; applicationNote?: string }): Promise<AuthResult>;
   login(input: { username: string; password: string; role?: AppRole }): Promise<AuthResult>;
   users(): Promise<{ users: AppUser[] }>;

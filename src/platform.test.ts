@@ -16,7 +16,7 @@ vi.mock("@capacitor/core", () => ({
 }));
 
 vi.mock("@capacitor/app", () => ({
-  App: { addListener: vi.fn().mockResolvedValue({ remove: vi.fn() }) },
+  App: { addListener: vi.fn().mockResolvedValue({ remove: vi.fn() }), getLaunchUrl: vi.fn().mockResolvedValue(undefined) },
 }));
 
 vi.mock("@capacitor/push-notifications", () => {
@@ -41,8 +41,10 @@ import { ApiError } from "./api";
 import {
   awaitPushRegistration,
   clearToken,
+  googleHandoffFrom,
   initializePlatform,
   readToken,
+  watchGoogleReturn,
   writeToken,
 } from "./platform";
 
@@ -145,4 +147,49 @@ it("only opens the Google authorization origin in an external browser", async ()
   await openGoogleBrowser("https://accounts.google.com/o/oauth2/v2/auth?state=one-time");
   expect(open).toHaveBeenCalledWith("https://accounts.google.com/o/oauth2/v2/auth?state=one-time", "_blank");
   open.mockRestore();
+});
+
+const HANDOFF = "h".repeat(43);
+
+it("reads a Google handoff only from the app's own return address", () => {
+  expect(googleHandoffFrom(`dev.thsvkd.jari://google-auth?handoff=${HANDOFF}`)).toBe(HANDOFF);
+  expect(googleHandoffFrom(`dev.thsvkd.jari://other?handoff=${HANDOFF}`)).toBeNull();
+  expect(googleHandoffFrom(`https://google-auth/?handoff=${HANDOFF}`)).toBeNull();
+  expect(googleHandoffFrom(`evil.app://google-auth?handoff=${HANDOFF}`)).toBeNull();
+  expect(googleHandoffFrom("dev.thsvkd.jari://google-auth?handoff=short")).toBeNull();
+  expect(googleHandoffFrom("dev.thsvkd.jari://google-auth?handoff=" + "x".repeat(40) + "%3Cscript%3E")).toBeNull();
+  expect(googleHandoffFrom("not a url")).toBeNull();
+  expect(googleHandoffFrom(`dev.thsvkd.jari://google-auth/?other=1&handoff=${HANDOFF}#x`)).toBe(HANDOFF);
+});
+
+it("reads the handoff where an old WebView's URL parser leaves the host of a custom scheme empty", () => {
+  // Chromium before 130 (every Android 7 WebView) parsed dev.thsvkd.jari://google-auth as host "" and path "//google-auth".
+  const Standard = URL;
+  vi.stubGlobal("URL", class extends Standard { get host(): string { return ""; } get hostname(): string { return ""; } });
+  try {
+    expect(googleHandoffFrom(`dev.thsvkd.jari://google-auth?handoff=${HANDOFF}`)).toBe(HANDOFF);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("hands the browser's return to the app while running and at a cold launch", async () => {
+  const { App } = await import("@capacitor/app");
+  const onHandoff = vi.fn();
+  await watchGoogleReturn(onHandoff);
+  expect(App.addListener).not.toHaveBeenCalledWith("appUrlOpen", expect.anything());
+
+  nativePlatform.active = true;
+  try {
+    vi.mocked(App.getLaunchUrl).mockResolvedValueOnce({ url: `dev.thsvkd.jari://google-auth?handoff=${HANDOFF}` });
+    await watchGoogleReturn(onHandoff);
+    expect(onHandoff).toHaveBeenCalledWith(HANDOFF);
+    const calls = vi.mocked(App.addListener).mock.calls as unknown as [string, (event: { url: string }) => void][];
+    const listener = calls.find(([event]) => event === "appUrlOpen")![1];
+    listener({ url: "https://jari.thsvkd.dev/privacy" });
+    listener({ url: `dev.thsvkd.jari://google-auth?handoff=${"k".repeat(43)}` });
+    expect(onHandoff.mock.calls).toEqual([[HANDOFF], ["k".repeat(43)]]);
+  } finally {
+    nativePlatform.active = false;
+  }
 });

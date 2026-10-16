@@ -99,6 +99,28 @@ export async function openGoogleBrowser(raw: string): Promise<void> {
   popup.opener = null;
 }
 
+/** The browser's Google page reopens the app at dev.thsvkd.jari://google-auth?handoff=… (AndroidManifest.xml). */
+export function googleHandoffFrom(raw: string): string | null {
+  // Matched as text: WebViews before Chromium 130 (all of Android 7) leave URL.host empty for custom schemes.
+  const match = /^dev\.thsvkd\.jari:\/\/google-auth\/?\?([^#]*)/.exec(raw);
+  const handoff = match && new URLSearchParams(match[1]).get("handoff");
+  return handoff && /^[A-Za-z0-9_-]{32,128}$/.test(handoff) ? handoff : null;
+}
+
+/** Registered once for the life of the page, like watchForeground, so a return during a bootstrap is not lost. */
+export async function watchGoogleReturn(onHandoff: (handoff: string) => void): Promise<void> {
+  if (!isNative()) return;
+  const { App } = await import("@capacitor/app");
+  await App.addListener("appUrlOpen", ({ url }) => {
+    const handoff = googleHandoffFrom(url);
+    if (handoff) onHandoff(handoff);
+  });
+  // Android may have closed the app while the browser was open; the flow it started is gone, but say so.
+  const launch = await App.getLaunchUrl();
+  const handoff = launch && googleHandoffFrom(launch.url);
+  if (handoff) onHandoff(handoff);
+}
+
 // The app's theme is its own toggle, not the system's, so the status bar icons follow it here:
 // left to the OS they stay light and vanish against the light header. Edge-to-edge on Android 15
 // ignores background colours, so only the icon style is set.

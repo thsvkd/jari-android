@@ -13,6 +13,7 @@ import {
   openGoogleBrowser,
   readToken,
   watchForeground,
+  watchGoogleReturn,
   writeToken,
 } from "./platform";
 
@@ -70,11 +71,14 @@ async function launch(): Promise<void> {
       },
       onTheme: applyStatusBarStyle,
       onOpenExternal: openGoogleBrowser,
+      googleAppReturn: Capacitor.isNativePlatform(),
     });
 
     await watchForeground((foreground) => app?.setForeground(foreground));
     const authenticated = demoMode || Boolean(await session.read());
     await app.start(authenticated);
+    // A failure here must not replace the running app with the error page; Google sign-in then times out instead.
+    await watchGoogleReturn((handoff) => app?.receiveGoogleHandoff(handoff)).catch(() => undefined);
   } catch (error) {
     const message =
       error instanceof ApiError || error instanceof Error

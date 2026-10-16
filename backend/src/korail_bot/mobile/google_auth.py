@@ -10,7 +10,7 @@ import re
 import secrets
 import threading
 import time
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import requests
 from cryptography.exceptions import InvalidSignature
@@ -23,6 +23,12 @@ from korail_bot.mobile.pages import _STYLE
 
 CALLBACK_PATH = "/api/mobile/auth/google/callback"
 CONFIRM_PATH = "/api/mobile/auth/google/confirm"
+APP_MISSING_PATH = "/api/mobile/auth/google/app-missing"
+# The browser returns to the Android app through an intent addressed to this package only,
+# so another app claiming the same scheme cannot receive the handoff.
+ANDROID_PACKAGE = "dev.thsvkd.jari"
+APP_RETURN_SCHEME = "dev.thsvkd.jari"
+APP_RETURN_HOST = "google-auth"
 AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
@@ -41,6 +47,7 @@ input { padding: 10px 12px; border: 1px solid var(--line); background: var(--bg)
 .actions { display: grid; gap: 12px; }
 button { padding: 10px 14px; border: 1px solid var(--accent); background: var(--accent); color: white; font-weight: 700; cursor: pointer; }
 button[value="deny"] { background: transparent; color: var(--text); border-color: var(--line); }
+.app-return { display: flex; align-items: center; justify-content: center; min-height: 48px; margin-top: 20px; padding: 10px 14px; border-radius: 10px; background: var(--accent); color: white; font-weight: 700; text-decoration: none; }
 @media (min-width: 520px) { .actions { grid-template-columns: 1fr 1fr; } }
 """
 
@@ -200,7 +207,14 @@ def install(
     enabled = all(configured)
     redirect_uri = public_url + CALLBACK_PATH if enabled else None
 
-    def start(mode, *, user_id=None, session_token=None):
+    def app_return_url(handoff):
+        fallback = quote(public_url + APP_MISSING_PATH, safe="")
+        return (
+            f"intent://{APP_RETURN_HOST}?handoff={handoff}#Intent;scheme={APP_RETURN_SCHEME};"
+            f"package={ANDROID_PACKAGE};S.browser_fallback_url={fallback};end"
+        )
+
+    def start(mode, *, user_id=None, session_token=None, app_return=False):
         if not enabled:
             raise AuthError("Google 로그인이 서버에 설정되지 않았어요.", 503)
         client = request.headers.get("CF-Connecting-IP") or request.remote_addr or "unknown"
@@ -221,6 +235,7 @@ def install(
             initiator_label=initiator_label,
             initiator_ip=initiator_ip,
             ttl=300,
+            app_return=app_return,
         )
         code_challenge = (
             base64.urlsafe_b64encode(hashlib.sha256(flow["codeVerifier"].encode()).digest())
@@ -240,12 +255,15 @@ def install(
                 "code_challenge_method": "S256",
             }
         )
-        return {
+        result = {
             "ticket": flow["ticket"],
             "authorizationUrl": AUTHORIZE_URL + "?" + query,
             "expiresIn": flow["expiresIn"],
-            "verificationCode": flow["verificationCode"],
         }
+        # Earlier apps and the browser build still show the code; app-return flows have none.
+        if "verificationCode" in flow:
+            result["verificationCode"] = flow["verificationCode"]
+        return result
 
     def page(
         message,
@@ -255,9 +273,17 @@ def install(
         title="Google 로그인",
         initiator_label=None,
         initiator_ip=None,
+        app_url=None,
     ):
         nonce = secrets.token_urlsafe(16)
         form = ""
+        refresh = ""
+        if app_url:
+            escaped = html.escape(app_url, quote=True)
+            # Try once on arrival; the button below is the tap browsers may require to leave.
+            refresh = f'<meta http-equiv="refresh" content="0;url={escaped}">'
+            form = f'<a class="app-return" href="{escaped}">자리났다 앱 열기</a>'
+
         if confirmation:
             details = (
                 "<dl><dt>요청 앱</dt><dd>"
@@ -284,7 +310,8 @@ def install(
         response = Response(
             '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            "<title>"
+            + refresh
+            + "<title>"
             + html.escape(title)
             + " · 자리났다</title>"
             + f'<style nonce="{nonce}">{_STYLE}{_GOOGLE_PAGE_STYLE}</style>'
@@ -303,6 +330,7 @@ def install(
             "frame-ancestors 'none'; form-action 'self'"
         )
         response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.get("/api/mobile/auth/google")
@@ -311,8 +339,7 @@ def install(
 
     @app.post("/api/mobile/auth/google/start")
     def google_login_start():
-        body()
-        return jsonify(start("login"))
+        return jsonify(start("login", app_return=body().get("return") == "app"))
 
     @app.post("/api/mobile/auth/google/poll")
     def google_poll():
@@ -321,7 +348,7 @@ def install(
         client = request.headers.get("CF-Connecting-IP") or request.remote_addr or "unknown"
         limited("google-poll-ip:" + client, 600, 300)
         payload = body()
-        result = identity.google_poll(payload.get("ticket"))
+        result = identity.google_poll(payload.get("ticket"), payload.get("handoff"))
         if "error" in result:
             raise AuthError(result["error"], result["statusCode"])
         return jsonify(result)
@@ -372,9 +399,12 @@ def install(
             identity.google_fail_callback(flow["id"])
             app.logger.info("Google callback verification failed (%s)", type(exc).__name__)
             return page("Google 계정을 확인할 수 없어요. 앱으로 돌아가 다시 시도해 주세요.", 400)
-        confirmation = identity.google_prepare_confirmation(
-            flow["id"], claims["sub"], secure_cookie=public_url.startswith("https://")
-        )
+        if flow["app_return"]:
+            confirmation = identity.google_prepare_handoff(flow["id"], claims["sub"])
+        else:
+            confirmation = identity.google_prepare_confirmation(
+                flow["id"], claims["sub"], secure_cookie=public_url.startswith("https://")
+            )
         if not confirmation:
             return page(
                 "앱 로그인이 만료되었거나 연결 요청이 취소됐어요. 앱으로 돌아가 다시 시작해 주세요.",
@@ -384,6 +414,18 @@ def install(
             return page(
                 "먼저 자리났다 앱 설정에서 기존 계정에 이 Google 계정을 연결해 주세요.",
                 403,
+            )
+        if flow["app_return"]:
+            title = (
+                f"{confirmation['username']} 앱 계정에 Google 연결을 마무리해요"
+                if flow["mode"] == "link"
+                else f"{confirmation['username']} 계정으로 앱 로그인을 마무리해요"
+            )
+            return page(
+                "자리났다 앱이 열리면 자동으로 끝나요. 앱이 열리지 않으면 아래 버튼을 눌러 주세요. "
+                "구글 로그인을 시작한 이 휴대폰의 앱에서만 완료돼요.",
+                title=title,
+                app_url=app_return_url(confirmation["handoff"]),
             )
         if flow["mode"] == "link":
             response = page(
@@ -411,6 +453,14 @@ def install(
             path="/",
         )
         return response
+
+    @app.get(APP_MISSING_PATH)
+    def google_app_missing():
+        return page(
+            "이 브라우저에서는 자리났다 앱을 열 수 없어요. "
+            "구글 로그인을 시작한 휴대폰에서 다시 시도해 주세요.",
+            title="자리났다 앱을 열 수 없어요",
+        )
 
     @app.post(CONFIRM_PATH)
     def google_confirm():
@@ -455,7 +505,14 @@ def install(
     @authenticated
     def google_link():
         limited("google-link:" + g.user["id"], 5, 300)
-        return jsonify(start("link", user_id=g.user["id"], session_token=g.token))
+        return jsonify(
+            start(
+                "link",
+                user_id=g.user["id"],
+                session_token=g.token,
+                app_return=g.payload.get("return") == "app",
+            )
+        )
 
     @app.post("/api/mobile/account/google/unlink")
     @authenticated

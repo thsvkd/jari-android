@@ -26,10 +26,10 @@ def confirmation_token(response) -> str:
     return match.group(1)
 
 
-def start_link(client, headers) -> dict:
+def start_link(client, headers, *, app_return=False) -> dict:
     response = client.post(
         "/api/mobile/account/google/link",
-        json={"password": PASSWORD},
+        json={"return": "app"} if app_return else {},
         headers=headers,
     )
     if response.status_code != 200:
@@ -108,7 +108,18 @@ def render_pages() -> dict[str, str]:
         if denied.status_code != 200:
             raise AssertionError(f"Google 확인 거부 실패: {denied.status_code} {denied.text}")
 
+        app_return = callback(
+            client, start_link(client, headers, app_return=True), "google-layout-subject-3"
+        )
+        if 'href="intent://google-auth?handoff=' not in app_return.text:
+            raise AssertionError("앱 복귀 페이지에 앱 열기 링크가 없어요.")
+        app_missing = client.get(google_auth.APP_MISSING_PATH, base_url=PUBLIC_URL)
+        if app_missing.status_code != 200:
+            raise AssertionError(f"앱 없음 안내 실패: {app_missing.status_code} {app_missing.text}")
+
         return {
+            "appReturn": app_return.text,
+            "appMissing": app_missing.text,
             "confirmation": confirmation.text,
             "error": wrong.text,
             "success": success.text,

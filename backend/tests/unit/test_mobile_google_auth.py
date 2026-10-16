@@ -823,3 +823,232 @@ def test_browser_confirmation_allows_at_most_five_code_guesses(tmp_path, monkeyp
         ).status_code
         == 400
     )
+
+
+def handoff_from(response):
+    match = re.search(
+        r'href="intent://google-auth\?handoff=([A-Za-z0-9_-]+)#Intent;([^"]+)"', response.text
+    )
+    assert match
+    return match.group(1), match.group(2)
+
+
+def test_app_return_flow_has_no_code_and_finishes_only_with_the_browser_handoff(
+    tmp_path, monkeypatch
+):
+    identity, client = make_env(tmp_path)
+    session, headers = register(identity, client)
+    identity.google_link(session["user"]["id"], "google-subject-1")
+
+    start = client.post("/api/mobile/auth/google/start", json={"return": "app"}).json
+    assert "verificationCode" not in start
+    page = callback(client, start, monkeypatch)
+    assert page.status_code == 200
+    assert "확인 코드" not in page.text and "<form" not in page.text
+    assert "alice 계정으로 앱 로그인을 마무리해요" in page.text
+    assert page.headers["Cache-Control"] == "no-store"
+    handoff, intent = handoff_from(page)
+    # Only this package may receive the handoff; a phone without the app lands on a plain page.
+    assert "scheme=dev.thsvkd.jari;package=dev.thsvkd.jari;" in intent
+    assert (
+        "S.browser_fallback_url=https%3A%2F%2Fjari.example%2Fapi%2Fmobile%2Fauth%2Fgoogle%2Fapp-missing"
+        in intent
+    )
+    assert (
+        f'http-equiv="refresh" content="0;url=intent://google-auth?handoff={handoff}#Intent;'
+        in page.text
+    )
+    assert session["token"] not in page.text and start["ticket"] not in page.text
+
+    # The app that started the flow, polling with its ticket alone, keeps waiting.
+    assert client.post("/api/mobile/auth/google/poll", json={"ticket": start["ticket"]}).json == {
+        "status": "pending"
+    }
+    done = client.post(
+        "/api/mobile/auth/google/poll", json={"ticket": start["ticket"], "handoff": handoff}
+    )
+    assert done.status_code == 200
+    assert done.json["status"] == "complete"
+    assert identity.authenticate(done.json["auth"]["token"])["id"] == session["user"]["id"]
+    again = client.post(
+        "/api/mobile/auth/google/poll", json={"ticket": start["ticket"], "handoff": handoff}
+    )
+    assert again.status_code == 400
+
+
+def test_sent_sign_in_link_cannot_deliver_the_victims_session_to_the_sender(tmp_path, monkeypatch):
+    """The sender of a sign-in link holds the ticket; only the victim's phone sees the handoff."""
+    identity, client = make_env(tmp_path)
+    victim, _ = register(identity, client, "victim")
+    identity.google_link(victim["user"]["id"], "victim-subject")
+
+    attacker = client.post("/api/mobile/auth/google/start", json={"return": "app"}).json
+    handoff, _ = handoff_from(callback(client, attacker, monkeypatch, subject="victim-subject"))
+
+    for guess in (None, "x" * 43):
+        body = {"ticket": attacker["ticket"]} | ({"handoff": guess} if guess else {})
+        response = client.post("/api/mobile/auth/google/poll", json=body)
+        assert "auth" not in (response.json or {})
+
+    # The victim's own app receives the handoff, but it belongs to another flow: nothing is issued
+    # and the victim's waiting flow is dropped so the person starts again knowingly.
+    own = client.post("/api/mobile/auth/google/start", json={"return": "app"}).json
+    stolen = client.post(
+        "/api/mobile/auth/google/poll", json={"ticket": own["ticket"], "handoff": handoff}
+    )
+    assert stolen.status_code == 403
+    assert "이 앱에서 시작한 구글 로그인이 아니에요" in stolen.json["error"]
+    assert (
+        client.post("/api/mobile/auth/google/poll", json={"ticket": own["ticket"]}).status_code
+        == 400
+    )
+    db = sqlite3.connect(tmp_path / "identity.sqlite3")
+    try:
+        assert db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
+    finally:
+        db.close()
+
+
+def test_app_return_link_needs_the_handoff_and_cancel_clears_it(tmp_path, monkeypatch):
+    identity, client = make_env(tmp_path)
+    session, headers = register(identity, client)
+
+    start = client.post(
+        "/api/mobile/account/google/link", json={"return": "app"}, headers=headers
+    ).json
+    assert "verificationCode" not in start
+    page = callback(client, start, monkeypatch)
+    assert "alice 앱 계정에 Google 연결을 마무리해요" in page.text
+    handoff, _ = handoff_from(page)
+    assert client.post("/api/mobile/auth/google/poll", json={"ticket": start["ticket"]}).json == {
+        "status": "pending"
+    }
+    assert identity.google_linked("google-subject-1") is None
+    linked = client.post(
+        "/api/mobile/auth/google/poll", json={"ticket": start["ticket"], "handoff": handoff}
+    ).json
+    assert linked == {"status": "complete", "linked": True}
+    assert identity.google_linked("google-subject-1") == session["user"]["id"]
+
+    assert (
+        client.post("/api/mobile/auth/google/cancel", json={"ticket": start["ticket"]}).status_code
+        == 200
+    )
+    assert identity.google_linked("google-subject-1") is None
+
+    other = client.post(
+        "/api/mobile/account/google/link", json={"return": "app"}, headers=headers
+    ).json
+    other_handoff, _ = handoff_from(
+        callback(client, other, monkeypatch, subject="google-subject-2")
+    )
+    client.post("/api/mobile/auth/google/cancel", json={"ticket": other["ticket"]})
+    cancelled = client.post(
+        "/api/mobile/auth/google/poll", json={"ticket": other["ticket"], "handoff": other_handoff}
+    )
+    assert cancelled.status_code == 403
+    assert identity.google_linked("google-subject-2") is None
+
+
+def test_app_return_flow_reports_an_unlinked_account_and_refuses_the_code_page(
+    tmp_path, monkeypatch
+):
+    identity, client = make_env(tmp_path)
+    start = client.post("/api/mobile/auth/google/start", json={"return": "app"}).json
+    page = callback(client, start, monkeypatch, subject="nobody")
+    assert page.status_code == 403
+    assert "intent://" not in page.text
+    failed = client.post("/api/mobile/auth/google/poll", json={"ticket": start["ticket"]})
+    assert failed.status_code == 403
+
+    # An app-return flow can never become a code confirmation, and a code flow never a handoff.
+    session, _ = register(identity, client)
+    identity.google_link(session["user"]["id"], "linked")
+    flow = identity.google_start("login", app_return=True)
+    row = identity.google_take_callback(flow["state"])
+    assert identity.google_prepare_confirmation(row["id"], "linked") is False
+    assert identity.google_prepare_handoff(row["id"], "linked")["username"] == "alice"
+    code_flow = identity.google_start("login")
+    code_row = identity.google_take_callback(code_flow["state"])
+    assert identity.google_prepare_handoff(code_row["id"], "linked") is False
+    assert identity.google_prepare_confirmation(code_row["id"], "linked")["username"] == "alice"
+
+
+def test_app_missing_page_explains_where_to_finish(tmp_path):
+    _, client = make_env(tmp_path)
+    page = client.get("/api/mobile/auth/google/app-missing")
+    assert page.status_code == 200
+    assert "구글 로그인을 시작한 휴대폰에서 다시 시도해 주세요." in page.text
+
+
+def test_existing_identity_database_gains_app_return_columns(tmp_path):
+    path = tmp_path / "identity.sqlite3"
+    IdentityStore(path)
+    db = sqlite3.connect(path)
+    with db:
+        db.execute("DROP TABLE google_flows")
+        db.execute(
+            "CREATE TABLE google_flows (id TEXT PRIMARY KEY, proof_hash TEXT NOT NULL,"
+            " state_hash TEXT UNIQUE NOT NULL, nonce TEXT NOT NULL, code_verifier TEXT NOT NULL,"
+            " verification_hash TEXT NOT NULL, initiator_label TEXT NOT NULL,"
+            " initiator_ip TEXT NOT NULL, mode TEXT NOT NULL, user_id TEXT, session_hash TEXT,"
+            " expires REAL NOT NULL, callback_used INTEGER NOT NULL DEFAULT 0,"
+            " status TEXT NOT NULL DEFAULT 'pending', subject TEXT, error TEXT,"
+            " confirmation_hash TEXT, confirmation_cookie_hash TEXT,"
+            " confirmation_cookie_name TEXT, confirmation_attempts INTEGER NOT NULL DEFAULT 0,"
+            " delivered_session_hash TEXT, delivered_link INTEGER NOT NULL DEFAULT 0)"
+        )
+    db.close()
+    identity = IdentityStore(path)
+    flow = identity.google_start("login", app_return=True)
+    assert "verificationCode" not in flow
+
+
+def test_handoff_poll_edge_cases_never_issue_a_session(tmp_path, monkeypatch):
+    identity, client = make_env(tmp_path)
+    session, _ = register(identity, client)
+    identity.google_link(session["user"]["id"], "google-subject-1")
+    poll = "/api/mobile/auth/google/poll"
+
+    # A handoff against a code flow: the code flow is dropped, nothing is issued.
+    code = client.post("/api/mobile/auth/google/start", json={}).json
+    assert callback(client, code, monkeypatch).status_code == 200
+    refused = client.post(poll, json={"ticket": code["ticket"], "handoff": "x" * 43})
+    assert refused.status_code == 403
+    assert client.post(poll, json={"ticket": code["ticket"]}).status_code == 400
+
+    # Malformed handoffs are rejected before touching the flow.
+    flow = client.post("/api/mobile/auth/google/start", json={"return": "app"}).json
+    for bad in (123, "short", "y" * 129):
+        assert client.post(poll, json={"ticket": flow["ticket"], "handoff": bad}).status_code == 400
+    assert client.post(poll, json={"ticket": flow["ticket"]}).json == {"status": "pending"}
+
+    # Two finished app-return flows: each handoff opens only its own.
+    first = client.post("/api/mobile/auth/google/start", json={"return": "app"}).json
+    second = client.post("/api/mobile/auth/google/start", json={"return": "app"}).json
+    first_handoff, _ = handoff_from(callback(client, first, monkeypatch))
+    second_handoff, _ = handoff_from(callback(client, second, monkeypatch))
+    crossed = client.post(poll, json={"ticket": second["ticket"], "handoff": first_handoff})
+    assert crossed.status_code == 403
+    assert (
+        client.post(poll, json={"ticket": second["ticket"], "handoff": second_handoff}).status_code
+        == 400
+    )
+    assert (
+        "auth" in client.post(poll, json={"ticket": first["ticket"], "handoff": first_handoff}).json
+    )
+
+
+def test_expired_app_return_flow_cannot_be_finished_with_its_handoff(tmp_path, monkeypatch):
+    now = [1_000_000.0]
+    identity, client = make_env(tmp_path, clock=lambda: now[0])
+    session, _ = register(identity, client)
+    identity.google_link(session["user"]["id"], "google-subject-1")
+    start = client.post("/api/mobile/auth/google/start", json={"return": "app"}).json
+    handoff, _ = handoff_from(callback(client, start, monkeypatch))
+    now[0] += 301
+    expired = client.post(
+        "/api/mobile/auth/google/poll", json={"ticket": start["ticket"], "handoff": handoff}
+    )
+    assert expired.status_code == 400
+    assert "만료" in expired.json["error"]

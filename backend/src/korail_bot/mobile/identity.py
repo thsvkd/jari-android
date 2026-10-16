@@ -79,7 +79,8 @@ class IdentityStore:
                     status TEXT NOT NULL DEFAULT 'pending', subject TEXT, error TEXT,
                     confirmation_hash TEXT, confirmation_cookie_hash TEXT,
                     confirmation_cookie_name TEXT, confirmation_attempts INTEGER NOT NULL DEFAULT 0,
-                    delivered_session_hash TEXT, delivered_link INTEGER NOT NULL DEFAULT 0
+                    delivered_session_hash TEXT, delivered_link INTEGER NOT NULL DEFAULT 0,
+                    app_return INTEGER NOT NULL DEFAULT 0, handoff_hash TEXT
                 );
                 -- Agent connections (oauth.py). Secrets are kept as digests only, and deleting
                 -- a user cascades to its connections, their codes and their tokens.
@@ -122,6 +123,13 @@ class IdentityStore:
             session_columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)")}
             if "authenticated_at" not in session_columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN authenticated_at REAL")
+            flow_columns = {row[1] for row in db.execute("PRAGMA table_info(google_flows)")}
+            if "app_return" not in flow_columns:
+                db.execute(
+                    "ALTER TABLE google_flows ADD COLUMN app_return INTEGER NOT NULL DEFAULT 0"
+                )
+            if "handoff_hash" not in flow_columns:
+                db.execute("ALTER TABLE google_flows ADD COLUMN handoff_hash TEXT")
             db.execute("UPDATE users SET status='approved' WHERE role='admin'")
             db.execute("DROP TABLE IF EXISTS invites")
 
@@ -400,8 +408,14 @@ class IdentityStore:
         initiator_label="알 수 없는 앱",
         initiator_ip="알 수 없음",
         ttl=300,
+        app_return=False,
     ):
-        """Create a provider flow whose selector and proof are both held only by the app."""
+        """Create a provider flow whose selector and proof are both held only by the app.
+
+        With app_return the browser finishes by handing a one-time value back to the app on the
+        same phone, and only the app holding both the ticket and that value receives the result.
+        Without it the person types the app's verification code into the browser instead.
+        """
         if mode not in {"login", "link"} or (mode == "link") != bool(user_id and session_token):
             raise ValueError("Invalid Google flow")
         selector = secrets.token_urlsafe(32)
@@ -427,8 +441,9 @@ class IdentityStore:
             db.execute(
                 "INSERT INTO google_flows"
                 " (id, proof_hash, state_hash, nonce, code_verifier, verification_hash,"
-                " initiator_label, initiator_ip, mode, user_id, session_hash, expires)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " initiator_label, initiator_ip, mode, user_id, session_hash, expires,"
+                " app_return)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     digest(selector),
                     digest(proof),
@@ -442,16 +457,19 @@ class IdentityStore:
                     user_id,
                     session_hash,
                     self.clock() + ttl,
+                    int(bool(app_return)),
                 ),
             )
-        return {
+        result = {
             "ticket": selector + "." + proof,
             "state": state,
             "nonce": nonce,
             "codeVerifier": code_verifier,
-            "verificationCode": verification[:4] + "-" + verification[4:],
             "expiresIn": ttl,
         }
+        if not app_return:
+            result["verificationCode"] = verification[:4] + "-" + verification[4:]
+        return result
 
     def google_take_callback(self, state):
         """Consume callback state before contacting Google, making callback replay impossible."""
@@ -486,55 +504,58 @@ class IdentityStore:
             raise AuthError("로그인이 만료됐어요. 다시 로그인해 주세요.", 403)
         return result
 
-    def google_prepare_confirmation(self, flow_id, subject, *, secure_cookie=True):
+    def _google_callback_account(self, db, flow_id, subject, *, app_return):
+        """Return the pending flow and its account after the provider callback, or why not."""
         if not isinstance(subject, str) or not 1 <= len(subject) <= 255:
             raise AuthError("Google 계정 정보를 확인할 수 없어요.", 400)
+        row = db.execute(
+            "SELECT * FROM google_flows"
+            " WHERE id=? AND callback_used=1 AND status='pending' AND app_return=?",
+            (flow_id, int(app_return)),
+        ).fetchone()
+        if row is None:
+            return False
+        if (
+            row["mode"] == "link"
+            and not db.execute(
+                "SELECT 1 FROM sessions WHERE hash=? AND user_id=? AND expires>?",
+                (row["session_hash"], row["user_id"], self.clock()),
+            ).fetchone()
+        ):
+            db.execute(
+                "UPDATE google_flows SET status='failed', error='session' WHERE id=?",
+                (flow_id,),
+            )
+            return False
+        if row["mode"] == "login":
+            account = db.execute(
+                "SELECT users.id, users.username FROM google_identities"
+                " JOIN users ON users.id=google_identities.user_id"
+                " WHERE google_identities.subject=?",
+                (subject,),
+            ).fetchone()
+            if account is None:
+                db.execute(
+                    "UPDATE google_flows SET status='failed', error='unlinked' WHERE id=?",
+                    (flow_id,),
+                )
+                return {"error": "unlinked"}
+            return row, account["id"], account["username"]
+        account = db.execute("SELECT username FROM users WHERE id=?", (row["user_id"],)).fetchone()
+        if account is None:
+            return False
+        return row, row["user_id"], account["username"]
+
+    def google_prepare_confirmation(self, flow_id, subject, *, secure_cookie=True):
         confirmation = secrets.token_urlsafe(32)
         cookie = secrets.token_urlsafe(32)
         cookie_name = ("__Host-" if secure_cookie else "") + "jari_google_" + secrets.token_hex(6)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT * FROM google_flows WHERE id=? AND callback_used=1 AND status='pending'",
-                (flow_id,),
-            ).fetchone()
-            if row is None:
-                return False
-            if (
-                row["mode"] == "link"
-                and not db.execute(
-                    "SELECT 1 FROM sessions WHERE hash=? AND user_id=? AND expires>?",
-                    (row["session_hash"], row["user_id"], self.clock()),
-                ).fetchone()
-            ):
-                db.execute(
-                    "UPDATE google_flows SET status='failed', error='session' WHERE id=?",
-                    (flow_id,),
-                )
-                return False
-            if row["mode"] == "login":
-                account = db.execute(
-                    "SELECT users.id, users.username FROM google_identities"
-                    " JOIN users ON users.id=google_identities.user_id"
-                    " WHERE google_identities.subject=?",
-                    (subject,),
-                ).fetchone()
-                if account is None:
-                    db.execute(
-                        "UPDATE google_flows SET status='failed', error='unlinked' WHERE id=?",
-                        (flow_id,),
-                    )
-                    return {"error": "unlinked"}
-                account_id = account["id"]
-                account_username = account["username"]
-            else:
-                account = db.execute(
-                    "SELECT username FROM users WHERE id=?", (row["user_id"],)
-                ).fetchone()
-                if account is None:
-                    return False
-                account_id = row["user_id"]
-                account_username = account["username"]
+            found = self._google_callback_account(db, flow_id, subject, app_return=False)
+            if not isinstance(found, tuple):
+                return found
+            row, account_id, account_username = found
             changed = db.execute(
                 "UPDATE google_flows SET status='confirmation', subject=?,"
                 " user_id=?, confirmation_hash=?, confirmation_cookie_hash=?,"
@@ -558,6 +579,22 @@ class IdentityStore:
                 "initiatorIp": row["initiator_ip"],
             }
 
+    def google_prepare_handoff(self, flow_id, subject):
+        """Finish an app-return flow; the result waits for the app that also holds the handoff."""
+        handoff = secrets.token_urlsafe(32)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            found = self._google_callback_account(db, flow_id, subject, app_return=True)
+            if not isinstance(found, tuple):
+                return found
+            _, account_id, account_username = found
+            changed = db.execute(
+                "UPDATE google_flows SET status='complete', subject=?, user_id=?, handoff_hash=?"
+                " WHERE id=? AND callback_used=1 AND status='pending'",
+                (subject, account_id, digest(handoff), flow_id),
+            ).rowcount
+            return changed == 1 and {"handoff": handoff, "username": account_username}
+
     def google_fail_callback(self, flow_id):
         with self.connect() as db:
             db.execute(
@@ -574,9 +611,11 @@ class IdentityStore:
             raise AuthError("Google 로그인 요청을 다시 시작해 주세요.", 400)
         return selector, proof
 
-    def google_poll(self, ticket):
+    def google_poll(self, ticket, handoff=None):
         """Atomically consume a completed flow; login sessions are born only here."""
         selector, proof = self._google_ticket(ticket)
+        if handoff is not None and (not isinstance(handoff, str) or not 32 <= len(handoff) <= 128):
+            raise AuthError("Google 로그인 요청을 다시 시작해 주세요.", 400)
         result = None
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -585,10 +624,27 @@ class IdentityStore:
             ).fetchone()
             if row is None or not secrets.compare_digest(row["proof_hash"], digest(proof)):
                 raise AuthError("Google 로그인 요청을 다시 시작해 주세요.", 400)
+            handoff_status = row["status"] in {"pending", "confirmation", "complete"}
             if row["expires"] <= self.clock():
                 db.execute("DELETE FROM google_flows WHERE id=?", (row["id"],))
                 result = {"error": "Google 로그인 요청이 만료됐어요.", "statusCode": 400}
-            elif row["status"] in {"pending", "confirmation"}:
+            elif (
+                handoff is not None
+                and handoff_status
+                and not (
+                    row["handoff_hash"]
+                    and secrets.compare_digest(row["handoff_hash"], digest(handoff))
+                )
+            ):
+                # A handoff meant for another flow reached this app: someone else's sign-in link.
+                db.execute("DELETE FROM google_flows WHERE id=?", (row["id"],))
+                result = {
+                    "error": "이 앱에서 시작한 구글 로그인이 아니에요. 다시 시작해 주세요.",
+                    "statusCode": 403,
+                }
+            elif row["status"] in {"pending", "confirmation"} or (
+                row["status"] == "complete" and row["app_return"] and handoff is None
+            ):
                 return {"status": "pending"}
             elif row["status"] == "failed":
                 db.execute("DELETE FROM google_flows WHERE id=?", (row["id"],))
@@ -755,7 +811,7 @@ class IdentityStore:
                 )
             db.execute(
                 "UPDATE google_flows SET status='cancelled', subject=NULL, error=NULL,"
-                " confirmation_hash=NULL, confirmation_cookie_hash=NULL,"
+                " confirmation_hash=NULL, confirmation_cookie_hash=NULL, handoff_hash=NULL,"
                 " delivered_session_hash=NULL, delivered_link=0, callback_used=1 WHERE id=?",
                 (row["id"],),
             )
