@@ -132,9 +132,13 @@ test.describe("회원 승인", () => {
     await login(page, admin, true);
     await expect(page.locator(".screen-home")).toBeVisible();
     await page.locator(".bottom-nav [data-view='settings']").click();
+    await page.locator("[data-view='members']").click();
+    await expect(page.locator(`[data-member-id='${user.id}']`)).toContainText(user.username);
+    await page.locator(".screen-members [data-action='back']").click();
     await page.route("**/api/mobile/admin/users", (route) => route.fulfill({ status: 503, json: { error: "회원 목록을 불러올 수 없어요." } }));
     await page.locator("[data-view='members']").click();
     await expect(page.locator(".screen-members")).toContainText("회원 목록을 불러올 수 없어요.");
+    await expect(page.locator("[data-action='approve-member']")).toHaveCount(0);
     await expectCleanLayout(page, "회원 목록 조회 실패");
     await page.unroute("**/api/mobile/admin/users");
     await page.locator(".screen-members").getByRole("button", { name: /다시|새로/ }).click();

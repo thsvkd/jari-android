@@ -707,6 +707,25 @@ describe("concept C application shell", () => {
     expect(root.querySelector("[data-member-id='u<1']")?.textContent).toContain("승인됨");
   });
 
+  it("clears stale approval controls after a reload fails and recovers on retry", async () => {
+    const state = await createDemoApi().bootstrap();
+    state.user = { ...state.user!, role: "admin", status: "approved" };
+    const applicant = { id: "u1", username: "mint", role: "member" as const, status: "pending" as const, applicationNote: null, createdAt: null };
+    const users = vi.fn().mockResolvedValueOnce({ users: [applicant] })
+      .mockRejectedValueOnce(new Error("목록을 불러오지 못했어요"))
+      .mockResolvedValueOnce({ users: [{ ...applicant, status: "approved" }] });
+    const { app, root } = await mountLive({ bootstrap: async () => state, users });
+    app.navigate("members");
+    await vi.waitFor(() => expect(root.querySelector("[data-action='approve-member']")).not.toBeNull());
+    app.navigate("settings");
+    app.navigate("members");
+    await vi.waitFor(() => expect(root.querySelector("[data-action='reload-members']")).not.toBeNull());
+    expect(root.querySelector("[data-action='approve-member']")).toBeNull();
+    root.querySelector<HTMLButtonElement>("[data-action='reload-members']")!.click();
+    await vi.waitFor(() => expect(root.querySelector("[data-member-id='u1']")?.textContent).toContain("승인됨"));
+    expect(users).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps an approval decision when an older member-list reload finishes later", async () => {
     const state = await createDemoApi().bootstrap();
     state.user = { ...state.user!, role: "admin", status: "approved" };

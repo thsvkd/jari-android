@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { JariApp } from "./app";
 import { createDemoApi } from "./demo";
 import type { GoogleAuthPoll } from "./types";
+import { ApiError } from "./api";
 
 const mounted: JariApp[] = [];
 afterEach(() => { mounted.splice(0).forEach((app) => app.dispose()); vi.useRealTimers(); document.body.replaceChildren(); });
@@ -47,6 +48,60 @@ it("requires the local password before linking, then shows the linked status", a
   root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
   await vi.waitFor(() => expect(googleLink).toHaveBeenCalledWith("password8"));
   await vi.waitFor(() => expect(root.textContent).toContain("구글 계정 연결됨"));
+});
+
+it("links directly after recent authentication without asking for the local password", async () => {
+  const demo = createDemoApi();
+  const googleLink = vi.fn(async () => ({ ticket: "recent-proof", authorizationUrl: "https://accounts.google.com/auth", expiresIn: 300, verificationCode: "ABCD-EFGH" }));
+  const root = document.createElement("div"); document.body.append(root);
+  const app = new JariApp(root, { ...demo,
+    googleStatus: async () => ({ enabled: true, linked: false, reauthenticationRequired: false }),
+    googleLink, googlePoll: async () => ({ status: "pending" as const }),
+  }, { demoMode: false, onOpenExternal: async () => undefined });
+  mounted.push(app);
+  await app.start(true);
+  app.navigate("settings");
+  root.querySelector<HTMLButtonElement>("[data-action='google-link']")!.click();
+  await vi.waitFor(() => expect(googleLink).toHaveBeenCalledWith());
+  expect(root.querySelector("#sheet-password")).toBeNull();
+  await vi.waitFor(() => expect(root.querySelector("[data-google-code]")?.textContent).toBe("ABCD-EFGH"));
+});
+
+it("asks for the password when the server says recent authentication expired", async () => {
+  const demo = createDemoApi();
+  const googleLink = vi.fn()
+    .mockRejectedValueOnce(new ApiError("비밀번호를 다시 확인해 주세요.", 403, "server", "reauthentication_required"))
+    .mockResolvedValue({ ticket: "verified-proof", authorizationUrl: "https://accounts.google.com/auth", expiresIn: 300, verificationCode: "ABCD-EFGH" });
+  const root = document.createElement("div"); document.body.append(root);
+  const app = new JariApp(root, { ...demo,
+    googleStatus: async () => ({ enabled: true, linked: false, reauthenticationRequired: false }),
+    googleLink, googlePoll: async () => ({ status: "pending" as const }),
+  }, { demoMode: false, onOpenExternal: async () => undefined });
+  mounted.push(app);
+  await app.start(true);
+  app.navigate("settings");
+  root.querySelector<HTMLButtonElement>("[data-action='google-link']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("#sheet-password")).not.toBeNull());
+  expect(googleLink).toHaveBeenCalledTimes(1);
+  root.querySelector<HTMLInputElement>("#sheet-password")!.value = "password8";
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+  await vi.waitFor(() => expect(googleLink).toHaveBeenNthCalledWith(2, "password8"));
+  await vi.waitFor(() => expect(root.querySelector("[data-google-code]")?.textContent).toBe("ABCD-EFGH"));
+});
+
+it("still asks for the password before unlinking a recently authenticated account", async () => {
+  const demo = createDemoApi();
+  const googleUnlink = vi.fn(async () => ({ linked: false as const }));
+  const root = document.createElement("div"); document.body.append(root);
+  const app = new JariApp(root, { ...demo,
+    googleStatus: async () => ({ enabled: true, linked: true, reauthenticationRequired: false }), googleUnlink,
+  }, { demoMode: false });
+  mounted.push(app);
+  await app.start(true);
+  app.navigate("settings");
+  root.querySelector<HTMLButtonElement>("[data-action='google-unlink']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("#sheet-password")).not.toBeNull());
+  expect(googleUnlink).not.toHaveBeenCalled();
 });
 
 it("keeps cancellation retry visible when cancellation fails during an in-flight login", async () => {

@@ -27,12 +27,14 @@ export type ApiErrorKind = "auth" | "offline" | "timeout" | "server" | "configur
 export class ApiError extends Error {
   readonly status: number;
   readonly kind: ApiErrorKind;
+  readonly code?: string;
 
-  constructor(message: string, status: number, kind: ApiErrorKind = "server") {
+  constructor(message: string, status: number, kind: ApiErrorKind = "server", code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.kind = kind;
+    this.code = code;
   }
 }
 
@@ -261,9 +263,9 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
     // Only once the session has proven good: an upload answered 401 would expire it a second time.
     if (response.ok && authenticated && path !== "/diagnostics") void uploadMisses();
 
-    let payload: { error?: unknown } = {};
+    let payload: { error?: unknown; code?: unknown } = {};
     try {
-      payload = (JSON.parse(text) ?? {}) as { error?: unknown };
+      payload = (JSON.parse(text) ?? {}) as { error?: unknown; code?: unknown };
     } catch {
       // Not JSON (an empty body, a proxy page); the status still says what happened.
     }
@@ -274,16 +276,16 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
         const expired = await options.tokenStorage.expire(token!, generation, options.onAuthExpired);
         throw new ApiError(message, response.status, expired ? "auth" : "stale");
       }
-      throw new ApiError(message, response.status, "server");
+      throw new ApiError(message, response.status, "server", typeof payload.code === "string" ? payload.code : undefined);
     }
     return payload as T;
   }
 
   return {
     googleConfiguration: () => request<{ enabled: boolean }>("/auth/google", { method: "GET", authenticated: false, timeoutMs: 10_000 }),
-    googleStatus: () => request<{ enabled: boolean; linked: boolean }>("/account/google", { method: "GET" }),
+    googleStatus: () => request<{ enabled: boolean; linked: boolean; reauthenticationRequired?: boolean }>("/account/google", { method: "GET" }),
     googleStart: () => request<GoogleAuthStart>("/auth/google/start", { body: {}, authenticated: false, timeoutMs: 10_000 }),
-    googleLink: (password) => request<GoogleAuthStart>("/account/google/link", { body: { password }, timeoutMs: 10_000 }),
+    googleLink: (password) => request<GoogleAuthStart>("/account/google/link", { body: password === undefined ? {} : { password }, timeoutMs: 10_000 }),
     googleUnlink: (password) => request<{ linked: false }>("/account/google/unlink", { body: { password } }),
     googleAcknowledge: (ticket) => request<{ acknowledged: boolean }>("/auth/google/ack", { body: { ticket }, authenticated: false, timeoutMs: 10_000 }),
     googleCancel: (ticket) => request<{ cancelled: boolean }>("/auth/google/cancel", { body: { ticket }, authenticated: false, timeoutMs: 10_000 }),

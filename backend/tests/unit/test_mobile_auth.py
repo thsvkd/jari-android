@@ -108,6 +108,38 @@ def test_admin_login_is_separate_from_members(tmp_path):
         store.login("thsvkd", "a long admin passphrase", expected_role="admin")
 
 
+def test_ensure_admin_never_promotes_an_existing_member(tmp_path):
+    store = IdentityStore(tmp_path / "identity.sqlite3")
+    member = store.register("alice", "a long secure passphrase")
+
+    with pytest.raises(AuthError, match="이미 일반 회원") as error:
+        store.ensure_admin("alice", "a replacement admin passphrase")
+
+    assert error.value.status == 409
+    assert store.authenticate(member["token"])["role"] == "member"
+    assert store.authenticate(member["token"])["status"] == "pending"
+    assert store.login("alice", "a long secure passphrase")["user"]["role"] == "member"
+
+
+def test_resetting_admin_password_revokes_its_existing_sessions(tmp_path):
+    store = IdentityStore(tmp_path / "identity.sqlite3")
+    store.ensure_admin("operator", "a long admin passphrase")
+    old_session = store.login("operator", "a long admin passphrase", expected_role="admin")
+
+    store.ensure_admin("operator", "a replaced admin passphrase")
+
+    with pytest.raises(AuthError, match="로그인이 만료"):
+        store.authenticate(old_session["token"])
+    with pytest.raises(AuthError):
+        store.login("operator", "a long admin passphrase", expected_role="admin")
+    assert (
+        store.login("operator", "a replaced admin passphrase", expected_role="admin")["user"][
+            "role"
+        ]
+        == "admin"
+    )
+
+
 def test_existing_users_are_migrated_to_approved_without_inventing_created_at(tmp_path):
     path = tmp_path / "identity.sqlite3"
     token = "old-session-" + "x" * 32

@@ -1,6 +1,7 @@
 """SQLite identities and opaque sessions, independent of Telegram and Redis."""
 
 import hashlib
+import math
 import os
 import re
 import secrets
@@ -57,7 +58,7 @@ class IdentityStore:
                 );
                 CREATE TABLE IF NOT EXISTS sessions (
                     hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
-                    expires REAL NOT NULL
+                    expires REAL NOT NULL, authenticated_at REAL
                 );
                 CREATE TABLE IF NOT EXISTS rate_limits (
                     key TEXT PRIMARY KEY, expires REAL NOT NULL, count INTEGER NOT NULL
@@ -119,6 +120,9 @@ class IdentityStore:
                 db.execute("ALTER TABLE users ADD COLUMN application_note TEXT")
             if "created" not in columns:
                 db.execute("ALTER TABLE users ADD COLUMN created REAL")
+            session_columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)")}
+            if "authenticated_at" not in session_columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN authenticated_at REAL")
             db.execute("UPDATE users SET status='approved' WHERE role='admin'")
             db.execute("DROP TABLE IF EXISTS invites")
 
@@ -186,10 +190,13 @@ class IdentityStore:
             db.execute("BEGIN IMMEDIATE")
             existing = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
             if existing:
+                if existing["role"] != "admin":
+                    raise AuthError("이미 일반 회원이 사용 중인 앱 아이디예요.", 409)
                 db.execute(
-                    "UPDATE users SET password_hash=?, role='admin', status='approved' WHERE id=?",
+                    "UPDATE users SET password_hash=?, status='approved' WHERE id=?",
                     (hashed, existing["id"]),
                 )
+                db.execute("DELETE FROM sessions WHERE user_id=?", (existing["id"],))
                 return {"id": existing["id"], "username": username, "role": "admin"}
             user = {
                 "id": "mobile_" + secrets.token_hex(16),
@@ -237,7 +244,10 @@ class IdentityStore:
         token = secrets.token_urlsafe(32)
         expires = self.clock() + self.session_ttl
         db.execute("DELETE FROM sessions WHERE expires<=?", (self.clock(),))
-        db.execute("INSERT INTO sessions VALUES (?, ?, ?)", (digest(token), user["id"], expires))
+        db.execute(
+            "INSERT INTO sessions (hash, user_id, expires, authenticated_at) VALUES (?, ?, ?, ?)",
+            (digest(token), user["id"], expires, self.clock()),
+        )
         return {
             "token": token,
             "user": self._public_user(user),
@@ -293,6 +303,42 @@ class IdentityStore:
             user = db.execute("SELECT password_hash FROM users WHERE id=?", (user_id,)).fetchone()
         valid = check_password_hash(user["password_hash"] if user else _DUMMY_HASH, password)
         return user is not None and valid
+
+    def session_requires_reauthentication(self, user_id, token, *, max_age=600):
+        """Whether this exact live session lacks a recent primary authentication."""
+        if not isinstance(token, str):
+            return True
+        now = self.clock()
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT authenticated_at FROM sessions WHERE hash=? AND user_id=? AND expires>?",
+                (digest(token), user_id, now),
+            ).fetchone()
+        if row is None:
+            return True
+        authenticated_at = row["authenticated_at"]
+        if (
+            not isinstance(authenticated_at, int | float)
+            or isinstance(authenticated_at, bool)
+            or not math.isfinite(authenticated_at)
+        ):
+            return True
+        age = now - authenticated_at
+        return not 0 <= age < max_age
+
+    def reauthenticate_session(self, user_id, token, password):
+        """Verify the local password and refresh only the current live session."""
+        if not self.check_password(user_id, password):
+            return False
+        now = self.clock()
+        with self.connect() as db:
+            changed = db.execute(
+                "UPDATE sessions SET authenticated_at=? WHERE hash=? AND user_id=? AND expires>?",
+                (now, digest(token), user_id, now),
+            ).rowcount
+        if changed != 1:
+            raise AuthError("로그인이 만료됐어요. 다시 로그인해 주세요.")
+        return True
 
     def find_user(self, username):
         """The account as authenticate() returns it, by app ID; None if there is none."""

@@ -64,6 +64,14 @@ describe("mobile API authentication boundary", () => {
     expect(expired).toHaveBeenCalledOnce();
   });
 
+  it("starts recent Google linking without a password and preserves a reauthentication challenge", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ error: "본인 확인이 필요해요.", code: "reauthentication_required" }, 403));
+    const api = createHttpApi({ baseUrl: "https://jari.example", tokenStorage, fetcher });
+    await expect(api.googleLink()).rejects.toMatchObject({ status: 403, code: "reauthentication_required" });
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({});
+    expect(cleared).toBe(0);
+  });
+
   it("distinguishes an offline request from an empty railway result", async () => {
     const api = createHttpApi({
       baseUrl: "https://jari.example",

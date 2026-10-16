@@ -294,9 +294,9 @@ export interface StatusResult {
 
 export interface MobileApi {
   googleConfiguration(): Promise<{ enabled: boolean }>;
-  googleStatus(): Promise<{ enabled: boolean; linked: boolean }>;
+  googleStatus(): Promise<{ enabled: boolean; linked: boolean; reauthenticationRequired?: boolean }>;
   googleStart(): Promise<GoogleAuthStart>;
-  googleLink(password: string): Promise<GoogleAuthStart>;
+  googleLink(password?: string): Promise<GoogleAuthStart>;
   googleUnlink(password: string): Promise<{ linked: false }>;
   googleAcknowledge(ticket: string): Promise<{ acknowledged: boolean }>;
   googleCancel(ticket: string): Promise<{ cancelled: boolean }>;
