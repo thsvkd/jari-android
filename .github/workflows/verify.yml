@@ -114,10 +114,7 @@ jobs:
           # 실패하면 에뮬레이터가 꺼지기 전에 WebView·앱이 왜 죽었는지 남겨요(에뮬레이터가 아예 사라졌는지도 adb devices 로 봐요).
           # 기기가 사라지면 adb 가 기기를 끝없이 기다려 잡이 시간 제한으로 취소되고 기록도 못 올려요. 명령마다 60초로 끊어요.
           script: |
-            adb shell input keyevent KEYCODE_WAKEUP
-            adb shell svc power stayon true
-            adb shell wm dismiss-keyguard
-            adb shell input keyevent 82
+            node scripts/wait-emulator-ready.mjs
             node scripts/verify.mjs --ci --device --only=에뮬레이터 || { mkdir -p test-results; timeout 60 adb devices -l > test-results/adb-devices.txt 2>&1; timeout 60 adb logcat -d -b crash > test-results/logcat-crash.txt 2>&1; timeout 60 adb logcat -d -v time | grep -iE "chromium|webview|sandboxed_process|lowmemorykiller|am_kill|has died|Fatal|ANR|dev\.thsvkd\.jari" | tail -n 600 > test-results/logcat-webview.txt 2>&1; exit 1; }
       # adb 에 에뮬레이터가 없으면 앱·테스트 실패가 아니라 에뮬레이터가 사라진 거예요. 이 경우에만 한 번 재실행해요(AGENTS.md).
       - name: 에뮬레이터 사라짐 판정
@@ -180,10 +177,7 @@ jobs:
           # 실패하면 에뮬레이터가 꺼지기 전에 WebView·앱이 왜 죽었는지 남겨요(에뮬레이터가 아예 사라졌는지도 adb devices 로 봐요).
           # 기기가 사라지면 adb 가 기기를 끝없이 기다려 잡이 시간 제한으로 취소되고 기록도 못 올려요. 명령마다 60초로 끊어요.
           script: |
-            adb shell input keyevent KEYCODE_WAKEUP
-            adb shell svc power stayon true
-            adb shell wm dismiss-keyguard
-            adb shell input keyevent 82
+            node scripts/wait-emulator-ready.mjs
             JARI_DEVICE_WHEEL=1 node scripts/verify.mjs --ci --device --only=에뮬레이터 || { mkdir -p test-results; timeout 60 adb devices -l > test-results/adb-devices.txt 2>&1; timeout 60 adb logcat -d -b crash > test-results/logcat-crash.txt 2>&1; timeout 60 adb logcat -d -v time | grep -iE "chromium|webview|sandboxed_process|lowmemorykiller|am_kill|has died|Fatal|ANR|dev\.thsvkd\.jari" | tail -n 600 > test-results/logcat-webview.txt 2>&1; exit 1; }
       # adb 에 에뮬레이터가 없으면 앱·테스트 실패가 아니라 에뮬레이터가 사라진 거예요. 이 경우에만 한 번 재실행해요(AGENTS.md).
       - name: 에뮬레이터 사라짐 판정
