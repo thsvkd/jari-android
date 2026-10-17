@@ -1,11 +1,13 @@
 import { expect, test, signIn } from "./fixtures";
 import { expectCleanLayout } from "./layout";
 
-test("설정에서 앱 업데이트 미지원 상태를 정확히 알려요 @layout", async ({ signedIn: page }) => {
+test("설정에서 앱 업데이트 미지원 상태를 정확히 알려요 @layout", async ({ signedIn: page }, testInfo) => {
   await page.locator(".bottom-nav [data-view='settings']").click();
   const row = page.locator("[data-action='update-check']");
   await expect(row).toBeDisabled();
-  await expect(row).toContainText("이 환경에서는 앱 내 업데이트를 사용할 수 없어요");
+  await expect(row).toContainText(testInfo.project.name === "device"
+    ? "직접 설치용 업데이트 서버가 설정되지 않았어요."
+    : "이 환경에서는 앱 내 업데이트를 사용할 수 없어요");
   await expect(row).not.toContainText("최신 버전이에요");
   await expectCleanLayout(page, "설정(앱 업데이트 미지원)");
 });

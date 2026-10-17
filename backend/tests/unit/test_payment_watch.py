@@ -66,10 +66,13 @@ def _run_with_ticking_clock(process, outcome_count, monkeypatch):
     base = utc_now()
     # A fake clock advanced only by the loop's own sleep, so each pass
     # through the loop advances one tick - no real delay, and the deadline
-    # is reached after exactly `outcome_count` ticks.
+    # is reached after exactly `outcome_count` ticks. Replace only this
+    # module's clock; other threads (including the test guard) use real sleep.
     ticks = {"n": 0}
     monkeypatch.setattr(
-        telebotBackProcess.time, "sleep", lambda *_: ticks.__setitem__("n", ticks["n"] + 1)
+        telebotBackProcess,
+        "time",
+        SimpleNamespace(sleep=lambda *_: ticks.__setitem__("n", ticks["n"] + 1)),
     )
     monkeypatch.setattr(telebotBackProcess, "utc_now", lambda: base + timedelta(seconds=ticks["n"]))
     process._payment_deadline = Mock(return_value=base + timedelta(seconds=outcome_count - 0.5))

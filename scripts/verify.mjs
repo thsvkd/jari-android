@@ -141,7 +141,10 @@ function prepareDevice() {
   run("npm run build", { env: { VITE_API_BASE_URL: `http://127.0.0.1:${E2E_API_PORT}` } });
   run("npx cap sync android");
   // 경로를 적어요. NoDefaultCurrentDirectoryInExePath 가 켜진 셸에서는 cmd 가 현재 폴더의 gradlew.bat 을 찾지 않아요.
-  run(`${process.platform === "win32" ? ".\\gradlew.bat" : "./gradlew"} testDebugUnitTest testReleaseUnitTest assembleDebug -PjariNoFirebase`, { cwd: join(ROOT, "android") });
+  run(`${process.platform === "win32" ? ".\\gradlew.bat" : "./gradlew"} testDebugUnitTest testReleaseUnitTest assembleDebug -PjariNoFirebase`, {
+    cwd: join(ROOT, "android"),
+    env: { JARI_APK_UPDATE_MANIFEST_URL: "", JARI_APK_UPDATE_PUBLIC_KEY: "" },
+  });
   // CI 에서는 테스트 내내 놀고 있을 Gradle 데몬(-Xmx1536m)을 내려 에뮬레이터 곁의 자원을 비워요. 이 Mac 에서는 다음 실행이 다시 써요.
   // (에뮬레이터가 말없이 꺼진 일이 있어 넣었지만 러너 메모리는 넉넉했어요(16GB 중 10GB 남음). 원인으로 확인된 것은 아니에요.)
   if (CI) run("./gradlew --stop", { cwd: join(ROOT, "android") });
