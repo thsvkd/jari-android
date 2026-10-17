@@ -288,7 +288,7 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
     googleLink: (options) => request<GoogleAuthStart>("/account/google/link", { body: options?.appReturn ? { return: "app" } : {}, timeoutMs: 10_000 }),
     googleUnlink: async () => {
       const result = await request<{ linked: false; signedOut?: boolean }>("/account/google/unlink", { body: {} });
-      // A session Google signed in ends with the link; drop the token that now names nothing.
+      // Older servers can still revoke the caller; only discard a token they explicitly ended.
       if (result.signedOut) await options.tokenStorage.clear();
       return result;
     },

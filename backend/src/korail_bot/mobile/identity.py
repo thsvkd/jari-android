@@ -861,9 +861,10 @@ class IdentityStore:
 
     def google_unlink(self, user_id, token):
         """
-        Remove the Google sign-in and the sessions it may have handed out. A session that came from Google
-        ends too: otherwise whoever holds the Google account could unlink first and keep their own way in
-        while signing the owner out everywhere else. With nothing linked, no session is touched.
+        Remove the Google sign-in and keep only the phone that requested it.
+
+        The caller becomes a local session because every account has an app password. Other sessions end,
+        including ones previously handed out by Google. With nothing linked, no session is touched.
         """
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -873,18 +874,13 @@ class IdentityStore:
             )
             if not unlinked:
                 return {"linked": False, "signedOut": False}
-            caller = db.execute(
-                "SELECT via_google FROM sessions WHERE hash=? AND user_id=?",
-                (digest(token), user_id),
-            ).fetchone()
-            signed_out = bool(caller and caller["via_google"])
-            if signed_out:
-                db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
-            else:
-                db.execute(
-                    "DELETE FROM sessions WHERE user_id=? AND hash<>?", (user_id, digest(token))
-                )
-            return {"linked": False, "signedOut": signed_out}
+            caller_hash = digest(token)
+            db.execute(
+                "UPDATE sessions SET via_google=0 WHERE user_id=? AND hash=?",
+                (user_id, caller_hash),
+            )
+            db.execute("DELETE FROM sessions WHERE user_id=? AND hash<>?", (user_id, caller_hash))
+            return {"linked": False, "signedOut": False}
 
     def allow(self, key, limit, window):
         with self.connect() as db:

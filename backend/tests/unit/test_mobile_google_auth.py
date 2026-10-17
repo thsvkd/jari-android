@@ -804,11 +804,12 @@ def test_unlink_revokes_other_sessions_but_keeps_the_caller(tmp_path, monkeypatc
         identity.authenticate(google["token"])
 
 
-def test_unlink_from_a_google_session_signs_that_session_out_too(tmp_path, monkeypatch):
-    # Whoever holds the Google account must not unlink first and keep their own way in
-    # while every other phone of the owner is signed out.
+def test_unlink_from_a_google_session_keeps_only_that_phone_as_a_local_session(
+    tmp_path, monkeypatch
+):
     identity, client = make_env(tmp_path)
     local, headers = register(identity, client)
+    other_local = identity.login(local["user"]["username"], PASSWORD)
     link = client.post("/api/mobile/account/google/link", json={}, headers=headers).json
     complete_callback(client, link, monkeypatch)
     client.post("/api/mobile/auth/google/poll", json={"ticket": link["ticket"]})
@@ -822,14 +823,33 @@ def test_unlink_from_a_google_session_signs_that_session_out_too(tmp_path, monke
         "signedInWithGoogle"
     ]
     assert not client.get("/api/mobile/account/google", headers=headers).json["signedInWithGoogle"]
+    pending_link = client.post(
+        "/api/mobile/account/google/link", json={}, headers=google_headers
+    ).json
 
     assert client.post(
         "/api/mobile/account/google/unlink", json={}, headers=google_headers
-    ).json == {"linked": False, "signedOut": True}
+    ).json == {"linked": False, "signedOut": False}
     assert not identity.google_status(local["user"]["id"])
-    for token in (google["token"], local["token"]):
+    assert identity.authenticate(google["token"])["id"] == local["user"]["id"]
+    assert not identity.session_via_google(google["token"])
+    assert client.get("/api/mobile/account/google", headers=google_headers).json == {
+        "enabled": True,
+        "linked": False,
+        "reauthenticationRequired": False,
+        "signedInWithGoogle": False,
+    }
+    for token in (local["token"], other_local["token"]):
         with pytest.raises(AuthError):
             identity.authenticate(token)
+    assert callback(client, pending_link, monkeypatch).status_code == 400
+    assert (
+        client.post(
+            "/api/mobile/auth/google/poll", json={"ticket": pending_link["ticket"]}
+        ).status_code
+        == 400
+    )
+    assert not identity.google_status(local["user"]["id"])
 
 
 def test_unlink_with_nothing_linked_signs_no_one_out(tmp_path):

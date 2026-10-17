@@ -3,6 +3,8 @@ import type { Page } from "@playwright/test";
 import { expect } from "./fixtures";
 
 export interface LayoutRules {
+  /** 내용이 한 화면에 들어오는 상태는 빈 여백 때문에 문서가 세로로 밀리지 않아요. */
+  noPageScroll?: boolean;
   /** 손가락으로 누르는 요소의 최소 크기(px). Material 3 는 48dp 를 권해요. */
   minTarget?: number;
   /** 규칙에서 뺄 요소(선택자). 이유를 주석으로 남기고 써요. */
@@ -20,7 +22,7 @@ const SMALLER_TARGETS: Record<string, number> = {
  * 규칙을 바꿀 때는 왜 그 값인지 함께 적어요.
  */
 export async function layoutProblems(page: Page, rules: LayoutRules = {}): Promise<string[]> {
-  return page.evaluate(({ minTarget, ignore, smaller }) => {
+  return page.evaluate(({ minTarget, ignore, smaller, noPageScroll }) => {
     const problems: string[] = [];
     const ignored = (node: Element) => ignore.some((selector) => node.closest(selector));
     const name = (node: Element) => {
@@ -39,6 +41,9 @@ export async function layoutProblems(page: Page, rules: LayoutRules = {}): Promi
     // 1. 가로로 밀리는 화면
     const root = document.scrollingElement!;
     if (root.scrollWidth > window.innerWidth + 1) problems.push(`가로 넘침: 문서 폭 ${root.scrollWidth}px > 화면 ${window.innerWidth}px`);
+    if (noPageScroll && root.scrollHeight > root.clientHeight + 1) {
+      problems.push(`불필요한 세로 스크롤: 문서 높이 ${root.scrollHeight}px > 화면 ${root.clientHeight}px`);
+    }
 
     // 2. 누르기 어려운 크기
     const interactive = [...document.querySelectorAll("button, a[href], input:not([type=hidden]), select, textarea, [role=button], summary")]
@@ -147,7 +152,7 @@ export async function layoutProblems(page: Page, rules: LayoutRules = {}): Promi
       if (tops.size > 1) problems.push(`좌석 조건 묶음이 ${tops.size}줄로 꺾임: ${name(group)}`);
     }
     return problems;
-  }, { minTarget: rules.minTarget ?? 48, ignore: rules.ignore ?? [], smaller: SMALLER_TARGETS });
+  }, { minTarget: rules.minTarget ?? 48, ignore: rules.ignore ?? [], smaller: SMALLER_TARGETS, noPageScroll: rules.noPageScroll ?? false });
 }
 
 /** 끝까지 내렸을 때 마지막 내용이 하단 메뉴 위로 올라와 있어야 해요. */

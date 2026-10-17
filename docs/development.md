@@ -110,6 +110,7 @@ OTA 네이티브 보안·복구 테스트는 `cd android && ./gradlew testDebugU
 
 - 화면·흐름을 바꾸면 `e2e/`에 흐름을 더하고, 새 화면·상태는 `expectCleanLayout`으로 검사합니다.
 - 화면은 스크린숏이 아니라 실제 렌더링을 재서 규칙으로 검사합니다([`e2e/layout.ts`](../e2e/layout.ts)): 겹침, 넘침, 잘린 글자, 48px 터치 영역, 화면 여백선, 붙박이 버튼 간격. 새 디자인 규칙이 생기면 여기에 규칙을 더합니다.
+- 한 화면에 들어오는 상태는 `expectCleanLayout(page, 이름, { noPageScroll: true })`로 불필요한 세로 스크롤도 검사합니다. 배너·기기 상단 여백을 포함해 재고, 긴 설정·폼·목록의 정상 스크롤은 유지합니다.
 - e2e는 밝은 테마(`phone-light`), 어두운 테마(`phone-dark`), 좁은 폰(`phone-narrow`)에서 돕니다.
 - 코레일 테스트 객체는 실제 라이브러리 클래스로 만듭니다(`backend/tests/e2e/fake_korail`).
 - 조회 실패와 좌석 없음을 구분합니다. 문구는 [PRD의 문구 원칙](PRD.md#7-문구-원칙)을 따릅니다.

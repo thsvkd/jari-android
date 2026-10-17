@@ -497,7 +497,7 @@ def install(
         return jsonify(
             enabled=enabled,
             linked=enabled and identity.google_status(g.user["id"]),
-            # Unlinking from a session that Google signed in also signs this phone out; the app says so first.
+            # Kept for older clients; unlink now converts this phone to a local session.
             signedInWithGoogle=identity.session_via_google(g.token),
             # 4.18 clients treat a missing field as requiring the app password.
             reauthenticationRequired=False,

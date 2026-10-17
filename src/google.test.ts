@@ -110,7 +110,29 @@ it("unlinks after a confirmation, without asking for the app password", async ()
   expect(root.textContent).toContain("구글 계정 연결을 해제했어요.");
 });
 
-it("signs this phone out when it unlinks from a session that Google signed in", async () => {
+it.each([true, false])("keeps this phone signed in after unlinking (Google session: %s)", async (signedInWithGoogle) => {
+  const demo = createDemoApi();
+  let linked = true;
+  const root = document.createElement("div"); document.body.append(root);
+  const app = new JariApp(root, { ...demo,
+    googleStatus: async () => ({ enabled: true, linked, signedInWithGoogle }),
+    googleUnlink: async () => { linked = false; return { linked: false as const, signedOut: false }; },
+  }, { demoMode: false });
+  mounted.push(app);
+  await app.start(true);
+  app.navigate("settings");
+  await vi.waitFor(() => expect(root.querySelector("[data-action='google-unlink']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-action='google-unlink']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-action='sheet-confirm']")).not.toBeNull());
+  expect(root.textContent).toContain("이 휴대폰의 로그인은 유지돼요.");
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-action='google-link']")).not.toBeNull());
+  expect(root.querySelector(".screen-settings")).not.toBeNull();
+  expect(root.querySelector(".auth-shell")).toBeNull();
+  expect(root.textContent).toContain("구글 계정 연결을 해제했어요.");
+});
+
+it("honors an older server's explicit sign-out response after unlinking", async () => {
   const demo = createDemoApi();
   const googleUnlink = vi.fn(async () => ({ linked: false as const, signedOut: true }));
   const root = document.createElement("div"); document.body.append(root);
@@ -124,7 +146,7 @@ it("signs this phone out when it unlinks from a session that Google signed in", 
   await vi.waitFor(() => expect(root.querySelector("[data-action='google-unlink']")).not.toBeNull());
   root.querySelector<HTMLButtonElement>("[data-action='google-unlink']")!.click();
   await vi.waitFor(() => expect(root.querySelector("[data-action='sheet-confirm']")).not.toBeNull());
-  expect(root.textContent).toContain("이 휴대폰을 포함해 모든 휴대폰에서 로그아웃돼요.");
+  expect(root.textContent).toContain("이 휴대폰의 로그인은 유지돼요.");
   root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
   await vi.waitFor(() => expect(root.querySelector(".auth-shell")).not.toBeNull());
   expect(googleUnlink).toHaveBeenCalledTimes(1);

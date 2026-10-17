@@ -94,9 +94,10 @@ small { color: var(--muted); }
 
 #app { min-height: 100vh; }
 /* clip, not hidden: hidden makes the shell a scroll container, and .sticky-action then sticks to a box that never scrolls. */
-.app-shell { width: min(100%, 520px); min-height: 100vh; margin: 0 auto; position: relative; overflow: clip; background: var(--bg); box-shadow: 0 0 0 1px rgb(20 30 45 / 4%), 0 20px 80px rgb(27 36 51 / 12%); }
-.screen { min-height: calc(100vh - 148px); padding: 22px var(--gutter) calc(var(--nav-height) + var(--nav-clearance)); }
-.topbar { display: flex; align-items: center; justify-content: space-between; height: calc(72px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) var(--gutter) 0; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(18px); position: sticky; top: 0; z-index: 20; }
+.app-shell { display: flex; flex-direction: column; width: min(100%, 520px); min-height: 100vh; margin: 0 auto; position: relative; overflow: clip; background: var(--bg); box-shadow: 0 0 0 1px rgb(20 30 45 / 4%), 0 20px 80px rgb(27 36 51 / 12%); }
+/* Fill the space left by the actual header and banners, including native insets. */
+.screen { flex-grow: 1; min-height: 0; padding: 22px var(--gutter) calc(var(--nav-height) + var(--nav-clearance)); }
+.topbar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; height: calc(72px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) var(--gutter) 0; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(18px); position: sticky; top: 0; z-index: 20; }
 .brand { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0; background: transparent; text-align: left; }
 .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 13px; background: var(--text); color: var(--bg); }
 .brand-mark svg { width: 25px; height: 25px; fill: currentColor; }
@@ -830,7 +831,7 @@ html[dir="rtl"] .back-button svg { transform: scaleX(-1); }
   .brand-mark { width: 42px; height: 42px; }
   .brand small { font-size: 12px; letter-spacing: 0; }
   .screen {
-    min-height: calc(100dvh - 68px); padding: 18px var(--gutter) calc(var(--nav-height) + var(--nav-clearance));
+    padding: 18px var(--gutter) calc(var(--nav-height) + var(--nav-clearance));
     /* overflow-x: hidden here also sets overflow-y: auto per spec, turning .screen into an unwanted scroll container that
        breaks position: sticky footers (they stick to .screen's scrollport, not the viewport); clip avoids that coupling,
        but is unsupported on WebView < Chromium 90 (possible on minSdk 23), so keep hidden as the fallback for those. */

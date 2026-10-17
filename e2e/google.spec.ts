@@ -168,19 +168,30 @@ test("안드로이드 앱은 확인 코드 없이 브라우저가 돌려준 값�
   expect([...pollTickets]).toEqual(["fake-app-return-proof"]);
 });
 
-// 구글로 로그인한 세션이 연결을 해제하면 그 세션도 끝나요. 털린 구글 계정으로 먼저 해제해 혼자 남는 일을 막아요.
-test("구글로 로그인한 휴대폰에서 연결을 해제하면 이 휴대폰도 로그아웃돼요 @layout", async ({ app: page, user }, testInfo) => {
+// Google 연결을 해제해도 현재 앱 세션은 유지하고, 다음 보호된 요청에도 쓸 수 있어요.
+test("구글로 로그인한 휴대폰에서 연결을 해제해도 로그인은 유지돼요 @layout", async ({ app: page, user }, testInfo) => {
   test.skip(testInfo.project.name === "device", "Google API 대체는 헤드리스에서 검사해요");
+  let linked = true;
   await page.route("**/api/mobile/auth/google", (route) => route.fulfill({ json: { enabled: true } }));
-  await page.route("**/api/mobile/account/google", (route) => route.fulfill({ json: { enabled: true, linked: true, reauthenticationRequired: false, signedInWithGoogle: true } }));
-  await page.route("**/api/mobile/account/google/unlink", (route) => route.fulfill({ json: { linked: false, signedOut: true } }));
+  await page.route("**/api/mobile/account/google", (route) => route.fulfill({ json: { enabled: true, linked, reauthenticationRequired: false, signedInWithGoogle: linked } }));
+  await page.route("**/api/mobile/account/google/unlink", (route) => {
+    linked = false;
+    return route.fulfill({ json: { linked: false, signedOut: false } });
+  });
   await signIn(page, user);
   await page.locator(".bottom-nav [data-view='settings']").click();
   await page.locator("[data-action='google-unlink']").click();
-  await expect(page.getByText("이 휴대폰을 포함해 모든 휴대폰에서 로그아웃돼요.", { exact: false })).toBeVisible();
+  await expect(page.getByText("이 휴대폰의 로그인은 유지돼요.", { exact: false })).toBeVisible();
   await expectCleanLayout(page, "구글 세션의 연결 해제 확인");
   await page.locator("[data-action='sheet-confirm']").click();
-  await expect(page.getByText("구글 계정 연결을 해제하고 로그아웃했어요.", { exact: false })).toBeVisible();
-  await expect(page.locator("[data-action='google-login']")).toBeVisible();
-  await expectCleanLayout(page, "구글 연결 해제 뒤 로그인 안내");
+  await expect(page.locator("[data-action='google-link']")).toBeVisible();
+  await expect(page.locator(".screen-settings")).toBeVisible();
+  await expect(page.locator(".auth-shell")).toHaveCount(0);
+  await expectCleanLayout(page, "구글 연결 해제 뒤 설정 유지");
+  // 웹 빌드는 토큰을 메모리에만 두므로 새로고침 대신 다음 보호된 요청을 확인해요.
+  const status = page.waitForResponse((response) => response.url().endsWith("/api/mobile/status"));
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  expect((await status).status()).toBe(200);
+  await page.locator(".bottom-nav [data-view='home']").click();
+  await expect(page.locator(".screen-home")).toBeVisible();
 });

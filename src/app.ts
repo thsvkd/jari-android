@@ -308,7 +308,7 @@ export class JariApp {
   private googleEnabled = false;
   private googleLinked = false;
   private signedInWithGoogle = false;
-  /** An unlink is out that may end this session; a 401 landing first is that sign-out, not an expiry. */
+  /** Older servers can end this session during unlink; keep their early 401 consistent with the reply. */
   private unlinkingGoogle = false;
   private googleFlow: { ticket: string; verificationCode?: string; handoff?: string; expires: number; purpose: "login" | "link"; polling: boolean; cancelRequested?: boolean; cancelling?: boolean; cancelError?: string } | null = null;
   private googleTimer: number | null = null;
@@ -3137,13 +3137,11 @@ ${agentHost(agent)}`;
       return;
     }
     const generation = this.generation;
-    // Like linking, the signed-in session is enough. The sheet says what is lost: other phones' sign-ins and Google as a way in.
-    // A session that Google signed in ends with the link (the server's rule), so this phone signs out too.
+    // Unlinking keeps this phone's app session and removes Google as a way in.
+    // Other phones' sessions are revoked by the server.
     const confirmed = await this.confirmSheet({
       title: "구글 계정 연결을 해제할까요?",
-      body: this.signedInWithGoogle
-        ? "구글로 로그인했으니 이 휴대폰을 포함해 모든 휴대폰에서 로그아웃돼요. 다시 들어오려면 앱 아이디와 비밀번호가 필요해요."
-        : "다른 휴대폰의 앱 로그인도 함께 해제돼요. 그다음부터는 앱 아이디와 비밀번호로 로그인해요.",
+      body: "이 휴대폰의 로그인은 유지돼요. 다른 휴대폰의 앱 로그인도 함께 해제돼요. 그다음부터는 앱 아이디와 비밀번호로 로그인해요.",
       confirmLabel: "연결 해제",
       danger: true,
     });
