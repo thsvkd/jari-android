@@ -193,7 +193,7 @@ function inspectApk(apk) {
   const versionCode = Number(packageLine.match(/versionCode='(\d+)'/)?.[1]);
   const version = packageLine.match(/versionName='([^']+)'/)?.[1];
   const signer = run(sdkTool("apksigner"), ["verify", "--print-certs", apk], { capture: true }).stdout
-    .match(/Signer #1 certificate SHA-256 digest:\s*([0-9a-f]+)/i)?.[1]?.toLowerCase();
+    .match(/certificate SHA-256 digest:\s*([0-9a-f]{64})/i)?.[1]?.toLowerCase();
   if (!packageName || !Number.isSafeInteger(versionCode) || !version || !signer) {
     throw new Error(`APK 메타데이터를 읽지 못했어요: ${apk}`);
   }

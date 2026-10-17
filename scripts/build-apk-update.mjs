@@ -54,7 +54,7 @@ function apkMetadata(path, expectedCertificate) {
   } catch {
     throw new Error("apksigner로 APK 서명을 검증하지 못했어요.");
   }
-  const certificates = [...certificateOutput.matchAll(/Signer #\d+ certificate SHA-256 digest: ([0-9a-f]{64})/gi)];
+  const certificates = [...certificateOutput.matchAll(/certificate SHA-256 digest:\s*([0-9a-f]{64})/gi)];
   if (certificates.length !== 1 || certificates[0][1].toLowerCase() !== expectedCertificate) throw new Error("APK 인증서가 기존 직접 배포본의 인증서와 달라요.");
   return { version, versionCode, packageName };
 }

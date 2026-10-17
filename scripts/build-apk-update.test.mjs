@@ -14,7 +14,7 @@ function fixture(metadata = {}) {
   // Tool-boundary doubles: the device smoke uses actual signed Android APKs/tools.
   for (const [name, code] of Object.entries({
     aapt: `const d=JSON.parse(require('fs').readFileSync(process.argv.at(-1),'utf8')); console.log("package: name='"+d.packageName+"' versionCode='"+d.versionCode+"' versionName='"+d.version+"'");`,
-    apksigner: `const d=JSON.parse(require('fs').readFileSync(process.argv.at(-1),'utf8')); if(d.badSignature)process.exit(1); console.log('Signer #1 certificate SHA-256 digest: '+(d.certificate || 'ab'.repeat(32)));`,
+    apksigner: `const d=JSON.parse(require('fs').readFileSync(process.argv.at(-1),'utf8')); if(d.badSignature)process.exit(1); console.log((d.signerPrefix || 'Signer #1')+' certificate SHA-256 digest: '+(d.certificate || 'ab'.repeat(32))); if(d.additionalCertificate)console.log('Signer #2 certificate SHA-256 digest: '+d.additionalCertificate);`,
   })) {
     const path = join(tools, name); writeFileSync(path, `#!/usr/bin/env node\n${code}\n`); chmodSync(path, 0o700);
   }
@@ -44,6 +44,13 @@ it("signs a package-update manifest using verified APK metadata and the exact fi
   expect(readFileSync(input.out, "utf8")).not.toContain("PRIVATE KEY");
 });
 
+it("reads the versioned signer prefix emitted by Android build-tools 37", () => {
+  const input = fixture({ signerPrefix: "V3.0 Signer:" });
+  const result = build(input);
+  expect(result.status, result.stderr).toBe(0);
+  expect(existsSync(input.out)).toBe(true);
+});
+
 it.each([
   [{ packageName: "other.package" }, /package|패키지/],
   [{ versionCode: "0" }, /versionCode/],
@@ -53,6 +60,8 @@ it.each([
   [{ version: "x".repeat(129) }, /version/],
   [{ badSignature: true }, /signature|서명|apksigner/],
   [{ certificate: "cd".repeat(32) }, /certificate|인증서/],
+  [{ signerPrefix: "V3.0 Signer:", certificate: "cd".repeat(32) }, /certificate|인증서/],
+  [{ signerPrefix: "V3.0 Signer:", additionalCertificate: "ab".repeat(32) }, /certificate|인증서/],
 ])("rejects an invalid APK before publishing metadata: %j", (metadata, message) => {
   const input = fixture(metadata); const result = build(input);
   expect(result.status).not.toBe(0); expect(result.stderr).toMatch(message);
