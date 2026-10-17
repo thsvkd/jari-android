@@ -1,20 +1,22 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
 export interface UpdateStatus {
-  bootId: string;
   supported: boolean;
+  source: "play" | "apk" | "unsupported";
   currentVersion: string;
-  nativeVersion: string;
+  versionCode: number;
+  reason?: string;
 }
 
-export type UpdateCheck = { status: "current" | "available" | "incompatible"; version?: string };
+export type UpdateCheck =
+  | { status: "current" }
+  | { status: "available"; version?: string; versionCode: number };
 
 /** The native side owns the verified candidate; JS cannot select a path or a download URL. */
 export interface AppUpdatesClient {
   getStatus(): Promise<UpdateStatus>;
   check(): Promise<UpdateCheck>;
-  apply(): Promise<void>;
-  ready(options: { bootId: string }): Promise<void>;
+  apply(): Promise<{ status: "cancelled" | "started" }>;
 }
 
 const AppUpdates = registerPlugin<AppUpdatesClient>("AppUpdates");

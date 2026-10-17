@@ -86,7 +86,7 @@ CI 기기 단계는 에뮬레이터만 대상으로 화면을 깨우고 잠금 �
 ```bash
 npm test                                          # 앱 유닛·모듈 (vitest)
 npm run build                                     # 타입 검사 + 번들
-npm test -- scripts/build-ota.test.mjs scripts/ota-build-config.test.mjs src/updates.test.ts  # OTA 산출·설정·화면
+npm test -- scripts/build-apk-update.test.mjs src/updates.test.ts  # APK 업데이트 목록·화면
 npx playwright test --project=phone-light         # 헤드리스 e2e (e2e 전용 스택과 웹 빌드를 스스로 띄웁니다)
 npm run verify -- --ci                            # 기기 없이 CI와 같은 전체 검증
 
@@ -98,9 +98,9 @@ uv run --frozen python ../scripts/smoke-backend.py
 bash ../scripts/test-deploy-backend.sh            # 배포 스크립트 회귀 검사
 ```
 
-OTA 네이티브 보안·복구 테스트는 `cd android && ./gradlew testDebugUnitTest -PjariNoFirebase`로 검사합니다. 업데이트 산출과 APK에 고정할 공개 설정은 [앱 내 업데이트](android.md#앱-내-업데이트-ota)를 따릅니다.
+패키지 업데이트의 네이티브 검사는 `cd android && ./gradlew testDebugUnitTest testReleaseUnitTest -PjariNoFirebase`로 실행합니다. Play 빌드에는 APK 설치 권한/코드가 없고, 직접 설치본에는 검증한 APK만 설치기로 전달되는지 확인합니다. 설정과 배포 절차는 [앱 내 업데이트](android.md#앱-내-업데이트)를 따릅니다.
 
-`ANDROID_SERIAL=emulator-5554 npm run test:ota:device`는 실제 HTTPS 다운로드·서명 검증·적용·재실행·Keystore 세션 유지·30초 복구·재생 차단을 검사합니다. 임시 키와 디버그 전용 인증서, `.invalid` API 주소를 사용해 운영 API에는 연결하지 않습니다. 디버그 설정과 웹 자산은 끝에 복원하지만 에뮬레이터 앱을 덮어쓰고 데이터를 지우므로 실폰에서는 실행하지 않습니다. macOS·Linux의 `npm run verify` 기기 단계에도 포함됩니다.
+`ANDROID_SERIAL=emulator-5554 npm run test:updates:device`는 서명된 HTTPS 목록 조회, 변조 거부, 설치 취소·재시도, **Android 시스템 설치 화면을 통한 실제 상위 버전 APK 설치**, 설치된 버전 코드와 Keystore 세션 보존을 검사합니다. 기준 APK 설치 이후 후보 APK는 `adb install`로 덮어쓰지 않습니다. 임시 키/디버그 전용 CA와 `.invalid` API 주소를 사용해 운영 API에 연결하지 않습니다. 임시 자산/설정은 끝에 복원하지만 에뮬레이터 앱을 지우므로 실폰은 거부합니다. macOS·Linux의 `npm run verify` 기기 단계에도 포함됩니다. Play의 실제 패키지 업데이트는 별도 Play 계정·배포 버전 조건을 충족한 [내부 앱 공유](https://developer.android.com/guide/playcore/in-app-updates/test)로 확인하며, 직접 APK 검사나 브라우저 대역을 Play 설치 성공으로 보고하지 않습니다.
 
 다른 작업 트리의 e2e 스택이 기본 포트를 쓰고 있으면 `JARI_E2E_PORT_OFFSET=1000 npx playwright test --project=phone-light`처럼 포트 오프셋을 줍니다. `JARI_E2E_PORT_OFFSET=1000 npm run verify -- --ci`에도 같은 값이 전달되어 각 작업 트리의 API·제어·웹 포트를 함께 옮깁니다.
 

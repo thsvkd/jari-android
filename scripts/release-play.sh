@@ -149,6 +149,7 @@ MANIFEST_PROTO="$(unzip -p "$OUT" base/manifest/AndroidManifest.xml | LC_ALL=C t
   || reject "AAB 매니페스트를 읽지 못했어요."
 # 광고 ID 권한(com.google.android.gms.permission.AD_ID)은 매니페스트에서 tools:node="remove" 로 빼 두었어요. 들어오면 멈춰요.
 if grep -q 'permission.AD_ID' <<<"$MANIFEST_PROTO"; then reject "AAB 매니페스트에 광고 ID 권한(AD_ID)이 있어요."; fi
+if grep -q 'REQUEST_INSTALL_PACKAGES' <<<"$MANIFEST_PROTO"; then reject "Play AAB에 외부 APK 설치 권한이 있어요."; fi
 if [[ -n "${JARI_BUNDLETOOL:-}" ]] || command -v bundletool >/dev/null; then
   if [[ "${JARI_BUNDLETOOL:-}" == *.jar ]]; then BUNDLETOOL=(java -jar "$JARI_BUNDLETOOL"); else BUNDLETOOL=("${JARI_BUNDLETOOL:-bundletool}"); fi
   MANIFEST="$("${BUNDLETOOL[@]}" dump manifest --bundle "$OUT")" || reject "bundletool 이 AAB 매니페스트를 읽지 못했어요."

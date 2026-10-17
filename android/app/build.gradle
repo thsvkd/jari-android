@@ -16,33 +16,33 @@ def releaseKeyAlias = keystoreProps.getProperty('keyAlias') ?: System.getenv('JA
 def releaseKeyPassword = keystoreProps.getProperty('keyPassword') ?: System.getenv('JARI_RELEASE_KEY_PASSWORD')
 def hasReleaseSigning = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
 
-def otaManifestUrl = System.getenv('JARI_OTA_MANIFEST_URL')?.trim()
-def otaPublicKey = System.getenv('JARI_OTA_PUBLIC_KEY')?.trim()
-if ((otaManifestUrl && !otaPublicKey) || (!otaManifestUrl && otaPublicKey)) {
-    throw new GradleException('JARI_OTA_MANIFEST_URL and JARI_OTA_PUBLIC_KEY must be configured together')
+def apkUpdateManifestUrl = System.getenv('JARI_APK_UPDATE_MANIFEST_URL')?.trim()
+def apkUpdatePublicKey = System.getenv('JARI_APK_UPDATE_PUBLIC_KEY')?.trim()
+if ((apkUpdateManifestUrl && !apkUpdatePublicKey) || (!apkUpdateManifestUrl && apkUpdatePublicKey)) {
+    throw new GradleException('JARI_APK_UPDATE_MANIFEST_URL and JARI_APK_UPDATE_PUBLIC_KEY must be configured together')
 }
-if (otaManifestUrl) {
-    def otaUri
+if (apkUpdateManifestUrl) {
+    def updateUri
     try {
-        otaUri = new URI(otaManifestUrl)
+        updateUri = new URI(apkUpdateManifestUrl)
     } catch (Exception error) {
-        throw new GradleException('JARI_OTA_MANIFEST_URL must be a valid HTTPS URL', error)
+        throw new GradleException('JARI_APK_UPDATE_MANIFEST_URL must be a valid HTTPS URL', error)
     }
-    if (otaUri.scheme != 'https' || !otaUri.host || otaUri.userInfo != null || otaUri.fragment != null) {
-        throw new GradleException('JARI_OTA_MANIFEST_URL must be a valid HTTPS URL')
+    if (updateUri.scheme != 'https' || !updateUri.host || updateUri.userInfo != null || updateUri.fragment != null) {
+        throw new GradleException('JARI_APK_UPDATE_MANIFEST_URL must be a valid HTTPS URL')
     }
     try {
-        def keyBytes = Base64.decoder.decode(otaPublicKey)
+        def keyBytes = Base64.decoder.decode(apkUpdatePublicKey)
         def key = java.security.KeyFactory.getInstance('RSA').generatePublic(
             new java.security.spec.X509EncodedKeySpec(keyBytes)
         )
         if (!(key instanceof java.security.interfaces.RSAPublicKey) || key.modulus.bitLength() < 2048) {
-            throw new GradleException('JARI_OTA_PUBLIC_KEY must be an RSA key with at least 2048 bits')
+            throw new GradleException('JARI_APK_UPDATE_PUBLIC_KEY must be an RSA key with at least 2048 bits')
         }
     } catch (GradleException error) {
         throw error
     } catch (Exception error) {
-        throw new GradleException('JARI_OTA_PUBLIC_KEY must be base64 DER SPKI RSA public key', error)
+        throw new GradleException('JARI_APK_UPDATE_PUBLIC_KEY must be base64 DER SPKI RSA public key', error)
     }
 }
 
@@ -51,16 +51,15 @@ def buildConfigString = { value -> '"' + (value ?: '').replace('\\', '\\\\').rep
 android {
     namespace "com.jari.app"
     compileSdk rootProject.ext.compileSdkVersion
+    testBuildType project.hasProperty('jariPlayUpdateTest') ? 'release' : 'debug'
     defaultConfig {
         // The installed package (Play's permanent ID). com.jari.app was taken on Play; the code's
         // namespace, Java package and MainActivity stay com.jari.app.
         applicationId "dev.thsvkd.jari"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 42201
-        versionName "4.22.0"
-        buildConfigField "String", "JARI_OTA_MANIFEST_URL", buildConfigString(otaManifestUrl)
-        buildConfigField "String", "JARI_OTA_PUBLIC_KEY", buildConfigString(otaPublicKey)
+        versionCode 42300
+        versionName "4.23.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -82,10 +81,18 @@ android {
         }
     }
     buildTypes {
+        debug {
+            buildConfigField "String", "JARI_APK_UPDATE_MANIFEST_URL", buildConfigString(apkUpdateManifestUrl)
+            buildConfigField "String", "JARI_APK_UPDATE_PUBLIC_KEY", buildConfigString(apkUpdatePublicKey)
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-            if (hasReleaseSigning) {
+            if (project.hasProperty('jariPlayUpdateTest')) {
+                // Instrumentation-only Play fake tests need an installable target.
+                signingConfig signingConfigs.debug
+                applicationIdSuffix '.playtest'
+            } else if (hasReleaseSigning) {
                 signingConfig signingConfigs.release
             }
         }
@@ -104,6 +111,7 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    releaseImplementation 'com.google.android.play:app-update:2.1.0'
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

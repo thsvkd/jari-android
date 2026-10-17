@@ -80,7 +80,6 @@ function readLastGoogleHandoff(): string {
 interface AppOptions {
   demoMode: boolean;
   updates?: AppUpdatesClient;
-  onFirstRender?: () => void | Promise<void>;
   onToken?: (token: string) => Promise<void>;
   onLogout?: () => Promise<void>;
   onBootstrap?: (state: BootstrapState) => Promise<void> | void;
@@ -282,11 +281,9 @@ function isoDate(date: Date): string {
 
 export class JariApp {
   private disposed = false;
-  private firstRendered = false;
   private updateRequest = 0;
-  private updateReadyError = "";
   private updateInfo: UpdateStatus | null = null;
-  private updatePhase: "idle" | "checking" | "current" | "available" | "incompatible" | "applying" | "error" = "idle";
+  private updatePhase: "idle" | "checking" | "current" | "available" | "applying" | "cancelled" | "started" | "error" = "idle";
   private updateVersion = "";
   private updateError = "";
   private updatePrompt = false;
@@ -748,13 +745,11 @@ export class JariApp {
     if (this.view === "auth") {
       this.root.innerHTML = this.renderAuth();
       restoreFields();
-      this.signalFirstRender();
       return;
     }
     if (this.state && this.state.user?.role !== "admin" && userStatus(this.state.user) !== "approved") {
       this.root.innerHTML = `<div class="app-shell approval-shell"><main class="screen screen-approval">${this.renderApproval()}</main>${this.renderSheet()}${this.busy ? '<div class="blocker" role="status"><span class="spinner"></span><b>확인하고 있어요</b></div>' : ""}${this.renderToast()}</div>`;
       restoreFields();
-      this.signalFirstRender();
       return;
     }
     // Right after sign-in or launch the first state is still on its way; that is not a failure to show behind the blocker.
@@ -780,23 +775,6 @@ export class JariApp {
     this.syncSheetDateChips();
     // 붙박이 버튼이 있는 화면에서는 그 위로 올라가요. 스낵바가 주요 동작을 가리면 안 돼요.
     this.root.querySelector(".toast")?.classList.toggle("above-action", Boolean(this.root.querySelector(".screen .sticky-action")));
-    this.signalFirstRender();
-  }
-
-  private signalFirstRender(): void {
-    if (this.firstRendered) return;
-    this.firstRendered = true;
-    void this.confirmFirstRender();
-  }
-
-  private async confirmFirstRender(): Promise<void> {
-    try {
-      await this.options.onFirstRender?.();
-    } catch {
-      if (this.disposed) return;
-      this.updateReadyError = "업데이트 상태를 확정하지 못했어요. 앱을 다시 열면 이전 버전으로 돌아갈 수 있어요.";
-      this.notify(this.updateReadyError);
-    }
   }
 
   private async loadUpdateStatus(): Promise<void> {
@@ -806,6 +784,8 @@ export class JariApp {
       const info = await this.options.updates!.getStatus();
       if (request !== this.updateRequest || generation !== this.generation || this.disposed) return;
       this.updateInfo = info;
+      this.updatePhase = "idle";
+      this.updateError = "";
     } catch {
       if (request !== this.updateRequest || generation !== this.generation || this.disposed) return;
       this.updatePhase = "error";
@@ -817,25 +797,40 @@ export class JariApp {
   private renderUpdates(): string {
     const disabled = !this.options.updates || this.demo || this.updateInfo?.supported === false;
     const waiting = this.updatePhase === "checking" || this.updatePhase === "applying";
+    const sourceHint = this.updateInfo?.source === "play"
+      ? "Google Play에서 앱 전체 업데이트를 확인해요"
+      : this.updateInfo?.source === "apk"
+        ? "새 설치 파일을 내려받아 앱을 업데이트해요"
+        : "새 앱 버전이 있는지 확인해요";
+    const applyingHint = this.updateInfo?.source === "play"
+      ? "Google Play 설치 화면을 준비하고 있어요"
+      : "설치 파일을 확인하고 있어요";
+    const startedHint = this.updateInfo?.source === "play"
+      ? "Google Play에서 업데이트를 시작했어요. 설치가 끝나면 앱이 다시 열려요"
+      : "설치 화면에서 업데이트를 마친 뒤 앱을 다시 열어 주세요";
     const hints: Record<typeof this.updatePhase, string> = {
-      idle: "새 화면과 기능이 있는지 확인해요",
-      checking: "새 업데이트를 확인하고 있어요",
+      idle: sourceHint,
+      checking: "새 앱 버전을 확인하고 있어요",
       current: "최신 버전이에요",
       available: `${this.updateVersion} 업데이트를 사용할 수 있어요`,
-      incompatible: "앱 설치 파일을 업데이트해 주세요",
-      applying: "업데이트를 적용하고 앱을 다시 열고 있어요",
+      applying: applyingHint,
+      cancelled: "업데이트가 취소됐어요. 다시 확인할 수 있어요",
+      started: startedHint,
       error: this.updateError,
     };
     const applying = this.updatePhase === "applying";
     const available = this.updatePhase === "available" || applying;
-    const hint = disabled ? "이 환경에서는 앱 내 업데이트를 사용할 수 없어요" : hints[this.updatePhase];
-    return `<div class="app-update" aria-live="polite">${this.updateReadyError ? notice({ tone: "warning", className: "update-ready-error", text: this.updateReadyError }) : ""}${listRow({
+    const unsupportedHint = this.updateInfo?.supported === false && this.updateInfo.reason
+      ? this.updateInfo.reason
+      : "이 환경에서는 앱 내 업데이트를 사용할 수 없어요";
+    const hint = disabled ? unsupportedHint : hints[this.updatePhase];
+    return `<div class="app-update" aria-live="polite">${listRow({
       action: available ? "update-apply" : "update-check",
-      title: available ? "업데이트 적용" : "업데이트 확인",
+      title: available ? "업데이트 설치" : "업데이트 확인",
       hint,
-      value: applying ? "적용 중" : this.updatePhase === "checking" ? "확인 중" : available ? "적용" : "확인",
+      value: applying ? "준비 중" : this.updatePhase === "checking" ? "확인 중" : available ? "설치" : "확인",
       disabled: disabled || waiting,
-    })}${this.updateInfo ? `<p class="settings-section-copy">화면 버전 ${escapeHtml(this.updateInfo.currentVersion)}</p>` : ""}</div>`;
+    })}</div>`;
   }
 
   private async checkUpdate(): Promise<void> {
@@ -855,9 +850,14 @@ export class JariApp {
       if (!this.updateInfo.supported) { this.updatePhase = "idle"; return; }
       const result: UpdateCheck = await this.options.updates.check();
       if (!current()) return;
-      if (!["current", "available", "incompatible"].includes(result.status) || (result.status === "available" && !result.version)) throw new Error("업데이트 정보를 확인하지 못했어요.");
+      if (result.status !== "current" && result.status !== "available") throw new Error("업데이트 정보를 확인하지 못했어요.");
+      if (result.status === "available" && (!Number.isInteger(result.versionCode) || result.versionCode <= 0)) throw new Error("업데이트 정보를 확인하지 못했어요.");
       this.updatePhase = result.status;
-      this.updateVersion = result.version ?? "";
+      this.updateVersion = result.status === "available"
+        ? result.version
+          ? `v${result.version}`
+          : "새 앱 버전"
+        : "";
     } catch (error) {
       if (!current()) return;
       this.updatePhase = "error";
@@ -871,10 +871,13 @@ export class JariApp {
     if (!this.options.updates || this.demo || this.updatePhase !== "available" || this.updatePrompt) return;
     this.updatePrompt = true;
     const generation = this.generation;
+    const directInstall = this.updateInfo?.source === "apk";
     const confirmed = await this.confirmSheet({
-      title: "업데이트를 적용할까요?",
-      body: "적용하면 앱 화면이 다시 열려요. 입력 중인 내용은 사라질 수 있어요. 로그인과 서버의 자리 찾기는 유지돼요.",
-      confirmLabel: "업데이트 적용",
+      title: "업데이트를 설치할까요?",
+      body: directInstall
+        ? "새 버전의 앱 설치 화면이 열려요. 설치를 마친 뒤 앱을 다시 열어 주세요. 입력 중인 내용은 사라질 수 있어요. 로그인과 서버의 자리 찾기는 유지돼요."
+        : "Google Play에서 새 버전의 앱을 설치하면 앱이 다시 열려요. 입력 중인 내용은 사라질 수 있어요. 로그인과 서버의 자리 찾기는 유지돼요.",
+      confirmLabel: "업데이트 설치",
     });
     if (generation !== this.generation || this.disposed) return;
     this.updatePrompt = false;
@@ -883,8 +886,12 @@ export class JariApp {
     this.updatePhase = "applying";
     this.render();
     try {
-      await this.options.updates.apply();
-      // A successful native call reloads this WebView. Leave the action disabled until then.
+      const result = await this.options.updates.apply();
+      if (request !== this.updateRequest || generation !== this.generation || this.disposed) return;
+      if (result.status !== "cancelled" && result.status !== "started") throw new Error("앱 설치 결과를 확인하지 못했어요.");
+      this.updatePhase = result.status;
+      this.updateVersion = "";
+      this.render();
     } catch (error) {
       if (request !== this.updateRequest || generation !== this.generation || this.disposed) return;
       this.updatePhase = "error";
@@ -1883,7 +1890,7 @@ export class JariApp {
       ${this.googleEnabled && !this.demo ? `<section class="settings-section"><p class="eyebrow">로그인</p>${listRow({ action: this.googleLinked ? "google-unlink" : "google-link", leading: `<img class="google-brand-icon" src="${googleLogo}" width="32" height="32" alt="" aria-hidden="true">`, title: this.googleLinked ? "구글 계정 연결됨" : "구글 계정 연결", hint: this.googleLinked ? "연결한 구글 계정으로도 로그인할 수 있어요" : "구글 계정을 선택해 로그인을 연결해요", value: this.googleLinked ? "연결 해제" : "연결 →" })}${this.renderGooglePending()}${this.renderError()}</section>` : ""}
       <section class="settings-section"><p class="eyebrow">알림</p>${listRow({ title: "찾기 상황 알림", hint: notifyAvailable ? "찾는 중 진행 상황을 알려드리는 간격" : "현재 서버에서는 알림 간격을 바꿀 수 없어요", trailing: stepper({ small: true, label: "찾기 상황 알림 간격", value: notifyAvailable ? (state.notifyMinutes ? `${state.notifyMinutes}분` : "끔") : "이용 불가", decrease: "notify-minus", increase: "notify-plus", disabled: !notifyAvailable, atMin: state.notifyMinutes <= NOTIFY_STEPS[0]!, atMax: state.notifyMinutes >= NOTIFY_STEPS[NOTIFY_STEPS.length - 1]! }) })}${listRow({ action: "request-push", disabled: !pushAvailable, title: "휴대폰 알림", hint: pushAvailable ? "Android 알림 권한 열기" : "휴대폰 알림 서비스가 아직 준비되지 않았어요", value: pushAvailable ? "설정" : "이용 불가" })}</section>
       ${state.user?.role === "admin" ? `<section class="settings-section admin-section"><div class="settings-section-title"><p class="eyebrow">회원 관리</p>${badge({ className: "admin-only-badge", label: "관리자 전용" })}</div><p class="settings-section-copy">가입 신청을 확인하고 사용 여부를 결정해요.</p>${listRow({ view: "members", title: "회원 목록", hint: "승인 대기, 승인, 거절 상태를 확인해요", value: "관리 →" })}</section>` : ""}
-      <section class="settings-section"><p class="eyebrow">앱</p>${listRow({ action: "theme", title: "화면 테마", hint: "시스템과 별도로 바꿀 수 있어요", value: this.theme === "dark" ? "다크" : "라이트" })}${listRow({ title: "앱 버전", hint: `서버 ${state.version}`, value: `v${this.updateInfo?.nativeVersion ?? appPackage.version}` })}${this.renderUpdates()}</section>
+      <section class="settings-section"><p class="eyebrow">앱</p>${listRow({ action: "theme", title: "화면 테마", hint: "시스템과 별도로 바꿀 수 있어요", value: this.theme === "dark" ? "다크" : "라이트" })}${listRow({ title: "앱 버전", hint: `서버 ${state.version}`, value: `v${this.updateInfo?.currentVersion ?? appPackage.version}` })}${this.renderUpdates()}</section>
       <section class="settings-section policy-links"><p class="eyebrow">개인정보</p>${POLICY_LINKS.map(policyRow).join("")}</section>
       ${this.demo ? "" : `<section class="settings-section"><p class="eyebrow">계정</p>${listRow({ action: "delete-account", title: "회원 탈퇴", hint: "앱 계정과 저장된 정보를 모두 지워요", value: "탈퇴 →" })}</section>`}${this.trial ? button({ variant: "ghost-danger", action: "trial-exit", label: "체험 끝내기" }) : button({ variant: "ghost-danger", action: "app-logout", label: "앱에서 로그아웃" })}</div></div>`;
   }
@@ -1983,7 +1990,6 @@ ${agentHost(agent)}`;
       <div class="auth-art"><span class="orbit one"></span><span class="orbit two"></span><i>자</i></div>
       <section class="auth-card"><p class="eyebrow">내 여행의 빈자리</p><h1>${title}</h1><p>${copy}</p>
         ${this.authNotice ? notice({ tone: "calm", className: "auth-notice", text: this.authNotice }) : ""}
-        ${this.updateReadyError ? notice({ tone: "warning", className: "update-ready-error", text: this.updateReadyError }) : ""}
         ${choosing ? `<div class="gate-list"><button class="gate-card" data-auth-gate="admin" type="button"><b>관리자</b><small>관리자 계정으로 로그인해요</small></button><button class="gate-card" data-auth-gate="guest" type="button"><b>회원</b><small>로그인하거나 가입을 신청해요</small></button><button class="gate-card trial" data-action="trial-enter" type="button"><b>체험하기</b><small>샘플 데이터로 모든 화면을 둘러봐요. 실제 예약되지 않아요</small></button></div>` : ""}
         ${this.googleEnabled && !register ? `${button({ variant: "secondary", action: "google-login", label: "구글로 로그인", disabled: this.googleFlow !== null })}<p class="muted google-hint">설정에서 구글 계정을 연결한 뒤 이용할 수 있어요.</p>${this.renderGooglePending()}${choosing ? this.renderError() : ""}` : ""}
         ${admin ? `<form id="auth-form" class="form-stack"><label class="field"><span>관리자 아이디</span><input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required></label><label class="field"><span>관리자 비밀번호</span><input name="password" type="password" minlength="8" maxlength="128" autocomplete="current-password" required></label>${this.renderError()}${button({ type: "submit", label: "관리자 로그인", trailing: "→" })}</form>${button({ variant: "text", label: "로그인 방법 바꾸기", attrs: { "data-auth-gate": "choose" } })}` : ""}

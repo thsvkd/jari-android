@@ -1,39 +1,29 @@
 package com.jari.app;
 
+import android.content.Intent;
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
-import com.getcapacitor.ServerPath;
-import com.jari.app.updates.OtaFiles;
-import com.jari.app.updates.OtaProcessCoordinator;
-import com.jari.app.updates.OtaRuntime;
-import com.jari.app.updates.OtaState;
+import com.getcapacitor.PluginHandle;
+import com.jari.app.updates.LegacyOtaCleanup;
 
 public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(SecureSessionPlugin.class);
         registerPlugin(AppUpdatesPlugin.class);
-        OtaFiles files = new OtaFiles(this);
-        OtaState state = OtaRuntime.state(this);
-        OtaProcessCoordinator coordinator = OtaRuntime.coordinator();
-        OtaState.Boot boot;
-        try {
-            boot = coordinator.runLocked(() -> {
-                coordinator.beginBoot();
-                return state.prepareBoot(OtaRuntime.binaryId());
-            });
-        } catch (Exception impossible) {
-            throw new IllegalStateException("Cannot prepare OTA boot state", impossible);
-        }
-        if (boot.resetStorage) files.clearAll();
-        else files.delete(boot.discardPath);
-        if (boot.path != null) {
-            if (files.isInstalled(boot.path)) {
-                bridgeBuilder.setServerPath(new ServerPath(ServerPath.PathType.BASE_PATH, boot.path));
-            } else {
-                files.delete(state.clearActive());
+        LegacyOtaCleanup.run(this);
+        super.onCreate(savedInstanceState);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == AppUpdatesPlugin.PLAY_UPDATE_REQUEST_CODE && getBridge() != null) {
+            PluginHandle handle = getBridge().getPlugin("AppUpdates");
+            if (handle != null && handle.getInstance() instanceof AppUpdatesPlugin) {
+                ((AppUpdatesPlugin) handle.getInstance()).handlePlayUpdateResult(resultCode);
+                return;
             }
         }
-        super.onCreate(savedInstanceState);
+        super.onActivityResult(requestCode, resultCode, data);
     }
 }

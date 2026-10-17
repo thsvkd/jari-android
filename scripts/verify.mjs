@@ -70,6 +70,37 @@ function stagedTree() {
   return { tree: git("write-tree"), reason: "" };
 }
 
+function uninstallPlayTestPackages(target) {
+  for (const packageName of [`${APP}.playtest.test`, `${APP}.playtest`]) {
+    spawnSync("adb", ["-s", target, "uninstall", packageName], {
+      cwd: ROOT,
+      env: process.env,
+      stdio: "ignore",
+      timeout: 30_000,
+    });
+  }
+}
+
+function verifyPlayPackageUpdates(target) {
+  // Play의 FakeAppUpdateManager도 실제 release 소스와 Activity를 기기에서 실행해요.
+  // 웹 번들은 실서비스 대신 연결되지 않는 테스트 origin을 넣고, 전용 .playtest 패키지만 설치해요.
+  run("npm run build", {
+    env: { VITE_API_BASE_URL: "https://package-update-test.invalid", VITE_DEMO_MODE: "false" },
+    timeout: 10 * 60 * 1000,
+  });
+  run("npx cap sync android", { timeout: 5 * 60 * 1000 });
+  uninstallPlayTestPackages(target);
+  try {
+    run("./gradlew connectedReleaseAndroidTest -PjariNoFirebase -PjariPlayUpdateTest --no-daemon", {
+      cwd: join(ROOT, "android"),
+      env: { ANDROID_SERIAL: target },
+      timeout: 15 * 60 * 1000,
+    });
+  } finally {
+    uninstallPlayTestPackages(target);
+  }
+}
+
 function prepareDevice() {
   // Windows 의 adb 는 줄 끝이 \r\n 이에요. \n 으로만 자르면 마지막 줄(trim 된 한 줄)만 기기로 잡혀요.
   const devices = adb("devices").split(/\r?\n/).slice(1).filter((line) => /\tdevice$/.test(line));
@@ -97,16 +128,20 @@ function prepareDevice() {
       "기기 화면이 꺼져 있거나 잠겨 있어요. 잠금을 풀고 검증이 끝날 때까지 화면을 켜 두세요(개발자 옵션의 '화면 켜진 상태로 유지'가 편해요).",
     );
   }
-  // Signed HTTPS OTA is exercised with an ephemeral debug-only CA, then restored
-  // before the regular e2e build. The smoke runner refuses physical devices.
+  // Play 공식 SDK의 immediate 흐름과 직접 배포 APK의 Android 시스템 설치 흐름을 각각 검증해요.
+  // 두 검증 모두 전용 패키지·가짜 origin만 쓰며 실기기에서는 실행하지 않아요.
   if (target.startsWith("emulator-") && process.platform !== "win32") {
-    run("node scripts/test-ota-device.mjs", { env: { ANDROID_SERIAL: target }, timeout: 10 * 60 * 1000 });
+    verifyPlayPackageUpdates(target);
+    run("node scripts/test-package-update-device.mjs", {
+      env: { ANDROID_SERIAL: target, JARI_PACKAGE_UPDATE_PREPARED_ASSETS: "1" },
+      timeout: 15 * 60 * 1000,
+    });
   }
   // 로컬 서버 주소로 웹 번들 → Capacitor 동기화 → 디버그 APK(평소 앱과 같은 dev.thsvkd.jari). 푸시(Firebase)는 빼서 알림 권한·토큰 등록이 끼지 않게 해요.
   run("npm run build", { env: { VITE_API_BASE_URL: `http://127.0.0.1:${E2E_API_PORT}` } });
   run("npx cap sync android");
   // 경로를 적어요. NoDefaultCurrentDirectoryInExePath 가 켜진 셸에서는 cmd 가 현재 폴더의 gradlew.bat 을 찾지 않아요.
-  run(`${process.platform === "win32" ? ".\\gradlew.bat" : "./gradlew"} testDebugUnitTest assembleDebug -PjariNoFirebase`, { cwd: join(ROOT, "android") });
+  run(`${process.platform === "win32" ? ".\\gradlew.bat" : "./gradlew"} testDebugUnitTest testReleaseUnitTest assembleDebug -PjariNoFirebase`, { cwd: join(ROOT, "android") });
   // CI 에서는 테스트 내내 놀고 있을 Gradle 데몬(-Xmx1536m)을 내려 에뮬레이터 곁의 자원을 비워요. 이 Mac 에서는 다음 실행이 다시 써요.
   // (에뮬레이터가 말없이 꺼진 일이 있어 넣었지만 러너 메모리는 넉넉했어요(16GB 중 10GB 남음). 원인으로 확인된 것은 아니에요.)
   if (CI) run("./gradlew --stop", { cwd: join(ROOT, "android") });

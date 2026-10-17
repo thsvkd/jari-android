@@ -1,21 +1,20 @@
 {
   "name": "jari-android",
   "private": true,
-  "version": "4.22.0",
+  "version": "4.23.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "build:demo": "tsc --noEmit && vite build --mode demo",
-    "build:ota": "tsc --noEmit && vite build --mode ota --outDir dist-ota",
-    "bundle:ota": "node scripts/build-ota.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:ota:device": "node scripts/test-ota-device.mjs",
     "verify": "node scripts/verify.mjs",
-    "prepare": "git config core.hooksPath .githooks"
+    "prepare": "git config core.hooksPath .githooks",
+    "manifest:apk": "node scripts/build-apk-update.mjs",
+    "test:updates:device": "node scripts/test-package-update-device.mjs"
   },
   "dependencies": {
     "@capacitor/android": "7.6.9",

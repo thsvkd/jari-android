@@ -30,7 +30,7 @@
 - **Set it and forget it.** Pick the date, time window, trains and seat conditions; the server keeps checking even after you close the app.
 - **Only the seats you want.** Choose trains, standard or first class, cars, window or aisle, and rows to skip. Seats that don't match are never taken.
 - **Notified the moment it's yours.** When a seat opens, the server books it (held, not yet paid) and sends a phone notification. You pay in the Korail app yourself.
-- **Update screens inside the app.** Android builds configured for OTA can check for and apply signed web updates in Settings. Native changes still require a new app binary ([setup, Korean](docs/android.md#앱-내-업데이트-ota)).
+- **Install new app versions from Settings.** Play installations update through Google Play; direct APK installations use Android's installer to update the whole app ([setup, Korean](docs/android.md#앱-내-업데이트)).
 
 ```mermaid
 flowchart LR

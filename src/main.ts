@@ -33,9 +33,6 @@ let app: JariApp | undefined;
 async function launch(): Promise<void> {
   try {
     const updates = demoMode ? undefined : nativeUpdates();
-    // Capture this page's native generation before rendering. An old page must
-    // never acknowledge the candidate that replaces it later.
-    const launchUpdate = await updates?.getStatus().catch(() => null);
     const apiBase = demoMode
       ? ""
       : resolveApiBase(
@@ -69,11 +66,6 @@ async function launch(): Promise<void> {
     app = new JariApp(rootElement, api, {
       demoMode,
       updates,
-      onFirstRender: async () => {
-        if (!updates) return;
-        if (!launchUpdate?.bootId) throw new Error("업데이트 실행 정보를 읽지 못했어요.");
-        await updates.ready({ bootId: launchUpdate.bootId });
-      },
       onToken: session.write,
       onBootstrap: async () => {
         await initialize(false);

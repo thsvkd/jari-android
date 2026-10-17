@@ -1,5 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Debug only: supports local Vite/API verification via adb reverse or emulator loopback. -->
-    <application android:networkSecurityConfig="@xml/debug_network_security_config" />
+    <application android:networkSecurityConfig="@xml/debug_network_security_config">
+        <provider
+            android:name="com.jari.app.updates.PackageUpdateFileProvider"
+            android:authorities="${applicationId}.packageupdates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/package_update_paths" />
+        </provider>
+    </application>
 </manifest>

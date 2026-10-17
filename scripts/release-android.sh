@@ -130,8 +130,15 @@ else
 fi
 
 VERSION="$(node -p "require('./package.json').version")"
+# 직접 설치본의 업데이트 피드 공개 설정. 기존 배포 키를 재사용하며 개인 키는 빌드에 넣지 않아요.
+if [[ -z "${JARI_APK_UPDATE_MANIFEST_URL:-}" && -z "${JARI_APK_UPDATE_PUBLIC_KEY:-}" ]]; then
+  export JARI_APK_UPDATE_MANIFEST_URL=https://github.com/thsvkd/jari-android/releases/latest/download/apk-update.json
+  export JARI_APK_UPDATE_PUBLIC_KEY="$(doppler secrets get JARI_OTA_PUBLIC_KEY --plain --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" 2>/dev/null || true)"
+fi
+[[ -n "${JARI_APK_UPDATE_MANIFEST_URL:-}" && -n "${JARI_APK_UPDATE_PUBLIC_KEY:-}" ]] \
+  || fail "APK 업데이트의 HTTPS 피드 주소와 RSA 공개키가 필요해요(JARI_APK_UPDATE_MANIFEST_URL / JARI_APK_UPDATE_PUBLIC_KEY)."
 echo "== 앱 $VERSION 웹 번들 ($API_BASE_URL)"
-VITE_API_BASE_URL="$API_BASE_URL" npm run build
+VITE_API_BASE_URL="$API_BASE_URL" VITE_DEMO_MODE=false npm run build
 npx cap sync android
 echo "== Gradle assembleDebug"
 (cd android && ./gradlew assembleDebug)

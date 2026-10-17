@@ -605,7 +605,7 @@ a.settings-row { color: inherit; text-decoration: none; }
 .settings-row > span:not(.badge) { display: grid; gap: 4px; }
 .settings-row b { font-size: 12px; }
 .settings-row small { font-size: 12px; }
-.settings-row em { color: var(--accent); font-size: 12px; font-style: normal; }
+.settings-row em { max-width: min(50vw, 220px); overflow-wrap: anywhere; color: var(--accent); font-size: 12px; font-style: normal; }
 .settings-row.disabled { color: var(--muted); opacity: .68; }
 .settings-row.static { cursor: default; }
 .settings-section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
