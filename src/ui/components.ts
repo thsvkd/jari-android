@@ -67,9 +67,9 @@ export function button(options: ButtonOptions): Html {
 }
 
 /** 결제처럼 앱 밖으로 나가는 버튼 모양의 링크. http(s) 주소만 받아요. */
-export function linkButton(options: { label: string; trailing?: string; href: string; variant?: ButtonVariant }): Html {
+export function linkButton(options: { label: string; trailing?: string; href: string; variant?: ButtonVariant; attrs?: Attrs }): Html {
   const href = /^https?:\/\//i.test(options.href) ? options.href : "#";
-  return `<a class="${BUTTON_CLASS[options.variant ?? "primary"]}" href="${esc(href)}" target="_blank" rel="noreferrer">${esc(options.label)}${options.trailing ? ` <span>${esc(options.trailing)}</span>` : ""}</a>`;
+  return `<a ${attrs({ ...options.attrs, class: BUTTON_CLASS[options.variant ?? "primary"], href, target: "_blank", rel: "noreferrer" })}>${esc(options.label)}${options.trailing ? ` <span>${esc(options.trailing)}</span>` : ""}</a>`;
 }
 
 export interface ChoiceOptions {

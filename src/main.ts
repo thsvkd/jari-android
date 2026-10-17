@@ -11,6 +11,7 @@ import {
   followKeyboard,
   initializePlatform,
   openGoogleBrowser,
+  openKorailPayment,
   readToken,
   watchForeground,
   watchGoogleReturn,
@@ -71,6 +72,7 @@ async function launch(): Promise<void> {
       },
       onTheme: applyStatusBarStyle,
       onOpenExternal: openGoogleBrowser,
+      onOpenKorailPayment: Capacitor.isNativePlatform() ? openKorailPayment : undefined,
       googleAppReturn: Capacitor.isNativePlatform(),
     });
 

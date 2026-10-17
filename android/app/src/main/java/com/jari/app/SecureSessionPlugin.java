@@ -33,6 +33,8 @@ public class SecureSessionPlugin extends Plugin {
     private static final String TOKEN_KEY = "token";
     private static final String VERSION = "v1";
     private static final int GCM_TAG_LENGTH = 128;
+    private static final String KORAIL_PACKAGE = "com.korail.talk";
+    private static final String KORAIL_BOOKED_TICKETS = "korailtalk://navigation?view=bookedTicket";
 
     @PluginMethod
     public void read(PluginCall call) {
@@ -114,6 +116,47 @@ public class SecureSessionPlugin extends Plugin {
             call.resolve();
         } catch (android.content.ActivityNotFoundException error) {
             call.reject("구글 로그인을 열 브라우저가 없어요.");
+        }
+    }
+
+    /**
+     * Payment happens in Korail's own app on its "예약 승차권 조회 · 취소" screen, where the user
+     * is usually signed in already. korailtalk://navigation is not a published contract (seen in
+     * 코레일+ 7.0.0's DeepLinkActivity): without the app, or once a version drops the link, the
+     * web page opens; a version that keeps the link but ignores the view opens on its own home.
+     */
+    @PluginMethod
+    public void openKorailPayment(PluginCall call) {
+        Uri web = Uri.parse(call.getString("webUrl", ""));
+        String host = web.getHost() == null ? "" : web.getHost();
+        boolean korail = host.equals("korail.com") || host.endsWith(".korail.com")
+                || host.equals("letskorail.com") || host.endsWith(".letskorail.com");
+        if (!"https".equals(web.getScheme()) || !korail || web.getUserInfo() != null
+                || (web.getPort() != -1 && web.getPort() != 443)) {
+            call.reject("코레일 결제 주소가 올바르지 않아요.");
+            return;
+        }
+        JSObject result = new JSObject();
+        try {
+            Intent app = new Intent(Intent.ACTION_VIEW, Uri.parse(KORAIL_BOOKED_TICKETS));
+            app.setPackage(KORAIL_PACKAGE);
+            app.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(app);
+            result.put("opened", "app");
+            call.resolve(result);
+            return;
+        } catch (android.content.ActivityNotFoundException | SecurityException missing) {
+            // Not installed, or a version without the link: the web page below.
+        }
+        try {
+            Intent browser = new Intent(Intent.ACTION_VIEW, web);
+            browser.addCategory(Intent.CATEGORY_BROWSABLE);
+            browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(browser);
+            result.put("opened", "web");
+            call.resolve(result);
+        } catch (android.content.ActivityNotFoundException error) {
+            call.reject("코레일 결제 화면을 열 앱이 없어요.");
         }
     }
 

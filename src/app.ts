@@ -83,6 +83,8 @@ interface AppOptions {
   onBootstrap?: (state: BootstrapState) => Promise<void> | void;
   onRequestPush?: () => Promise<void>;
   onOpenExternal?: (url: string) => Promise<void>;
+  /** Android only: payment goes to the 코레일+ app when installed. Elsewhere the link opens the web page. */
+  onOpenKorailPayment?: (webUrl: string) => Promise<"app" | "web">;
   /** The Android app can receive the browser's result directly, so Google sign-in needs no code. */
   googleAppReturn?: boolean;
   onTheme?: (theme: "light" | "dark") => Promise<void> | void;
@@ -330,6 +332,8 @@ export class JariApp {
   private accessRequired = false;
   private accessRequestPending = false;
   private busy = false;
+  /** 결제 버튼을 두 번 눌러 코레일+ 나 브라우저가 두 번 열리지 않게 해요. */
+  private openingPayment = false;
   private error = "";
   private toast = "";
   private toastTimer: number | null = null;
@@ -914,7 +918,7 @@ export class JariApp {
     return `<section class="card payment-card ${compact ? "compact-card" : ""}">
       ${badge({ element: "div", shape: "tag", tone: "warning", dot: true, className: "card-label", label: `결제가 필요한 예약 ${pending.length}건${progress}` })}
       ${pending.map((item) => `<div class="payment-row"><div><strong>${escapeHtml(item.trainInfo)}</strong><small>${item.seatClass ? `${item.seatClass === "general" ? "일반실" : "특실"} · ` : ""}${item.seatLabels?.length ? `${escapeHtml(item.seatLabels.join(", "))} · ` : item.seatNumber !== null ? `좌석 ${escapeHtml(item.seatNumber)} · ` : ""}${item.reservationId ? `예약번호 ${escapeHtml(item.reservationId)}` : "예약번호 정보 없음"}</small></div><b>${item.expiresAt ? `${escapeHtml(formatStamp(item.expiresAt))}까지${this.renderTimeLeft(item.expiresAt)}` : "결제 기한 정보 없음"}</b></div>`).join("")}
-      ${linkButton({ label: "코레일에서 결제하기", trailing: "↗", href: this.state!.paymentUrl })}
+      ${linkButton({ label: "코레일에서 결제하기", trailing: "↗", href: this.state!.paymentUrl, attrs: { "data-korail-pay": true } })}
       ${compact ? button({ variant: "text", view: "activity", label: "예약 관리" }) : button({ variant: "ghost-danger", action: "cancel-pending", label: "예약 전체 취소" })}
     </section>`;
   }
@@ -2547,6 +2551,18 @@ ${agentHost(agent)}`;
     }
     if (target.closest(".toast")) {
       this.dismissToast();
+      return;
+    }
+    // linkButton 이 http(s) 가 아닌 결제 주소를 "#" 로 바꿔 둬요. 그때는 열 곳이 없으니 가로채지 않아요.
+    const payLink = target.closest<HTMLAnchorElement>("a[data-korail-pay]");
+    const payUrl = payLink?.getAttribute("href") ?? "";
+    if (payLink && /^https:\/\//i.test(payUrl) && this.options.onOpenKorailPayment && !this.demo) {
+      event.preventDefault();
+      if (this.openingPayment) return;
+      this.openingPayment = true;
+      this.options.onOpenKorailPayment(payUrl)
+        .catch((error: unknown) => this.notify(error instanceof Error ? error.message : "코레일 결제 화면을 열지 못했어요."))
+        .finally(() => { this.openingPayment = false; });
       return;
     }
     const button = target.closest<HTMLButtonElement>("button");

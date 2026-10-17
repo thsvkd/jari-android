@@ -8,6 +8,7 @@ interface SecureSessionPlugin {
   pushConfigured(): Promise<{ configured: boolean }>;
   openNotificationSettings(): Promise<void>;
   openGoogleBrowser(options: { url: string }): Promise<void>;
+  openKorailPayment(options: { webUrl: string }): Promise<{ opened: "app" | "web" }>;
 }
 
 const SecureSession = registerPlugin<SecureSessionPlugin>("SecureSession");
@@ -97,6 +98,11 @@ export async function openGoogleBrowser(raw: string): Promise<void> {
   const popup = window.open(url.href, "_blank");
   if (!popup) throw new Error("브라우저 팝업을 허용한 뒤 다시 로그인해 주세요.");
   popup.opener = null;
+}
+
+/** Opens the signed-in 코레일+ app on its booked-tickets screen, or the payment page when the app is not there. */
+export async function openKorailPayment(webUrl: string): Promise<"app" | "web"> {
+  return (await SecureSession.openKorailPayment({ webUrl })).opened;
 }
 
 /** The browser's Google page reopens the app at dev.thsvkd.jari://google-auth?handoff=… (AndroidManifest.xml). */
