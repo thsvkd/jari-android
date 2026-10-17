@@ -299,7 +299,7 @@ export interface MobileApi {
   /** appReturn: the browser hands the result back to this app instead of asking for a code. */
   googleStart(options?: { appReturn: boolean }): Promise<GoogleAuthStart>;
   googleLink(options?: { appReturn: boolean }): Promise<GoogleAuthStart>;
-  /** signedOut: this session came from a Google sign-in and ended with the link. */
+  /** signedOut: an older server explicitly ended this session; current servers keep the caller. */
   googleUnlink(): Promise<{ linked: false; signedOut?: boolean }>;
   googleAcknowledge(ticket: string): Promise<{ acknowledged: boolean }>;
   googleCancel(ticket: string): Promise<{ cancelled: boolean }>;

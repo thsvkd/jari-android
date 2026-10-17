@@ -124,8 +124,8 @@ class IdentityStore:
             session_columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)")}
             if "authenticated_at" not in session_columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN authenticated_at REAL")
-            # Nothing recorded how older sessions began. Where Google is linked any of them may have come
-            # from it, so they all count as Google sessions: unlinking from one then signs it out too.
+            # Older sessions lack provenance. Keep conservative Google attribution where linked;
+            # unlink now preserves the caller and converts its attribution back to local.
             if "via_google" not in session_columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN via_google INTEGER NOT NULL DEFAULT 0")
                 db.execute(
