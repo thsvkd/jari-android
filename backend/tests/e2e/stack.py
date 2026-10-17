@@ -261,7 +261,14 @@ class Stack:
                     ["taskkill", "/T", "/F", "/PID", str(self.server.pid)], capture_output=True
                 )
             else:
-                os.killpg(os.getpgid(self.server.pid), signal.SIGTERM)
+                group = os.getpgid(self.server.pid)
+                os.killpg(group, signal.SIGTERM)
+                # 다음 스택이 같은 포트를 쓰니 서버가 포트를 놓을 때까지 기다려요. 정리가 멈추면 그룹째 끝내요.
+                try:
+                    self.server.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    os.killpg(group, signal.SIGKILL)
+                    self.server.wait()
         if getattr(self, "log", None):
             self.log.close()
 

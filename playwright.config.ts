@@ -57,6 +57,10 @@ export default defineConfig({
       timeout: 120_000,
       reuseExistingServer: false,
       stdout: "pipe",
+      // 기본값은 SIGKILL 이라 stack.py 가 서버를 정리하지 못해요. 새 세션의 서버가 포트를 쥔 채 남아
+      // verify 의 다음 단계(기기 → 헤드리스) 스택이 옛 서버에 붙어 "가짜 코레일이 끼워지지 않았어요" 로 멈췄어요.
+      // stack.py 는 서버가 끝날 때까지 최대 60초 기다리니 그보다 조금 길게 줘요.
+      gracefulShutdown: { signal: "SIGTERM", timeout: 75_000 },
     },
     {
       command: `npx vite build --mode e2e --outDir dist-e2e --emptyOutDir && npx vite preview --outDir dist-e2e --host 127.0.0.1 --port ${E2E.web} --strictPort`,
