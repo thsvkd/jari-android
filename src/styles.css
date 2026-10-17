@@ -610,6 +610,8 @@ a.settings-row { color: inherit; text-decoration: none; }
 .settings-section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .settings-section-title .eyebrow { margin-bottom: 0; }
 .settings-section-copy { margin: 10px 0 4px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.app-update { min-width: 0; overflow-wrap: anywhere; }
+.app-update .settings-row { grid-template-columns: minmax(0, 1fr) auto; }
 .rail-merge-note { margin: 11px 0 0; }
 .stepper.small button { width: 32px; min-height: 34px; font-size: 15px; }
 .stepper.small output { min-width: 44px; }

@@ -4,8 +4,8 @@ const config: CapacitorConfig = {
   appId: "dev.thsvkd.jari",
   appName: "자리났다",
   webDir: "dist",
-  // The bundled Vite assets are the only production web content. A live server
-  // URL is deliberately not configured here.
+  // Production starts from bundled Vite assets. AppUpdates may select a signed,
+  // verified local OTA directory; a live server URL is never configured here.
   server: {
     androidScheme: "https",
     cleartext: false,

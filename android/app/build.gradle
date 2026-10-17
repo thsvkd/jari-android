@@ -16,6 +16,38 @@ def releaseKeyAlias = keystoreProps.getProperty('keyAlias') ?: System.getenv('JA
 def releaseKeyPassword = keystoreProps.getProperty('keyPassword') ?: System.getenv('JARI_RELEASE_KEY_PASSWORD')
 def hasReleaseSigning = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
 
+def otaManifestUrl = System.getenv('JARI_OTA_MANIFEST_URL')?.trim()
+def otaPublicKey = System.getenv('JARI_OTA_PUBLIC_KEY')?.trim()
+if ((otaManifestUrl && !otaPublicKey) || (!otaManifestUrl && otaPublicKey)) {
+    throw new GradleException('JARI_OTA_MANIFEST_URL and JARI_OTA_PUBLIC_KEY must be configured together')
+}
+if (otaManifestUrl) {
+    def otaUri
+    try {
+        otaUri = new URI(otaManifestUrl)
+    } catch (Exception error) {
+        throw new GradleException('JARI_OTA_MANIFEST_URL must be a valid HTTPS URL', error)
+    }
+    if (otaUri.scheme != 'https' || !otaUri.host || otaUri.userInfo != null || otaUri.fragment != null) {
+        throw new GradleException('JARI_OTA_MANIFEST_URL must be a valid HTTPS URL')
+    }
+    try {
+        def keyBytes = Base64.decoder.decode(otaPublicKey)
+        def key = java.security.KeyFactory.getInstance('RSA').generatePublic(
+            new java.security.spec.X509EncodedKeySpec(keyBytes)
+        )
+        if (!(key instanceof java.security.interfaces.RSAPublicKey) || key.modulus.bitLength() < 2048) {
+            throw new GradleException('JARI_OTA_PUBLIC_KEY must be an RSA key with at least 2048 bits')
+        }
+    } catch (GradleException error) {
+        throw error
+    } catch (Exception error) {
+        throw new GradleException('JARI_OTA_PUBLIC_KEY must be base64 DER SPKI RSA public key', error)
+    }
+}
+
+def buildConfigString = { value -> '"' + (value ?: '').replace('\\', '\\\\').replace('"', '\\"') + '"' }
+
 android {
     namespace "com.jari.app"
     compileSdk rootProject.ext.compileSdkVersion
@@ -27,12 +59,17 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 42100
         versionName "4.21.0"
+        buildConfigField "String", "JARI_OTA_MANIFEST_URL", buildConfigString(otaManifestUrl)
+        buildConfigField "String", "JARI_OTA_PUBLIC_KEY", buildConfigString(otaPublicKey)
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
+    }
+    buildFeatures {
+        buildConfig true
     }
     if (hasReleaseSigning) {
         signingConfigs {

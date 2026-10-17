@@ -61,6 +61,7 @@ VITE_API_BASE_URL=http://127.0.0.1:18081 npm run dev
 | `src/app.ts` | `JariApp`: 화면 상태, 렌더링, 상태 폴링, 시트 |
 | `src/model.ts` | 상태 판정(`deriveRadarView`), 조건↔초안 변환, 좌석 필터 |
 | `src/api.ts`, `src/types.ts` | 서버 요청 구현과 API 타입 |
+| `src/updates.ts`, `android/app/src/main/java/com/jari/app/updates/` | 앱 내 업데이트의 웹 경계와 네이티브 서명·다운로드·복구 |
 | `src/demo.ts` | 데모·체험하기용 샘플 API |
 | `backend/src/korail_bot/mobile/` | API(`api.py`), 런타임, 워커, 저장소, 알림, CLI(`__main__.py`) |
 | `e2e/` | Playwright 흐름·레이아웃 검사 |
@@ -85,6 +86,7 @@ CI 기기 단계는 에뮬레이터만 대상으로 화면을 깨우고 잠금 �
 ```bash
 npm test                                          # 앱 유닛·모듈 (vitest)
 npm run build                                     # 타입 검사 + 번들
+npm test -- scripts/build-ota.test.mjs scripts/ota-build-config.test.mjs src/updates.test.ts  # OTA 산출·설정·화면
 npx playwright test --project=phone-light         # 헤드리스 e2e (e2e 전용 스택과 웹 빌드를 스스로 띄웁니다)
 npm run verify -- --ci                            # 기기 없이 CI와 같은 전체 검증
 
@@ -95,6 +97,10 @@ uv run --frozen ruff check src tests && uv run --frozen ruff format --check src 
 uv run --frozen python ../scripts/smoke-backend.py
 bash ../scripts/test-deploy-backend.sh            # 배포 스크립트 회귀 검사
 ```
+
+OTA 네이티브 보안·복구 테스트는 `cd android && ./gradlew testDebugUnitTest -PjariNoFirebase`로 검사합니다. 업데이트 산출과 APK에 고정할 공개 설정은 [앱 내 업데이트](android.md#앱-내-업데이트-ota)를 따릅니다.
+
+`ANDROID_SERIAL=emulator-5554 npm run test:ota:device`는 실제 HTTPS 다운로드·서명 검증·적용·재실행·Keystore 세션 유지·30초 복구·재생 차단을 검사합니다. 임시 키와 디버그 전용 인증서, `.invalid` API 주소를 사용해 운영 API에는 연결하지 않습니다. 디버그 설정과 웹 자산은 끝에 복원하지만 에뮬레이터 앱을 덮어쓰고 데이터를 지우므로 실폰에서는 실행하지 않습니다. macOS·Linux의 `npm run verify` 기기 단계에도 포함됩니다.
 
 다른 작업 트리의 e2e 스택이 기본 포트를 쓰고 있으면 `JARI_E2E_PORT_OFFSET=1000 npx playwright test --project=phone-light`처럼 포트 오프셋을 줍니다. `JARI_E2E_PORT_OFFSET=1000 npm run verify -- --ci`에도 같은 값이 전달되어 각 작업 트리의 API·제어·웹 포트를 함께 옮깁니다.
 

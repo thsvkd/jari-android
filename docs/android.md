@@ -8,6 +8,7 @@
 - [릴리스](#릴리스)
 - [휴대폰 알림 (Firebase)](#휴대폰-알림-firebase)
 - [앱 보안 설정](#앱-보안-설정)
+- [앱 내 업데이트 (OTA)](#앱-내-업데이트-ota)
 - [스토어 그림과 스크린숏](#스토어-그림과-스크린숏)
 - [패키지 이름 변경 이력](#패키지-이름-변경-이력)
 - [Windows에서 빌드하기](#windows에서-빌드하기)
@@ -113,10 +114,53 @@ scripts/doppler-store-android-keys.sh release-new                               
 
 ## 앱 보안 설정
 
-- 릴리스 WebView는 `dist`에서 복사한 번들만 보여 줍니다. 라이브 서버 주소를 두지 않고, 임의 이동을 막고, Capacitor 출처는 HTTPS(`https://localhost`)입니다.
+- 릴리스 WebView는 APK에 포함된 번들 또는 서명과 무결성을 검증한 로컬 OTA 번들을 보여 줍니다. 라이브 서버 주소를 두지 않고, 임의 이동을 막고, Capacitor 출처는 HTTPS(`https://localhost`)입니다.
 - 릴리스 빌드는 평문 HTTP를 막습니다. 디버그 빌드에만 에뮬레이터 확인용으로 `localhost`·`10.0.2.2`를 허용하는 네트워크 정책이 있습니다.
 - 앱 세션은 `@capacitor/preferences`에 저장하지 않습니다. `SecureSessionPlugin`이 Android Keystore에서 만든 AES-GCM 키로 암호화해 IV와 암호문만 앱 전용 SharedPreferences에 둡니다.
 - 디버그 APK는 WebView 원격 디버깅이 켜져 있습니다. 서명한 릴리스 빌드에는 없습니다.
+
+## 앱 내 업데이트 (OTA)
+
+**설정 → 업데이트 확인 → 업데이트 적용**으로 웹 화면과 JavaScript 로직을 바꿉니다. 적용하면 화면 전체가 다시 열립니다. 개발용 HMR처럼 입력 중인 상태를 유지하지는 않습니다. 로그인 세션과 서버에서 진행 중인 자리 찾기는 유지합니다. 네이티브 플러그인·권한·Android 설정 변경은 기존 APK/AAB 릴리스 절차로 배포합니다. 처음 지원하려면 아래 설정을 포함한 APK/AAB를 한 번 설치해야 합니다.
+
+### 지원 APK 준비
+
+Gradle 빌드 환경에 두 공개 값을 함께 지정합니다. 지정하지 않으면 업데이트 버튼은 이용 불가로 표시됩니다. 하나만 설정하거나 HTTPS 주소·RSA 공개키가 잘못되면 빌드를 중단합니다. APK와 Play 빌드는 같은 웹 OTA 체계를 쓸 수 있으며, Play 앱 안에서는 외부 APK 설치를 제공하지 않습니다.
+
+| 환경 변수 | 뜻 |
+|---|---|
+| `JARI_OTA_MANIFEST_URL` | APK 버전별 고정 HTTPS 매니페스트 URL |
+| `JARI_OTA_PUBLIC_KEY` | RSA 공개키의 DER SPKI를 base64로 인코딩한 값(2048비트 이상) |
+
+개인키는 OTA 전용으로 만들고 보관합니다. APK 서명키와 다릅니다. 아래는 로컬 보관 예시이며 `.secrets/`는 git에서 제외됩니다. 운영에서는 승인된 비밀 저장소에 보관하고, 개인키를 `VITE_` 변수로 넘기지 않습니다.
+
+```bash
+mkdir -p .secrets
+(umask 077; openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out .secrets/ota-signing.pem)
+export JARI_OTA_PUBLIC_KEY="$(openssl pkey -in .secrets/ota-signing.pem -pubout -outform DER | base64 | tr -d '\n')"
+export JARI_OTA_MANIFEST_URL=https://updates.example.com/jari/4.21.0/manifest.json
+scripts/release-android.sh  # 또는 scripts/release-play.sh
+```
+
+키를 교체하거나 매니페스트 주소를 바꾸려면 APK/AAB도 새로 배포합니다. 이 설정만으로 운영 파일을 업로드하지는 않습니다.
+
+### 웹 업데이트 파일 만들기
+
+운영 HTTPS API를 넣은 전용 번들을 만듭니다. `build:ota`는 `dist-ota/ota-build.json`에 API 주소·데모 여부·현재 Android `versionName`을 기록합니다. 데모·HTTP·루프백 API는 거절합니다. `--native-version`은 대상 APK의 `versionName`과 정확히 같아야 합니다.
+
+```bash
+VITE_API_BASE_URL=https://jari.thsvkd.dev VITE_DEMO_MODE=false npm run build:ota
+npm run bundle:ota -- --version 4.21.0-web.1 --sequence 1 \
+  --native-version 4.21.0 \
+  --url https://updates.example.com/jari/4.21.0/web.1/bundle.zip \
+  --key .secrets/ota-signing.pem --out dist-release/ota/web.1
+```
+
+출력은 `bundle.zip`, `manifest.json`, `public-key.txt`입니다. 공개키가 APK에 넣은 값과 같은지 확인합니다. 기존 출력은 덮어쓰지 않습니다. `sequence`는 같은 APK에 대해 계속 증가하는 양의 안전한 정수이며 실패해 복구한 업데이트 번호도 다시 쓰지 않습니다. 배포할 때는 ZIP을 먼저 위 URL에 올려 검증하고, 마지막에 APK가 바라보는 매니페스트를 교체합니다. 업로드·운영 배포는 명시적 승인 후 별도로 합니다. APK 버전별 주소를 유지하면 서로 다른 네이티브 버전의 업데이트를 섞지 않습니다.
+
+앱은 고정한 주소에서 받은 매니페스트의 RSA-SHA256 서명과 ZIP의 SHA-256을 확인합니다. HTTPS만 다운로드하고, 다운로드 20MiB·해제 50MiB·2000항목 상한, 경로 탈출·중복 경로·네이티브 실행 파일 차단을 적용합니다. 첫 화면이 30초 안에 준비되지 않거나 적용 중 앱이 종료되면 이전 번들로 복구합니다. APK가 바뀌면 APK에 들어 있는 번들로 돌아갑니다. 브라우저·데모·체험에서는 실제 업데이트를 실행하지 않습니다.
+
+Google Play는 WebView의 JavaScript 같은 인터프리터 코드를 예외로 다루지만 런타임 코드에도 모든 정책이 적용됩니다([공식 정책](https://support.google.com/googleplay/android-developer/answer/16559646?hl=en)). OTA에는 웹 자산만 담고, 앱의 목적·권한·정책 선언을 바꾸는 변경은 정식 스토어 릴리스로 검토합니다. 로컬 에뮬레이터 검증은 [개발 가이드](development.md#테스트와-검증)를 따릅니다.
 
 ## 스토어 그림과 스크린숏
 
