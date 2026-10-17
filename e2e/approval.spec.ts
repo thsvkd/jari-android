@@ -101,7 +101,9 @@ test.describe("회원 승인", () => {
     await expectCleanLayout(page, "관리자 회원 승인 완료");
     const rejectedRow = page.locator(`[data-member-id='${rejected.id}']`);
     await rejectedRow.locator("[data-action='reject-member']").click();
-    await expect(rejectedRow).toContainText("거절");
+    // 누르기 전에도 거절 버튼 글자가 "거절" 이라 글자로는 끝났는지 알 수 없어요. 버튼이 사라지면 결정이 반영된 거예요.
+    await expect(rejectedRow.locator("[data-action='reject-member']")).toHaveCount(0);
+    await expect(rejectedRow).toContainText("거절됨");
     const denied = await request("/bootstrap", rejected.token, {}).then((reply) => reply.json()) as { user: { status: string } };
     expect(denied.user.status).toBe("rejected");
     await expectCleanLayout(page, "관리자 회원 승인 거절 완료");
