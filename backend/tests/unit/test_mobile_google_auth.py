@@ -157,6 +157,7 @@ def test_live_approved_session_links_without_password(tmp_path):
         "enabled": True,
         "linked": False,
         "reauthenticationRequired": False,
+        "signedInWithGoogle": False,
     }
     linked = client.post("/api/mobile/account/google/link", json={}, headers=headers)
     assert linked.status_code == 200
@@ -224,8 +225,23 @@ def test_legacy_live_approved_session_links_without_password(tmp_path):
     assert response.status_code == 200
     assert response.json["expiresIn"] == 300
     with identity.connect() as db:
-        row = db.execute("SELECT authenticated_at FROM sessions").fetchone()
+        row = db.execute("SELECT authenticated_at, via_google FROM sessions").fetchone()
     assert row["authenticated_at"] is None
+    # Without Google linked, an older session is a password sign-in; unlinking from it keeps it.
+    assert row["via_google"] == 0
+
+
+def test_older_sessions_of_a_google_linked_account_count_as_google_sessions(tmp_path):
+    # Nothing recorded how they began, so the owner's unlink must not leave one of them signed in.
+    identity, client = make_env(tmp_path)
+    linked, _ = register(identity, client)
+    plain, _ = register(identity, client, username="bobby")
+    identity.google_link(linked["user"]["id"], "google-subject")
+    with identity.connect() as db:
+        db.execute("ALTER TABLE sessions DROP COLUMN via_google")
+    reopened = IdentityStore(identity.path)
+    assert reopened.session_via_google(linked["token"])
+    assert not reopened.session_via_google(plain["token"])
 
 
 def test_expired_revoked_pending_or_rejected_session_cannot_start_account_link(tmp_path):
@@ -276,6 +292,7 @@ def test_link_then_login_creates_session_only_when_ticket_is_polled(tmp_path, mo
         "enabled": True,
         "linked": True,
         "reauthenticationRequired": False,
+        "signedInWithGoogle": False,
     }
     identity.revoke(session["token"])
 
@@ -292,6 +309,7 @@ def test_link_then_login_creates_session_only_when_ticket_is_polled(tmp_path, mo
         "enabled": True,
         "linked": True,
         "reauthenticationRequired": False,
+        "signedInWithGoogle": True,
     }
 
 
@@ -402,26 +420,21 @@ def test_only_one_concurrent_poll_can_consume_a_completed_login(tmp_path, monkey
     assert statuses == [200, 400]
 
 
-def test_unlink_needs_password_and_account_deletion_cascades_google_identity(tmp_path, monkeypatch):
+def test_unlink_needs_only_the_session_and_account_deletion_cascades_google_identity(
+    tmp_path, monkeypatch
+):
     identity, client = make_env(tmp_path)
     session, headers = register(identity, client)
-    link = client.post(
-        "/api/mobile/account/google/link", json={"password": PASSWORD}, headers=headers
-    ).json
+    link = client.post("/api/mobile/account/google/link", json={}, headers=headers).json
     complete_callback(client, link, monkeypatch)
     client.post("/api/mobile/auth/google/poll", json={"ticket": link["ticket"]})
-    assert (
-        client.post(
-            "/api/mobile/account/google/unlink", json={"password": "wrong-pass"}, headers=headers
-        ).status_code
-        == 403
-    )
-    unfinished = client.post(
-        "/api/mobile/account/google/link", json={"password": PASSWORD}, headers=headers
-    ).json
-    assert client.post(
-        "/api/mobile/account/google/unlink", json={"password": PASSWORD}, headers=headers
-    ).json == {"linked": False}
+    assert client.post("/api/mobile/account/google/unlink", json={}).status_code == 401
+    assert identity.google_status(session["user"]["id"])
+    unfinished = client.post("/api/mobile/account/google/link", json={}, headers=headers).json
+    assert client.post("/api/mobile/account/google/unlink", json={}, headers=headers).json == {
+        "linked": False,
+        "signedOut": False,
+    }
     unfinished_query = parse_qs(urlsplit(unfinished["authorizationUrl"]).query)
     assert (
         client.get(
@@ -766,7 +779,7 @@ def test_expired_delivered_link_receipt_cannot_remove_a_later_link(tmp_path, mon
     assert identity.google_status(local["user"]["id"])
 
 
-def test_unlink_revokes_other_sessions_but_keeps_reauthenticated_caller(tmp_path, monkeypatch):
+def test_unlink_revokes_other_sessions_but_keeps_the_caller(tmp_path, monkeypatch):
     now = [1_000.0]
     identity, client = make_env(tmp_path, clock=lambda: now[0])
     local, headers = register(identity, client)
@@ -782,12 +795,53 @@ def test_unlink_revokes_other_sessions_but_keeps_reauthenticated_caller(tmp_path
     ]
 
     now[0] = 1_601.0
+    # A 4.20 or older app still sends the app password, even a wrong one; it is not checked any more.
     assert client.post(
-        "/api/mobile/account/google/unlink", json={"password": PASSWORD}, headers=headers
-    ).json == {"linked": False}
+        "/api/mobile/account/google/unlink", json={"password": "wrong-pass"}, headers=headers
+    ).json == {"linked": False, "signedOut": False}
     assert identity.authenticate(local["token"])["id"] == local["user"]["id"]
     with pytest.raises(AuthError):
         identity.authenticate(google["token"])
+
+
+def test_unlink_from_a_google_session_signs_that_session_out_too(tmp_path, monkeypatch):
+    # Whoever holds the Google account must not unlink first and keep their own way in
+    # while every other phone of the owner is signed out.
+    identity, client = make_env(tmp_path)
+    local, headers = register(identity, client)
+    link = client.post("/api/mobile/account/google/link", json={}, headers=headers).json
+    complete_callback(client, link, monkeypatch)
+    client.post("/api/mobile/auth/google/poll", json={"ticket": link["ticket"]})
+    login = client.post("/api/mobile/auth/google/start").json
+    complete_callback(client, login, monkeypatch)
+    google = client.post("/api/mobile/auth/google/poll", json={"ticket": login["ticket"]}).json[
+        "auth"
+    ]
+    google_headers = {"Authorization": "Bearer " + google["token"]}
+    assert client.get("/api/mobile/account/google", headers=google_headers).json[
+        "signedInWithGoogle"
+    ]
+    assert not client.get("/api/mobile/account/google", headers=headers).json["signedInWithGoogle"]
+
+    assert client.post(
+        "/api/mobile/account/google/unlink", json={}, headers=google_headers
+    ).json == {"linked": False, "signedOut": True}
+    assert not identity.google_status(local["user"]["id"])
+    for token in (google["token"], local["token"]):
+        with pytest.raises(AuthError):
+            identity.authenticate(token)
+
+
+def test_unlink_with_nothing_linked_signs_no_one_out(tmp_path):
+    identity, client = make_env(tmp_path)
+    local, headers = register(identity, client)
+    other = identity.login(local["user"]["username"], PASSWORD)
+    assert client.post("/api/mobile/account/google/unlink", json={}, headers=headers).json == {
+        "linked": False,
+        "signedOut": False,
+    }
+    assert identity.authenticate(other["token"])["id"] == local["user"]["id"]
+    assert identity.authenticate(local["token"])["id"] == local["user"]["id"]
 
 
 def test_browser_confirmation_allows_at_most_five_code_guesses(tmp_path, monkeypatch):

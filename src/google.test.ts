@@ -83,19 +83,78 @@ it("shows a link failure without opening a password prompt or silently retrying"
   expect(googleLink).toHaveBeenCalledTimes(1);
 });
 
-it("still asks for the password before unlinking a recently authenticated account", async () => {
+it("unlinks after a confirmation, without asking for the app password", async () => {
   const demo = createDemoApi();
-  const googleUnlink = vi.fn(async () => ({ linked: false as const }));
+  let linked = true;
+  const googleUnlink = vi.fn(async () => { linked = false; return { linked: false as const }; });
   const root = document.createElement("div"); document.body.append(root);
   const app = new JariApp(root, { ...demo,
-    googleStatus: async () => ({ enabled: true, linked: true, reauthenticationRequired: false }), googleUnlink,
+    googleStatus: async () => ({ enabled: true, linked, reauthenticationRequired: false }), googleUnlink,
   }, { demoMode: false });
   mounted.push(app);
   await app.start(true);
   app.navigate("settings");
+  await vi.waitFor(() => expect(root.querySelector("[data-action='google-unlink']")).not.toBeNull());
   root.querySelector<HTMLButtonElement>("[data-action='google-unlink']")!.click();
-  await vi.waitFor(() => expect(root.querySelector("#sheet-password")).not.toBeNull());
+  await vi.waitFor(() => expect(root.querySelector("[data-action='sheet-confirm']")).not.toBeNull());
+  expect(root.querySelector("#sheet-password")).toBeNull();
+  expect(root.textContent).toContain("다른 휴대폰의 앱 로그인도 함께 해제돼요.");
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-cancel']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-action='sheet-confirm']")).toBeNull());
   expect(googleUnlink).not.toHaveBeenCalled();
+  root.querySelector<HTMLButtonElement>("[data-action='google-unlink']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-action='sheet-confirm']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-action='google-link']")).not.toBeNull());
+  expect(googleUnlink).toHaveBeenCalledWith();
+  expect(root.textContent).toContain("구글 계정 연결을 해제했어요.");
+});
+
+it("signs this phone out when it unlinks from a session that Google signed in", async () => {
+  const demo = createDemoApi();
+  const googleUnlink = vi.fn(async () => ({ linked: false as const, signedOut: true }));
+  const root = document.createElement("div"); document.body.append(root);
+  const app = new JariApp(root, { ...demo,
+    googleConfiguration: async () => ({ enabled: true }),
+    googleStatus: async () => ({ enabled: true, linked: true, reauthenticationRequired: false, signedInWithGoogle: true }), googleUnlink,
+  }, { demoMode: false });
+  mounted.push(app);
+  await app.start(true);
+  app.navigate("settings");
+  await vi.waitFor(() => expect(root.querySelector("[data-action='google-unlink']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-action='google-unlink']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-action='sheet-confirm']")).not.toBeNull());
+  expect(root.textContent).toContain("이 휴대폰을 포함해 모든 휴대폰에서 로그아웃돼요.");
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".auth-shell")).not.toBeNull());
+  expect(googleUnlink).toHaveBeenCalledTimes(1);
+  expect(root.textContent).toContain("구글 계정 연결을 해제하고 로그아웃했어요.");
+  expect(root.querySelector(".screen-settings")).toBeNull();
+});
+
+it("reads a 401 that lands before the unlink answer as that sign-out, not as an expired login", async () => {
+  const demo = createDemoApi();
+  let app!: JariApp;
+  // The status poll got the 401 first: the API layer expires the session while the unlink is still out.
+  const googleUnlink = vi.fn(async () => { app.expireSession(); return { linked: false as const, signedOut: true }; });
+  const root = document.createElement("div"); document.body.append(root);
+  app = new JariApp(root, { ...demo,
+    googleConfiguration: async () => ({ enabled: true }),
+    googleStatus: async () => ({ enabled: true, linked: true, reauthenticationRequired: false, signedInWithGoogle: true }), googleUnlink,
+  }, { demoMode: false });
+  mounted.push(app);
+  await app.start(true);
+  app.navigate("settings");
+  await vi.waitFor(() => expect(root.querySelector("[data-action='google-unlink']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-action='google-unlink']")!.click();
+  await vi.waitFor(() => expect(root.querySelector("[data-action='sheet-confirm']")).not.toBeNull());
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".auth-shell")).not.toBeNull());
+  expect(root.textContent).toContain("구글 계정 연결을 해제하고 로그아웃했어요.");
+  expect(root.textContent).not.toContain("로그인이 만료됐어요");
+  // Afterwards an ordinary expiry reads as one again.
+  app.expireSession();
+  expect(root.textContent).toContain("로그인이 만료됐어요");
 });
 
 it("keeps cancellation retry visible when cancellation fails during an in-flight login", async () => {
@@ -154,6 +213,31 @@ it("on Android signs in with no code once the browser hands the result back to t
   // The browser page may reopen the app with the same value; it is not a new sign-in.
   app.receiveGoogleHandoff(HANDOFF);
   expect(root.textContent).not.toContain("진행 중인 구글 로그인이 없어요");
+});
+
+it("goes from a Google sign-in to home without a failure card while the first state loads", async () => {
+  const demo = createDemoApi();
+  const auth = await demo.login({ username: "friend", password: "password8" });
+  let loaded!: () => void;
+  const bootstrap = vi.fn(() => new Promise<Awaited<ReturnType<typeof demo.bootstrap>>>((resolve) => { loaded = () => void demo.bootstrap().then(resolve); }));
+  const root = document.createElement("div"); document.body.append(root);
+  const app = new JariApp(root, { ...demo, bootstrap, googleConfiguration: async () => ({ enabled: true }),
+    googleStart: async () => ({ ticket: "private-proof", authorizationUrl: "https://accounts.google.com/auth", expiresIn: 300 }),
+    googlePoll: async (_ticket: string, handoff?: string): Promise<GoogleAuthPoll> => handoff === HANDOFF ? { status: "complete", auth } : { status: "pending" },
+    googleAcknowledge: async () => ({ acknowledged: true }),
+  }, { demoMode: false, onToken: async () => undefined, onOpenExternal: async () => undefined, googleAppReturn: true });
+  mounted.push(app);
+  await app.start(false);
+  root.querySelector<HTMLButtonElement>("[data-action='google-login']")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".google-pending")).not.toBeNull());
+  app.receiveGoogleHandoff(HANDOFF);
+  await vi.waitFor(() => expect(bootstrap).toHaveBeenCalled());
+  expect(root.querySelector(".blocker")).not.toBeNull();
+  expect(root.textContent).not.toContain("앱을 열지 못했어요");
+  loaded();
+  await vi.waitFor(() => expect(root.querySelector(".blocker")).toBeNull());
+  expect(root.querySelector(".screen-home")).not.toBeNull();
+  expect(root.querySelector(".screen-home")!.textContent).not.toContain("앱을 열지 못했어요");
 });
 
 it("sends a handoff that arrives during an in-flight poll right after it", async () => {

@@ -295,11 +295,12 @@ export interface StatusResult {
 
 export interface MobileApi {
   googleConfiguration(): Promise<{ enabled: boolean }>;
-  googleStatus(): Promise<{ enabled: boolean; linked: boolean; reauthenticationRequired?: boolean }>;
+  googleStatus(): Promise<{ enabled: boolean; linked: boolean; reauthenticationRequired?: boolean; signedInWithGoogle?: boolean }>;
   /** appReturn: the browser hands the result back to this app instead of asking for a code. */
   googleStart(options?: { appReturn: boolean }): Promise<GoogleAuthStart>;
   googleLink(options?: { appReturn: boolean }): Promise<GoogleAuthStart>;
-  googleUnlink(password: string): Promise<{ linked: false }>;
+  /** signedOut: this session came from a Google sign-in and ended with the link. */
+  googleUnlink(): Promise<{ linked: false; signedOut?: boolean }>;
   googleAcknowledge(ticket: string): Promise<{ acknowledged: boolean }>;
   googleCancel(ticket: string): Promise<{ cancelled: boolean }>;
   googlePoll(ticket: string, handoff?: string): Promise<GoogleAuthPoll>;

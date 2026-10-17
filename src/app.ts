@@ -295,6 +295,9 @@ export class JariApp {
   private draft: BookingDraft = conditionsToDraft(null);
   private googleEnabled = false;
   private googleLinked = false;
+  private signedInWithGoogle = false;
+  /** An unlink is out that may end this session; a 401 landing first is that sign-out, not an expiry. */
+  private unlinkingGoogle = false;
   private googleFlow: { ticket: string; verificationCode?: string; handoff?: string; expires: number; purpose: "login" | "link"; polling: boolean; cancelRequested?: boolean; cancelling?: boolean; cancelError?: string } | null = null;
   private googleTimer: number | null = null;
   private lastGoogleHandoff = readLastGoogleHandoff();
@@ -415,6 +418,7 @@ export class JariApp {
   private resetSession(): void {
     this.cancelGoogle();
     this.googleLinked = false;
+    this.signedInWithGoogle = false;
     this.generation += 1;
     this.trial = null;
     this.trialRoutes = [];
@@ -473,6 +477,10 @@ export class JariApp {
 
   /** Preserve only editable trip fields for the same account while it signs in again. */
   expireSession(): void {
+    if (this.unlinkingGoogle) {
+      this.signOutAfterUnlink();
+      return;
+    }
     this.syncJourneyDraft();
     const interrupted = !this.demo && this.journeyDirty && this.state?.user
       ? { userId: this.state.user.id, draft: structuredClone(this.draft) }
@@ -728,7 +736,8 @@ export class JariApp {
       restoreFields();
       return;
     }
-    const content = this.state ? this.renderView() : this.renderUnavailable();
+    // Right after sign-in or launch the first state is still on its way; that is not a failure to show behind the blocker.
+    const content = this.state ? this.renderView() : this.busy ? "" : this.renderUnavailable();
     this.root.innerHTML = `
       <div class="app-shell">
         ${this.trial ? '<aside class="demo-banner" data-demo-banner data-trial-banner aria-label="체험 상태"><b>체험 중</b><span>샘플 데이터 · 실제 예약되지 않아요</span></aside>' : this.options.demoMode ? '<aside class="demo-banner" data-demo-banner aria-label="데모 상태"><b>데모 모드</b><span>샘플 데이터 · 실제 조회·예약 없음</span></aside>' : ""}
@@ -2933,6 +2942,7 @@ ${agentHost(agent)}`;
       if (generation !== this.generation) return;
       this.googleEnabled = result.enabled;
       this.googleLinked = "linked" in result && result.linked === true;
+      this.signedInWithGoogle = "signedInWithGoogle" in result && result.signedInWithGoogle === true;
       this.render();
     } catch {
       // Older servers have no provider endpoint. Password login remains available.
@@ -2988,22 +2998,42 @@ ${agentHost(agent)}`;
       return;
     }
     const generation = this.generation;
-    const password = await this.openSheet({
+    // Like linking, the signed-in session is enough. The sheet says what is lost: other phones' sign-ins and Google as a way in.
+    // A session that Google signed in ends with the link (the server's rule), so this phone signs out too.
+    const confirmed = await this.confirmSheet({
       title: "구글 계정 연결을 해제할까요?",
-      body: "본인 확인을 위해 앱 비밀번호를 입력해 주세요.",
-      content: '<label class="field"><span>앱 비밀번호</span><input id="sheet-password" type="password" maxlength="128" autocomplete="current-password" required></label>',
+      body: this.signedInWithGoogle
+        ? "구글로 로그인했으니 이 휴대폰을 포함해 모든 휴대폰에서 로그아웃돼요. 다시 들어오려면 앱 아이디와 비밀번호가 필요해요."
+        : "다른 휴대폰의 앱 로그인도 함께 해제돼요. 그다음부터는 앱 아이디와 비밀번호로 로그인해요.",
       confirmLabel: "연결 해제",
+      danger: true,
     });
-    if (generation !== this.generation || password === null) return;
-    if (!password) { this.error = "앱 비밀번호를 입력해 주세요."; this.render(); return; }
-    await this.run(async () => {
-      await this.api.googleUnlink(password);
-      if (generation !== this.generation) return;
-      this.googleLinked = false;
-      await this.loadGoogle();
-      if (generation !== this.generation) return;
-      this.showToast("구글 계정 연결을 해제했어요.");
-    });
+    if (generation !== this.generation || !confirmed) return;
+    let signedOut = false;
+    this.unlinkingGoogle = this.signedInWithGoogle;
+    try {
+      await this.run(async (isCurrent) => {
+        const result = await this.api.googleUnlink();
+        if (generation !== this.generation) return;
+        if (result.signedOut) { signedOut = isCurrent(); return; }
+        this.unlinkingGoogle = false;
+        this.googleLinked = false;
+        await this.loadGoogle();
+        if (generation !== this.generation) return;
+        this.showToast("구글 계정 연결을 해제했어요.");
+      });
+    } finally {
+      this.unlinkingGoogle = false;
+    }
+    if (signedOut) this.signOutAfterUnlink();
+  }
+
+  private signOutAfterUnlink(): void {
+    this.unlinkingGoogle = false;
+    try { window.localStorage.removeItem(RECENT_KEY); } catch { /* 없으면 그만 */ }
+    this.resetSession();
+    this.authNotice = "구글 계정 연결을 해제하고 로그아웃했어요. 앱 아이디와 비밀번호로 로그인해 주세요.";
+    this.render();
   }
 
   private async beginGoogle(purpose: "login" | "link"): Promise<void> {

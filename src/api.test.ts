@@ -311,6 +311,31 @@ it("account deletion re-sends the password and drops the token only once the ser
   expect(token).toBeNull();
 });
 
+it("Google unlink sends no password and drops the token only when the server ended this session", async () => {
+  let token: string | null = "opaque-session";
+  const tokenStorage = createSessionStorage({
+    write: async (next) => { token = next; },
+    read: async () => token,
+    clear: async () => { token = null; },
+  });
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(response({ linked: false, signedOut: false }))
+    .mockResolvedValueOnce(response({ linked: false }))
+    .mockResolvedValueOnce(response({ linked: false, signedOut: true }));
+  const api = createHttpApi({ baseUrl: "https://jari.example", tokenStorage, fetcher });
+
+  await expect(api.googleUnlink()).resolves.toEqual({ linked: false, signedOut: false });
+  const [url, init] = fetcher.mock.calls[0]!;
+  expect(url).toBe("https://jari.example/api/mobile/account/google/unlink");
+  expect(JSON.parse(String(init?.body))).toEqual({});
+  expect(token).toBe("opaque-session");
+  // A server from before 4.21 answers without the field.
+  await expect(api.googleUnlink()).resolves.toEqual({ linked: false });
+  expect(token).toBe("opaque-session");
+  await expect(api.googleUnlink()).resolves.toEqual({ linked: false, signedOut: true });
+  expect(token).toBeNull();
+});
+
 describe("connection misses", () => {
   const signedIn = () => createSessionStorage({ read: async () => "opaque-session", write: async () => {}, clear: async () => {} });
 

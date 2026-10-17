@@ -29,6 +29,12 @@ test(`설정에서 로그인 세션으로 비밀번호 없이 구글을 연결�
     await route.fulfill({ json: { ticket: "fake-login-proof", authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth?state=fake", expiresIn: 300, verificationCode: "ABCD-EFGH" } });
   });
   await page.route("**/api/mobile/auth/google/ack", (route) => route.fulfill({ json: { acknowledged: true } }));
+  const unlinkBodies: unknown[] = [];
+  await page.route("**/api/mobile/account/google/unlink", async (route) => {
+    unlinkBodies.push(route.request().postDataJSON());
+    linked = false;
+    await route.fulfill({ json: { linked: false } });
+  });
   await page.route("**/api/mobile/auth/google/cancel", async (route) => {
     if (failCancel) {
       failCancel = false;
@@ -68,6 +74,16 @@ test(`설정에서 로그인 세션으로 비밀번호 없이 구글을 연결�
   await expect(page.getByText("구글 계정 연결됨", { exact: true })).toBeVisible();
   await expect(page.locator("[data-action='google-unlink'] .google-brand-icon")).toBeVisible();
   await expectCleanLayout(page, "구글 연결 완료");
+  // 연결 해제도 연결처럼 로그인 세션만으로 해요. 비밀번호 대신 무엇이 풀리는지 알리고 확인만 받아요.
+  await page.locator("[data-action='google-unlink']").click();
+  await expect(page.locator("[data-action='sheet-confirm']")).toHaveText("연결 해제");
+  await expect(page.locator("#sheet-password")).toHaveCount(0);
+  await expect(page.getByText("다른 휴대폰의 앱 로그인도 함께 해제돼요.", { exact: false })).toBeVisible();
+  await expectCleanLayout(page, "구글 연결 해제 확인");
+  await page.locator("[data-action='sheet-confirm']").click();
+  await expect(page.getByText("구글 계정 연결을 해제했어요.", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-action='google-link']")).toBeVisible();
+  expect(unlinkBodies).toEqual([{}]);
   await page.locator("[data-action='app-logout']").click();
   const confirm = page.locator("[data-action='sheet-confirm']");
   if (await confirm.isVisible()) await confirm.click();
@@ -111,6 +127,15 @@ test("안드로이드 앱은 확인 코드 없이 브라우저가 돌려준 값�
     await route.fulfill({ json: { status: "complete", auth: { token: user.token, user: { id: "ui-ignored", username: user.username }, expiresAt: "2099-01-01T00:00:00Z" } } });
   });
   await openApp(page);
+  // 로그인 직후 첫 상태를 받는 동안을 붙잡아 봐요. 그 사이에 "앱을 열지 못했어요"가 비치면 안 돼요.
+  let releaseBootstrap!: () => void;
+  const bootstrapHeld = new Promise<void>((resolve) => { releaseBootstrap = resolve; });
+  let bootstrapAsked = false;
+  await page.route("**/api/mobile/bootstrap", async (route) => {
+    bootstrapAsked = true;
+    await bootstrapHeld;
+    await route.continue();
+  });
   if (!device) await page.evaluate(() => { window.open = (() => ({ opener: null })) as unknown as typeof window.open; });
   await page.locator("[data-action='google-login']").click();
   const pending = page.locator(".google-pending");
@@ -127,8 +152,35 @@ test("안드로이드 앱은 확인 코드 없이 브라우저가 돌려준 값�
     }, { timeout: 15_000 }).toBe("browser");
     execFileSync("adb", ["shell", "am", "start", "-a", "android.intent.action.VIEW", "-c", "android.intent.category.BROWSABLE", "-d", `'dev.thsvkd.jari://google-auth?handoff=${handoff}'`]);
   }
-  await expect.poll(() => page.evaluate(() => Boolean(document.querySelector(".screen-home"))), { timeout: 20_000 }).toBe(true);
+  try {
+    await expect.poll(() => bootstrapAsked, { timeout: 20_000 }).toBe(true);
+    await expect(page.locator(".blocker")).toBeVisible();
+    await expect(page.locator("main.screen-home")).toBeEmpty();
+    await expectCleanLayout(page, "구글 로그인 뒤 첫 화면 불러오는 중");
+  } finally {
+    releaseBootstrap();
+  }
+  await expect(page.locator(".blocker")).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.locator(".screen-home [data-action='new-journey']").first()).toBeVisible();
+  await expect(page.locator(".screen-home")).not.toContainText("앱을 열지 못했어요");
   // 경로 처리기 안에서 실패하면 응답이 멈춰 시간 초과로만 보여서, 받은 요청은 끝에 확인해요.
   expect(startBody).toEqual(device ? { return: "app" } : {});
   expect([...pollTickets]).toEqual(["fake-app-return-proof"]);
+});
+
+// 구글로 로그인한 세션이 연결을 해제하면 그 세션도 끝나요. 털린 구글 계정으로 먼저 해제해 혼자 남는 일을 막아요.
+test("구글로 로그인한 휴대폰에서 연결을 해제하면 이 휴대폰도 로그아웃돼요 @layout", async ({ app: page, user }, testInfo) => {
+  test.skip(testInfo.project.name === "device", "Google API 대체는 헤드리스에서 검사해요");
+  await page.route("**/api/mobile/auth/google", (route) => route.fulfill({ json: { enabled: true } }));
+  await page.route("**/api/mobile/account/google", (route) => route.fulfill({ json: { enabled: true, linked: true, reauthenticationRequired: false, signedInWithGoogle: true } }));
+  await page.route("**/api/mobile/account/google/unlink", (route) => route.fulfill({ json: { linked: false, signedOut: true } }));
+  await signIn(page, user);
+  await page.locator(".bottom-nav [data-view='settings']").click();
+  await page.locator("[data-action='google-unlink']").click();
+  await expect(page.getByText("이 휴대폰을 포함해 모든 휴대폰에서 로그아웃돼요.", { exact: false })).toBeVisible();
+  await expectCleanLayout(page, "구글 세션의 연결 해제 확인");
+  await page.locator("[data-action='sheet-confirm']").click();
+  await expect(page.getByText("구글 계정 연결을 해제하고 로그아웃했어요.", { exact: false })).toBeVisible();
+  await expect(page.locator("[data-action='google-login']")).toBeVisible();
+  await expectCleanLayout(page, "구글 연결 해제 뒤 로그인 안내");
 });

@@ -283,10 +283,15 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
 
   return {
     googleConfiguration: () => request<{ enabled: boolean }>("/auth/google", { method: "GET", authenticated: false, timeoutMs: 10_000 }),
-    googleStatus: () => request<{ enabled: boolean; linked: boolean; reauthenticationRequired?: boolean }>("/account/google", { method: "GET" }),
+    googleStatus: () => request<{ enabled: boolean; linked: boolean; reauthenticationRequired?: boolean; signedInWithGoogle?: boolean }>("/account/google", { method: "GET" }),
     googleStart: (options) => request<GoogleAuthStart>("/auth/google/start", { body: options?.appReturn ? { return: "app" } : {}, authenticated: false, timeoutMs: 10_000 }),
     googleLink: (options) => request<GoogleAuthStart>("/account/google/link", { body: options?.appReturn ? { return: "app" } : {}, timeoutMs: 10_000 }),
-    googleUnlink: (password) => request<{ linked: false }>("/account/google/unlink", { body: { password } }),
+    googleUnlink: async () => {
+      const result = await request<{ linked: false; signedOut?: boolean }>("/account/google/unlink", { body: {} });
+      // A session Google signed in ends with the link; drop the token that now names nothing.
+      if (result.signedOut) await options.tokenStorage.clear();
+      return result;
+    },
     googleAcknowledge: (ticket) => request<{ acknowledged: boolean }>("/auth/google/ack", { body: { ticket }, authenticated: false, timeoutMs: 10_000 }),
     googleCancel: (ticket) => request<{ cancelled: boolean }>("/auth/google/cancel", { body: { ticket }, authenticated: false, timeoutMs: 10_000 }),
     googlePoll: (ticket, handoff) => request<GoogleAuthPoll>("/auth/google/poll", { body: handoff ? { ticket, handoff } : { ticket }, authenticated: false, timeoutMs: 10_000 }),

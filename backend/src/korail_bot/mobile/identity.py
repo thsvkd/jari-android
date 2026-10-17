@@ -57,7 +57,8 @@ class IdentityStore:
                 );
                 CREATE TABLE IF NOT EXISTS sessions (
                     hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
-                    expires REAL NOT NULL, authenticated_at REAL
+                    expires REAL NOT NULL, authenticated_at REAL,
+                    via_google INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS rate_limits (
                     key TEXT PRIMARY KEY, expires REAL NOT NULL, count INTEGER NOT NULL
@@ -123,6 +124,14 @@ class IdentityStore:
             session_columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)")}
             if "authenticated_at" not in session_columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN authenticated_at REAL")
+            # Nothing recorded how older sessions began. Where Google is linked any of them may have come
+            # from it, so they all count as Google sessions: unlinking from one then signs it out too.
+            if "via_google" not in session_columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN via_google INTEGER NOT NULL DEFAULT 0")
+                db.execute(
+                    "UPDATE sessions SET via_google=1"
+                    " WHERE user_id IN (SELECT user_id FROM google_identities)"
+                )
             flow_columns = {row[1] for row in db.execute("PRAGMA table_info(google_flows)")}
             if "app_return" not in flow_columns:
                 db.execute(
@@ -247,13 +256,14 @@ class IdentityStore:
             "createdAt": timestamp(created) if created is not None else None,
         }
 
-    def _session(self, db, user):
+    def _session(self, db, user, *, via_google=False):
         token = secrets.token_urlsafe(32)
         expires = self.clock() + self.session_ttl
         db.execute("DELETE FROM sessions WHERE expires<=?", (self.clock(),))
         db.execute(
-            "INSERT INTO sessions (hash, user_id, expires, authenticated_at) VALUES (?, ?, ?, ?)",
-            (digest(token), user["id"], expires, self.clock()),
+            "INSERT INTO sessions (hash, user_id, expires, authenticated_at, via_google)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (digest(token), user["id"], expires, self.clock(), int(via_google)),
         )
         return {
             "token": token,
@@ -310,20 +320,6 @@ class IdentityStore:
             user = db.execute("SELECT password_hash FROM users WHERE id=?", (user_id,)).fetchone()
         valid = check_password_hash(user["password_hash"] if user else _DUMMY_HASH, password)
         return user is not None and valid
-
-    def reauthenticate_session(self, user_id, token, password):
-        """Verify the local password and refresh only the current live session."""
-        if not self.check_password(user_id, password):
-            return False
-        now = self.clock()
-        with self.connect() as db:
-            changed = db.execute(
-                "UPDATE sessions SET authenticated_at=? WHERE hash=? AND user_id=? AND expires>?",
-                (now, digest(token), user_id, now),
-            ).rowcount
-        if changed != 1:
-            raise AuthError("로그인이 만료됐어요. 다시 로그인해 주세요.")
-        return True
 
     def find_user(self, username):
         """The account as authenticate() returns it, by app ID; None if there is none."""
@@ -698,7 +694,7 @@ class IdentityStore:
                         "statusCode": 403,
                     }
                 else:
-                    auth = self._session(db, user)
+                    auth = self._session(db, user, via_google=True)
                     db.execute(
                         "UPDATE google_flows SET status='delivered', delivered_session_hash=?"
                         " WHERE id=?",
@@ -856,20 +852,39 @@ class IdentityStore:
                 is not None
             )
 
-    def google_unlink(self, user_id, *, keep_token=None):
+    def session_via_google(self, token):
         with self.connect() as db:
+            row = db.execute(
+                "SELECT via_google FROM sessions WHERE hash=?", (digest(token),)
+            ).fetchone()
+        return bool(row and row["via_google"])
+
+    def google_unlink(self, user_id, token):
+        """
+        Remove the Google sign-in and the sessions it may have handed out. A session that came from Google
+        ends too: otherwise whoever holds the Google account could unlink first and keep their own way in
+        while signing the owner out everywhere else. With nothing linked, no session is touched.
+        """
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM google_flows WHERE user_id=?", (user_id,))
             unlinked = (
                 db.execute("DELETE FROM google_identities WHERE user_id=?", (user_id,)).rowcount > 0
             )
-            if keep_token:
-                db.execute(
-                    "DELETE FROM sessions WHERE user_id=? AND hash<>?",
-                    (user_id, digest(keep_token)),
-                )
-            else:
+            if not unlinked:
+                return {"linked": False, "signedOut": False}
+            caller = db.execute(
+                "SELECT via_google FROM sessions WHERE hash=? AND user_id=?",
+                (digest(token), user_id),
+            ).fetchone()
+            signed_out = bool(caller and caller["via_google"])
+            if signed_out:
                 db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
-            return unlinked
+            else:
+                db.execute(
+                    "DELETE FROM sessions WHERE user_id=? AND hash<>?", (user_id, digest(token))
+                )
+            return {"linked": False, "signedOut": signed_out}
 
     def allow(self, key, limit, window):
         with self.connect() as db:

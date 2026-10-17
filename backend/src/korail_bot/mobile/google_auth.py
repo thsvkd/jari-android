@@ -497,6 +497,8 @@ def install(
         return jsonify(
             enabled=enabled,
             linked=enabled and identity.google_status(g.user["id"]),
+            # Unlinking from a session that Google signed in also signs this phone out; the app says so first.
+            signedInWithGoogle=identity.session_via_google(g.token),
             # 4.18 clients treat a missing field as requiring the app password.
             reauthenticationRequired=False,
         )
@@ -518,9 +520,7 @@ def install(
     @authenticated
     def google_unlink():
         limited("google-unlink:" + g.user["id"], 5, 300)
-        if not identity.reauthenticate_session(g.user["id"], g.token, g.payload.get("password")):
-            raise AuthError("앱 비밀번호가 맞지 않아요.", 403)
-        identity.google_unlink(g.user["id"], keep_token=g.token)
-        return jsonify(linked=False)
+        # Like linking, the live session is enough; 4.20 and older apps still send a password, now ignored.
+        return jsonify(identity.google_unlink(g.user["id"], g.token))
 
     return enabled
