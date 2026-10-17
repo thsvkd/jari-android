@@ -138,11 +138,22 @@ Gradle 빌드 환경에 두 공개 값을 함께 지정합니다. 지정하지 �
 mkdir -p .secrets
 (umask 077; openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out .secrets/ota-signing.pem)
 export JARI_OTA_PUBLIC_KEY="$(openssl pkey -in .secrets/ota-signing.pem -pubout -outform DER | base64 | tr -d '\n')"
-export JARI_OTA_MANIFEST_URL=https://updates.example.com/jari/4.21.0/manifest.json
+export JARI_OTA_MANIFEST_URL=https://updates.example.com/jari/4.22.0/manifest.json
 scripts/release-android.sh  # 또는 scripts/release-play.sh
 ```
 
 키를 교체하거나 매니페스트 주소를 바꾸려면 APK/AAB도 새로 배포합니다. 이 설정만으로 운영 파일을 업로드하지는 않습니다.
+
+운영 릴리스는 Doppler `dev/dev`의 `JARI_OTA_SIGNING_PRIVATE_KEY_PEM`과 그에 대응하는 `JARI_OTA_PUBLIC_KEY`를 사용합니다. 기존 키를 다시 생성하거나 덮어쓰지 않습니다. 지원 APK/AAB를 만들 때 공개키와 APK 버전별 GitHub Releases 주소를 함께 전달합니다.
+
+```bash
+export JARI_OTA_PUBLIC_KEY="$(doppler secrets get JARI_OTA_PUBLIC_KEY --plain --project dev --config dev)"
+export JARI_OTA_MANIFEST_URL=https://github.com/thsvkd/jari-android/releases/download/v4.22.0/ota-manifest.json
+scripts/release-android.sh
+scripts/release-play.sh
+```
+
+4.22.0의 첫 웹 번들은 `4.22.0-web.1`(sequence 1)로 배포합니다. 다음 웹 변경은 같은 APK의 매니페스트 주소를 유지하면서 새 버전 이름과 더 큰 sequence를 사용합니다. ZIP은 버전별 이름으로 올리고, 서명한 매니페스트만 마지막에 교체합니다. 이 최초 번들로 새 APK에서 앱 내 다운로드·적용을 사용할 수 있습니다.
 
 ### 웹 업데이트 파일 만들기
 
@@ -150,9 +161,9 @@ scripts/release-android.sh  # 또는 scripts/release-play.sh
 
 ```bash
 VITE_API_BASE_URL=https://jari.thsvkd.dev VITE_DEMO_MODE=false npm run build:ota
-npm run bundle:ota -- --version 4.21.0-web.1 --sequence 1 \
-  --native-version 4.21.0 \
-  --url https://updates.example.com/jari/4.21.0/web.1/bundle.zip \
+npm run bundle:ota -- --version 4.22.0-web.1 --sequence 1 \
+  --native-version 4.22.0 \
+  --url https://updates.example.com/jari/4.22.0/web.1/bundle.zip \
   --key .secrets/ota-signing.pem --out dist-release/ota/web.1
 ```
 
