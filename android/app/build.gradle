@@ -57,7 +57,7 @@ android {
         applicationId "dev.thsvkd.jari"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 42200
+        versionCode 42201
         versionName "4.22.0"
         buildConfigField "String", "JARI_OTA_MANIFEST_URL", buildConfigString(otaManifestUrl)
         buildConfigField "String", "JARI_OTA_PUBLIC_KEY", buildConfigString(otaPublicKey)

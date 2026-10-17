@@ -37,12 +37,17 @@ public final class AppUpdatesPlugin extends Plugin {
 
     @PluginMethod
     public void getStatus(PluginCall call) {
-        JSObject result = new JSObject();
-        result.put("supported", supported());
-        result.put("currentVersion", state().currentVersion(BuildConfig.VERSION_NAME));
-        result.put("nativeVersion", BuildConfig.VERSION_NAME);
-        result.put("bootId", coordinator().bootId());
-        call.resolve(result);
+        // Capacitor installs the new document's reply proxy after dispatching
+        // its first native call. Reply on the UI queue after that dispatch ends
+        // so a fast status read cannot send its response to the previous page.
+        main.post(() -> {
+            JSObject result = new JSObject();
+            result.put("supported", supported());
+            result.put("currentVersion", state().currentVersion(BuildConfig.VERSION_NAME));
+            result.put("nativeVersion", BuildConfig.VERSION_NAME);
+            result.put("bootId", coordinator().bootId());
+            call.resolve(result);
+        });
     }
 
     @PluginMethod
