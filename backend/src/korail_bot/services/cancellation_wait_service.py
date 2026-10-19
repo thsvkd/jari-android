@@ -10,6 +10,7 @@ from korail_mobile_api.errors import KorailAppError, KorailProtocolError, Korail
 
 from korail_bot.models import CancellationWaitPlan, SeatTarget, TrainSeatTargets
 from korail_bot.services.korail_service import DUPLICATE_RESERVATION_CODE
+from korail_bot.services.rail_service import SearchGaveUp
 from korail_bot.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -176,6 +177,10 @@ class CancellationWaitService:
                 else:
                     capture = self._independent_capture(train, wanted, excluded or set())
             except Exception as exc:
+                if isinstance(exc, SearchGaveUp) or self.rail.looks_blocked(exc):
+                    # A reply that looks like a block ends the pass here: the next train, car or
+                    # unpaid-list read would only ask Korail again.
+                    raise
                 if (
                     isinstance(exc, (KorailTransportError, KorailProtocolError))
                     and (capture := self._recover_lost()) is not None

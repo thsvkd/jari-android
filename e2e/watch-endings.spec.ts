@@ -36,7 +36,7 @@ for (const ending of [
     name: "감시 시간 한도가 지나면 멈추고",
     scenario: { search: "sold_out" as const, watch_max_seconds: 2 },
     kind: "시간 끝",
-    title: /동안 자리가 나지 않아 감시를 멈췄어요$/,
+    title: /동안 좌석을 잡지 못해 감시를 멈췄어요$/,
     body: "더 기다리려면 새로 찾아 주세요",
   },
 ]) {

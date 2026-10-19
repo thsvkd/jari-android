@@ -162,6 +162,10 @@ class BackgroundReservationProcess:
         self.multi_reminder = MultiReservationReminderService(self.storage, self.telegram)
         self.rail = self._build_rail_service()
 
+        # Seats this watch has already taken while it goes on for the rest, so a watch that
+        # gives up says it holds them instead of "no seat came free".
+        self._seats_held = 0
+
         # Who this process is when it claims the watch on a payment. Per
         # process, so the claim cannot outlive it by being renewed by whatever
         # takes its place.
@@ -692,12 +696,16 @@ class BackgroundReservationProcess:
     def _give_up(self, reason: str) -> None:
         """End a watch that stopped on purpose (SearchGaveUp), saying why in the app's words."""
         route = f"{self.src_locate} → {self.dst_locate}"
+        held = getattr(self, "_seats_held", 0)
+        # Seats already taken stay taken whatever stopped the rest of the watch.
+        pay = f" 이미 잡은 {held}석은 결제 기한 안에 결제해 주세요." if held else ""
         if reason == "blocked":
             message = (
                 "⛔ 코레일이 접속을 막은 것 같아 감시를 멈췄어요\n"
                 f"{route}\n\n"
                 "코레일이 알아볼 수 없는 응답을 보냈어요. 좌석이 없다는 뜻이 아니에요. "
                 "코레일 앱에서 로그인되는지 확인해 주세요. 로그인이 되면 잠시 뒤에 새로 찾아 주세요."
+                f"{pay}"
             )
         elif reason == "unavailable":
             minutes = duration_words(settings.KORAIL_FAILURE_STOP_SECONDS)
@@ -705,12 +713,20 @@ class BackgroundReservationProcess:
                 f"🌐 코레일 응답이 {minutes}째 없어 감시를 멈췄어요\n"
                 f"{route}\n\n"
                 "조회가 계속 실패했어요. 좌석이 없다는 뜻이 아니에요. "
-                "코레일이 점검 중이거나 불안정할 수 있어요. 잠시 뒤에 새로 찾아 주세요."
+                f"코레일이 점검 중이거나 불안정할 수 있어요. 잠시 뒤에 새로 찾아 주세요.{pay}"
+            )
+        elif held:
+            limit = duration_words(settings.WATCH_MAX_SECONDS)
+            message = (
+                f"⏱ {held}석은 잡았고 나머지 감시는 시간 상한으로 멈췄어요\n"
+                f"{route}\n\n"
+                f"잡은 좌석은 결제 기한 안에 결제해 주세요. 감시는 시작하고 {limit}이 지나면 멈춰요. "
+                "나머지를 더 기다리려면 새로 찾아 주세요."
             )
         else:
             limit = duration_words(settings.WATCH_MAX_SECONDS)
             message = (
-                f"⏱ {limit} 동안 자리가 나지 않아 감시를 멈췄어요\n"
+                f"⏱ {limit} 동안 좌석을 잡지 못해 감시를 멈췄어요\n"
                 f"{route}\n\n"
                 f"감시는 시작하고 {limit}이 지나면 멈춰요. 더 기다리려면 새로 찾아 주세요."
             )
@@ -815,6 +831,7 @@ class BackgroundReservationProcess:
                 for car_no, seat_no in item.seat_keys
             }
             # After the seats already held were looked after, before Korail is asked again.
+            self._seats_held = len(active)
             self.rail.check_watch_deadline()
             try:
                 capture = service.poll_once(excluded)
@@ -1582,6 +1599,8 @@ class BackgroundReservationProcess:
                 logger.debug(f"🔄 Search attempt #{attempts} for seat {seat_index + 1}")
 
             self.rail.report_progress(attempts)
+            # Seats before this one were reserved already (paid for or still waiting).
+            self._seats_held = seat_index
             self.rail.check_watch_deadline()
 
             # Search for trains (single passenger)

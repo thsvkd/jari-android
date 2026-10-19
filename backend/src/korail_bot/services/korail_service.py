@@ -58,6 +58,7 @@ from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.rail_service import (
     RailService,
     SearchBlockedError,
+    SearchGaveUp,
     SearchProgress,
     SearchUnavailableError,
 )
@@ -184,9 +185,12 @@ def _describe_reply(response, *, body: bool) -> str:
         return "no reply kept"
     try:
         status = getattr(response, "status_code", "?")
+        # Korail's anti-macro layer answers in this header (negative = refused); kept beside the
+        # body so a block can be told from an outage next time.
+        dynapath = response.headers.get("DynaPath-Result")
         payload = json.loads(response.text)
         keys = sorted(payload)[:30] if isinstance(payload, dict) else type(payload).__name__
-        said = f"HTTP {status} keys={keys}"
+        said = f"HTTP {status} DynaPath-Result={dynapath} keys={keys}"
         if body:
             shown = redact_mapping(payload) if isinstance(payload, dict) else payload
             said += f" body={json.dumps(shown, ensure_ascii=False)[:200]!r}"
@@ -478,10 +482,14 @@ class KorailService(RailService):
         # The client parses each reply out of reach and reports only what was wrong with it;
         # the last one is kept so a reply that looks like a block can be described in the log.
         # ponytail: reaches the library's private httpx client; drop if it grows a reply hook.
-        transport = client.http._client
-        hooks = transport.event_hooks
-        hooks["response"] = [*hooks.get("response", []), self._keep_modern_reply]
-        transport.event_hooks = hooks
+        # Diagnosis only: if the library has moved, log in without it.
+        try:
+            transport = client.http._client
+            hooks = transport.event_hooks
+            hooks["response"] = [*hooks.get("response", []), self._keep_modern_reply]
+            transport.event_hooks = hooks
+        except Exception as exc:
+            logger.debug("Korail reply hook not installed (%s)", type(exc).__name__)
         return client
 
     def _keep_modern_reply(self, response) -> None:
@@ -507,7 +515,6 @@ class KorailService(RailService):
         self._korail_instance = legacy
 
     def _login_with_current_api(self, username: str, password: str) -> bool:
-        self.login_blocked = False
         candidate = self._build_modern_client()
         # The adapter this login replaces, whether it works or not: its HTTP session is closed
         # rather than left to the collector (a cached mobile rail logs in again in place).
@@ -521,6 +528,8 @@ class KorailService(RailService):
             else:
                 input_flag = "2"
             session = candidate.login(username, password, input_flag=input_flag)
+            # The login reply can carry the member's details: never in a later search's log.
+            self._last_modern_reply = None
             self._activate_legacy_session(candidate, session, username, password)
         except Exception as exc:
             candidate.close()
@@ -541,6 +550,7 @@ class KorailService(RailService):
                     "Korail login answered without strResult, like a block (%s)",
                     _describe_reply(self._last_modern_reply, body=False),
                 )
+            self._last_modern_reply = None
             if _korail_unreachable(exc):
                 # Not an answer about the credentials; login() says so.
                 raise _KorailUnreachable(type(exc).__name__) from exc
@@ -554,6 +564,8 @@ class KorailService(RailService):
         if previous_legacy is not self._korail_instance:
             _close_legacy(previous_legacy)
         self._logged_in = True
+        # Only a login that worked clears a block: a failed one must not wipe it.
+        self.login_blocked = False
         return True
 
     def login(self, username: str, password: str) -> bool:
@@ -589,6 +601,10 @@ class KorailService(RailService):
         """Attempt to re-login with stored credentials after session expiry."""
         if not self._username or not self._password:
             logger.error("🔒 Cannot re-login: no stored credentials")
+            return False
+
+        if not self._relogin_allowed():
+            self._logged_in = False
             return False
 
         logger.debug("🔄 Session expired, attempting re-login...")
@@ -667,9 +683,10 @@ class KorailService(RailService):
                 more = False
                 break
             except Exception as exc:
-                if not trains or self._wanted_missing(wanted, trains):
+                if not trains or self._wanted_missing(wanted, trains) or self.looks_blocked(exc):
                     # Nothing read yet, or the trains asked for are not in what was: a failed
-                    # read must not turn into "that train is not there".
+                    # read must not turn into "that train is not there". A reply that looks like
+                    # a block ends the watch whichever page it came on.
                     raise
                 # What the earlier pages showed is still true; losing it to page three's hiccup
                 # would fail a whole pass (a list, a watch) for want of trains it already has.
@@ -760,7 +777,7 @@ class KorailService(RailService):
                     not rows
                     or (wanted and not wanted <= {t.train_no for t in rows})
                     # A reply that looks like a block ends the watch whichever page it came on.
-                    or _answered_without_result(exc)
+                    or self.looks_blocked(exc)
                 ):
                     raise
                 # The earlier pages are still true: do not lose them to a later page's hiccup.
@@ -998,6 +1015,9 @@ class KorailService(RailService):
                     train, room_class_code
                 )
             except Exception as exc:
+                if self.looks_blocked(exc):
+                    # 차단 의심 응답이면 남은 호차·편성을 더 묻지 않고 감시를 멈추게 올려요.
+                    raise
                 # 편성을 못 채워도 코레일이 준 목록은 그대로 보여 줘요. 실패는 기억하지 않아 다음에 다시 시도해요.
                 logger.warning(
                     "Could not read a nearby formation to complete the car list (%s) %s",
@@ -1323,6 +1343,10 @@ class KorailService(RailService):
         except NoResultsError:
             return []
         except Exception as exc:
+            if self.looks_blocked(exc):
+                # Not "could not ask": the watch reading this list has to stop, not carry on.
+                self._log_legacy_block("unpaid list")
+                raise SearchBlockedError(f"{type(exc).__name__}: {exc}") from exc
             logger.warning("Could not list unpaid reservations (%s)", type(exc).__name__)
             return None
 
@@ -1356,6 +1380,8 @@ class KorailService(RailService):
                 for seat in journey.seats
             )
         except Exception as exc:
+            if self.looks_blocked(exc):
+                raise
             logger.warning("Could not read the seats of an unpaid hold (%s)", type(exc).__name__)
             return None
         return seats or None
@@ -1399,20 +1425,32 @@ class KorailService(RailService):
             == KORAIL_STANDBY_WAIT_FLAG,
         }
 
+    def looks_blocked(self, error: BaseException) -> bool:
+        """
+        Also a reply without strResult however the client reported it: korail2's KeyError, or
+        korail_mobile_api's KorailProtocolError (the seat-map watch asks through that one).
+        """
+        return super().looks_blocked(error) or _answered_without_result(error)
+
     def is_block_signal(self, error: Exception) -> bool:
-        """
-        Also the current client's way of saying it: a seat-map watch asks through
-        korail_mobile_api, which reports a reply without strResult as a KorailProtocolError.
-        """
-        if super().is_block_signal(error):
-            return True
-        if not _answered_without_result(error):
+        if not self.looks_blocked(error):
             return False
-        logger.error(
-            "Korail answered without strResult, like a block (%s)",
-            _describe_reply(self._last_modern_reply, body=True),
-        )
+        if not isinstance(error, SearchBlockedError):
+            # Raw from the current client (a seat-map watch): the reply it read is the last one.
+            logger.error(
+                "Korail answered without strResult, like a block (%s)",
+                _describe_reply(self._last_modern_reply, body=True),
+            )
         return True
+
+    def _log_legacy_block(self, what: str) -> None:
+        """Describe the korail2 reply that looked like a block: status, DynaPath-Result, keys, body."""
+        session = getattr(self._korail_instance, "_session", None)
+        logger.error(
+            "Korail %s answered without strResult, like a block (%s)",
+            what,
+            _describe_reply(getattr(session, "last_response", None), body=True),
+        )
 
     def search_trains(
         self,
@@ -1558,16 +1596,14 @@ class KorailService(RailService):
             return []
         except Exception as e:
             if _answered_without_result(e):
-                session = getattr(self._korail_instance, "_session", None)
-                logger.error(
-                    "Korail search answered without strResult, like a block (%s)",
-                    _describe_reply(getattr(session, "last_response", None), body=True),
-                )
+                self._log_legacy_block("search")
                 raise SearchBlockedError(f"{type(e).__name__}: {e}") from e
             if type(e).__name__ == "NeedToLoginError":
                 logger.debug(f"🔒 Session expired during search, re-logging in: {e}")
                 if self._relogin():
-                    return []  # Will retry on next loop iteration
+                    # Logged in again, but this pass got no answer: a failure, not an empty
+                    # result, so a session Korail drops every pass backs off and is counted.
+                    raise SearchUnavailableError("Korail session expired; logged in again") from e
                 if self.login_blocked:
                     raise SearchBlockedError("Korail login answered like a block") from e
                 raise
@@ -1619,6 +1655,9 @@ class KorailService(RailService):
             }
             snapshot_ok = True
         except Exception as snapshot_err:
+            if _answered_without_result(snapshot_err):
+                self._log_legacy_block("reservation list")
+                raise SearchGaveUp("blocked", type(snapshot_err).__name__) from snapshot_err
             reservation_ids_before = set()
             snapshot_ok = False
             logger.warning(
@@ -1688,6 +1727,9 @@ class KorailService(RailService):
                             self._attach_assigned_seats(existing)
                             return existing
                 except Exception as check_err:
+                    if _answered_without_result(check_err):
+                        self._log_legacy_block("reservation list")
+                        raise SearchGaveUp("blocked", type(check_err).__name__) from check_err
                     logger.warning(
                         f"Could not confirm whether {train} was reserved despite the timeout: "
                         f"{check_err}"
@@ -1695,6 +1737,10 @@ class KorailService(RailService):
             self.wait_between_requests(self.note_search_failure(e))
             return None
         except Exception as e:
+            if _answered_without_result(e):
+                # Not a lost race: the next train's reserve would get the same reply.
+                self._log_legacy_block("reservation")
+                raise SearchGaveUp("blocked", f"{type(e).__name__}: {e}") from e
             error_msg = str(e)
             error_type = type(e).__name__
 
@@ -1713,8 +1759,9 @@ class KorailService(RailService):
                 logger.debug(f"🔒 Session expired during reservation, re-logging in: {error_msg}")
                 if self._relogin():
                     return None  # Will retry on next loop iteration
-                else:
-                    raise
+                if self.login_blocked:
+                    raise SearchGaveUp("blocked", "login answered like a block") from e
+                raise
 
             logger.error(f"❌ Reservation error ({error_type}): {error_msg}")
             logger.error(f"  Train: {train}")

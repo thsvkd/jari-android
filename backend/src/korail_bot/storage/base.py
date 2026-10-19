@@ -19,6 +19,12 @@ from korail_bot.models import (
 class StorageInterface(ABC):
     """Abstract interface for application state storage."""
 
+    # How a search ended on its own terms (mark_search_ended)
+    @abstractmethod
+    def get_search_ended(self, chat_id: int) -> dict | None:
+        """The note left when this chat's last search ended: reason, at, pid."""
+        pass
+
     # User Session Management
     @abstractmethod
     def get_user_session(self, chat_id: int) -> UserSession | None:

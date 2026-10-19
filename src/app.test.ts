@@ -2696,7 +2696,7 @@ it("draws a notification's kind as a picture and splits the server's text into t
 it.each([
   ["blocked", "⛔ 코레일이 접속을 막은 것 같아 감시를 멈췄어요", "접속 제한", "danger"],
   ["unavailable", "🌐 코레일 응답이 10분째 없어 감시를 멈췄어요", "응답 없음", "warning"],
-  ["expired", "⏱ 1시간 동안 자리가 나지 않아 감시를 멈췄어요", "시간 끝", "muted"],
+  ["expired", "⏱ 1시간 동안 좌석을 잡지 못해 감시를 멈췄어요", "시간 끝", "muted"],
 ])("draws a watch that stopped on its own (%s) as its own kind, not a problem, a booking or a search", async (kind, title, name, tone) => {
   const text = `${title}\n서울 → 부산\n\n좌석이 없다는 뜻이 아니에요.`;
   const { app, root } = await mountLive({

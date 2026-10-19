@@ -178,6 +178,7 @@ class RailService(ABC):
         self._relogin_jitter = settings.KORAIL_RELOGIN_INTERVAL_JITTER
         self._relogin_due_at: float = 0.0
         self._relogin_count: int = 0
+        self._relogin_times: list[float] = []
         self._on_status = on_status
         self._on_progress = on_progress
         self._search_started_at: float = 0.0
@@ -429,10 +430,47 @@ class RailService(ABC):
         logger.debug(f"🔄 Next session refresh in {delay:.0f}s")
 
     def _check_session_refresh(self):
-        """Refresh the session before the operator gets around to expiring it."""
+        """
+        Refresh the session before the operator gets around to expiring it.
+
+        Raises:
+            SearchBlockedError: The refresh login answered like a block. Raised
+                here so that nothing logs in again after it (ensure_logged_in
+                would otherwise try once more straight away).
+        """
         if self._relogin_due_at and time.time() >= self._relogin_due_at:
             logger.debug("🔄 Session due for a refresh, re-logging in")
-            self._relogin()
+            if not self._relogin() and self.login_blocked:
+                raise SearchBlockedError(
+                    f"{self.operator_name} refresh login answered like a block"
+                )
+
+    #: At most this many re-logins in RELOGIN_WINDOW_SECONDS. A block that
+    #: arrives as "session expired" on every pass would otherwise have the watch
+    #: log in every few seconds for as long as it runs; the next one past the
+    #: limit is treated as a block (login_blocked) and ends the watch.
+    RELOGIN_LIMIT = 3
+    RELOGIN_WINDOW_SECONDS = 600.0
+
+    def _relogin_allowed(self) -> bool:
+        """
+        Count a re-login about to be sent, or refuse it past RELOGIN_LIMIT.
+
+        A refusal sets login_blocked, so every caller that handles a blocked
+        login stops the watch without another request.
+        """
+        now = time.time()
+        recent = [at for at in self._relogin_times if now - at < self.RELOGIN_WINDOW_SECONDS]
+        if len(recent) >= self.RELOGIN_LIMIT:
+            logger.error(
+                f"⛔ {self.operator_name} needed {len(recent)} logins in "
+                f"{self.RELOGIN_WINDOW_SECONDS:.0f}s; not logging in again"
+            )
+            self._relogin_times = recent
+            self.login_blocked = True
+            return False
+        self._relogin_times = [*recent, now]
+        return True
 
     def ensure_logged_in(self) -> None:
         """
@@ -458,6 +496,9 @@ class RailService(ABC):
         Raises:
             SearchUnavailableError: When the session could not be recovered
         """
+        if self.login_blocked:
+            # A login already answered like a block: asking again is what it punishes.
+            raise SearchBlockedError(f"{self.operator_name} login answered like a block")
         if self._logged_in:
             return
 
@@ -640,9 +681,18 @@ class RailService(ABC):
         multiplier = float(1 << min(self._failure_streak - 1, 20))
         return min(multiplier, self._failure_backoff_cap)
 
-    def is_block_signal(self, error: Exception) -> bool:
-        """Whether a failed request means the operator has shut us out; see SearchBlockedError."""
+    def looks_blocked(self, error: BaseException) -> bool:
+        """
+        Whether a failed request means the operator has shut us out; see SearchBlockedError.
+
+        Says nothing to the log, so a caller in the middle of a pass (one train of several, one
+        car of a formation) can check and stop at once. is_block_signal is the logged verdict.
+        """
         return isinstance(error, SearchBlockedError)
+
+    def is_block_signal(self, error: Exception) -> bool:
+        """looks_blocked, said once to the log by an operator that can describe the reply."""
+        return self.looks_blocked(error)
 
     def check_watch_deadline(self) -> None:
         """
@@ -806,10 +856,10 @@ class RailService(ABC):
 
             self.report_progress(attempts)
             self.check_watch_deadline()
-            self._check_session_refresh()
 
             # Search for trains
             try:
+                self._check_session_refresh()
                 self.ensure_logged_in()
                 trains = self.search_trains(
                     dep_date,
@@ -913,10 +963,10 @@ class RailService(ABC):
 
             self.report_progress(attempts)
             self.check_watch_deadline()
-            self._check_session_refresh()
 
             # Search for trains (search for single passenger each time)
             try:
+                self._check_session_refresh()
                 self.ensure_logged_in()
                 trains = self.search_trains(
                     dep_date,

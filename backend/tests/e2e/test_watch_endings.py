@@ -73,7 +73,7 @@ def test_a_watch_that_finds_nothing_ends_at_its_time_limit(client, conditions):
     assert status["ended"]["reason"] == "expired"
     assert not status["pending"]
     (notice,) = notices(client, "expired")
-    assert "자리가 나지 않아 감시를 멈췄어요" in notice.splitlines()[0]
+    assert "좌석을 잡지 못해 감시를 멈췄어요" in notice.splitlines()[0]
     assert_app_wording(notice)
 
 

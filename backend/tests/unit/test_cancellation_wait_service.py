@@ -85,6 +85,7 @@ def cars(*items: SimpleNamespace) -> SimpleNamespace:
 
 def service(raw_plan: dict, seats: list[SimpleNamespace], trains=None):
     rail = Mock()
+    rail.looks_blocked.return_value = False
     inventory = SimpleNamespace(car_no=3, seats=seats)
     rail.search_selectable_trains.return_value = trains or [SimpleNamespace(train_no="015")]
     rail.seat_cars.return_value = cars()
@@ -377,6 +378,33 @@ def test_one_failing_train_does_not_cost_the_pass():
     assert capture.train.train_no == "017"
 
 
+def test_a_reply_that_looks_like_a_block_ends_the_pass_without_asking_about_the_next_train():
+    from korail_mobile_api.errors import KorailProtocolError
+
+    from korail_bot.services.korail_service import KorailService
+
+    wait, rail = service(
+        one_seat_plan(entry("015", seat(3, "1A", 1)), entry("017", seat(3, "1A", 1))),
+        [target("1A", 1)],
+        trains=[train_result("015", "11"), train_result("017", "11")],
+    )
+    # The real verdict, as KorailService gives it.
+    rail.looks_blocked.side_effect = KorailService().looks_blocked
+    rail.seat_cars.side_effect = KorailProtocolError(
+        "KORAIL response missing required envelope fields: strResult"
+    )
+
+    with pytest.raises(KorailProtocolError):
+        wait.poll_once()
+
+    # One car list, for the first train; nothing for the second, no seat read, no reserve,
+    # and no unpaid-list read to recover a "lost" answer.
+    assert rail.seat_cars.call_count == 1
+    rail.seat_inventory.assert_not_called()
+    rail.reserve_designated.assert_not_called()
+    assert rail.unpaid_reservations.call_count == 1
+
+
 def test_a_pass_where_every_train_failed_is_a_failed_pass():
     wait, rail = service(
         one_seat_plan(entry("015", seat(3, "1A", 1)), entry("017", seat(3, "1A", 1))),
@@ -496,6 +524,52 @@ def test_background_independent_wait_persists_and_notifies_each_capture(monkeypa
     assert "KTX 015 서울 → 부산 · 9월 20일(일) 09:00" in saved
     assert "namespace(" not in saved
     process.storage.wait_for_payment.assert_not_called()
+
+
+def test_a_watch_that_runs_out_of_time_after_one_seat_of_two_says_it_holds_one(monkeypatch):
+    from korail_bot.services.rail_service import SearchGaveUp
+
+    monkeypatch.setattr("korail_bot.config.settings.settings.WATCH_MAX_SECONDS", 3600.0)
+    plan = CancellationWaitPlan.from_payload(payload())
+    raw = payload()["trains"][0]["targets"][0]
+    capture = DesignatedCapture(
+        SimpleNamespace(pnr_no="R1"),
+        SimpleNamespace(
+            train_no="015",
+            train_class_name="KTX",
+            departure_station_name="서울",
+            arrival_station_name="부산",
+            departure_date="20260920",
+            departure_time="090000",
+        ),
+        "general",
+        (SeatTarget.from_payload(raw),),
+    )
+    patch_poller(monkeypatch, capture)
+    process = BackgroundReservationProcess.__new__(BackgroundReservationProcess)
+    process.seat_plan = plan
+    process.rail = Mock()
+    process.rail.reservation_id.return_value = "R1"
+    process.rail.reservation_outcome.return_value = ReservationOutcome.OUTSTANDING
+    # The first pass may ask; by the second the hour is up.
+    process.rail.check_watch_deadline.side_effect = [None, SearchGaveUp("expired")]
+    process.storage = Mock()
+    process.storage.get_multi_reservation_status.return_value = None
+    process.chat_id = -100
+    process.dep_date, process.src_locate, process.dst_locate = "20260920", "서울", "부산"
+    process.dep_time, process.max_dep_time = "090000", "1800"
+    process.train_type = object()
+    process._payment_deadline = Mock(return_value=utc_now() + timedelta(minutes=10))
+    process.storage.get_user_timezone.return_value = "Asia/Seoul"
+    process._send_callback = Mock()
+
+    with pytest.raises(SearchGaveUp):
+        process._run_cancellation_wait()
+    process._give_up("expired")
+
+    assert process._seats_held == 1
+    message = process._send_callback.call_args.args[0]
+    assert message.startswith("⏱ 1석은 잡았고 나머지 감시는 시간 상한으로 멈췄어요")
 
 
 def test_a_stale_multi_record_from_a_different_train_is_not_carried_over(monkeypatch):

@@ -16,6 +16,7 @@ import importlib.util
 import json
 import logging
 import os
+import time
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
@@ -156,7 +157,7 @@ def test_a_reply_without_str_result_is_a_block_not_a_failed_search(caplog):
     assert replies.sent == 1
     said = caplog.text
     # The top-level keys and a short excerpt, for whoever reads the log next time.
-    assert "keys=['h_msg_cd', 'h_msg_txt', 'rtnMsg']" in said
+    assert "HTTP 200 DynaPath-Result=None keys=['h_msg_cd', 'h_msg_txt', 'rtnMsg']" in said
     assert "비정상적인 접근입니다." in said
     assert PASSWORD not in said
 
@@ -230,27 +231,101 @@ def test_a_blocked_reply_on_a_later_page_ends_the_watch_too(no_sleep):
     assert replies.sent == 2
 
 
-def test_a_relogin_that_answers_like_a_block_ends_the_watch_after_one_try(no_sleep):
+def _korail_answering(monkeypatch, body: dict) -> list:
+    """The current Korail client, answering every request with `body`. Returns what was sent."""
+    sent = []
+
+    def answer(request):
+        sent.append(request.url.path)
+        return httpx.Response(200, json=body)
+
+    real_client = korail_service_module.KorailClient
+    monkeypatch.setattr(
+        korail_service_module,
+        "KorailClient",
+        lambda config: real_client(config, transport=httpx.MockTransport(answer)),
+    )
+    return sent
+
+
+def test_a_session_refresh_that_answers_like_a_block_sends_one_login_and_stops(
+    monkeypatch, no_sleep
+):
+    # The real path: the half-hourly refresh falls due, its login is answered without strResult,
+    # and nothing - not ensure_logged_in, not the search - asks Korail again.
+    sent = _korail_answering(monkeypatch, {"h_msg_cd": ""})
     service = KorailService()
-    # Logged in when the loop starts; the session then goes, as Korail drops one.
     service._logged_in = True
-    service._check_session_refresh = lambda: setattr(service, "_logged_in", False)
-    logins = []
-
-    def relogin():
-        logins.append(1)
-        service.login_blocked = True
-        return False
-
-    service._relogin = relogin
+    service._username, service._password = "01000000000", PASSWORD
+    service._relogin_due_at = time.time() - 1
     service.search_trains = Mock()
 
     with pytest.raises(SearchGaveUp) as raised:
         _loop(service)
 
     assert raised.value.reason == "blocked"
-    assert logins == [1]
+    assert len(sent) == 1
+    assert service.login_blocked
     service.search_trains.assert_not_called()
+
+
+def test_a_block_already_seen_stops_the_next_login_before_it_is_sent(monkeypatch, no_sleep):
+    sent = _korail_answering(monkeypatch, {"h_msg_cd": ""})
+    service = KorailService()
+    service._username, service._password = "01000000000", PASSWORD
+    service.login_blocked = True
+
+    with pytest.raises(SearchBlockedError):
+        service.ensure_logged_in()
+
+    assert sent == []
+
+
+def test_a_session_korail_drops_every_pass_stops_after_three_logins(monkeypatch, no_sleep):
+    from korail2.korail2 import NeedToLoginError
+
+    service = KorailService()
+    service._logged_in = True
+    service._korail_instance = object()
+    service._username, service._password = "01000000000", PASSWORD
+    service._search_legacy_pages = Mock(side_effect=NeedToLoginError("P058"))
+    logins = []
+
+    def login(username, password):
+        logins.append(1)
+        return True
+
+    service._login_with_current_api = login
+
+    with pytest.raises(SearchGaveUp) as raised:
+        _loop(service)
+
+    assert raised.value.reason == "blocked"
+    assert len(logins) == service.RELOGIN_LIMIT == 3
+    # A pass that only got a fresh login is a failure, not an empty answer.
+    assert service._failure_streak == 3
+
+
+def test_the_reply_hook_failing_does_not_stop_the_client_being_built(monkeypatch, caplog):
+    class Moved:
+        @property
+        def _client(self):
+            raise AttributeError("moved")
+
+    real_client = korail_service_module.KorailClient
+
+    def client(config):
+        built = real_client(config)
+        built.http = Moved()
+        return built
+
+    monkeypatch.setattr(korail_service_module, "KorailClient", client)
+
+    with caplog.at_level(logging.DEBUG, logger="korail_bot.services.korail_service"):
+        built = KorailService()._build_modern_client()
+
+    assert isinstance(built.http, Moved)
+    assert "reply hook not installed" in caplog.text
 
 
 def test_a_login_reply_without_str_result_is_a_block_logged_without_its_body(monkeypatch, caplog):
@@ -271,6 +346,8 @@ def test_a_login_reply_without_str_result_is_a_block_logged_without_its_body(mon
         assert service.login("01000000000", PASSWORD) is False
 
     assert service.login_blocked and service.login_unavailable
+    # The login reply is not kept for a later search's diagnosis.
+    assert service._last_modern_reply is None
     said = caplog.text
     assert "keys=['h_msg_cd', 'strMbCrdNo']" in said
     assert member not in said and PASSWORD not in said
@@ -288,6 +365,129 @@ def test_a_seat_map_watch_reads_the_current_clients_way_of_saying_it():
     with pytest.raises(SearchGaveUp) as raised:
         service.note_search_failure(blocked)
     assert raised.value.reason == "blocked"
+
+
+@KORAIL2_UTCNOW
+def test_an_unpaid_list_without_str_result_stops_the_watch_instead_of_reading_as_unknown():
+    service, replies = _logged_in_service({"h_msg_cd": ""})
+
+    with pytest.raises(SearchBlockedError):
+        service.unpaid_reservations()
+
+    assert replies.sent == 1
+
+
+def test_a_formation_lookup_that_answers_like_a_block_is_not_swallowed(monkeypatch):
+    from korail_mobile_api.errors import KorailProtocolError
+
+    service = KorailService()
+    blocked = KorailProtocolError("KORAIL response missing required envelope fields: strResult")
+    monkeypatch.setattr(service, "_formation_lookup", Mock(side_effect=blocked))
+    train = SimpleNamespace(
+        train_no="00101", departure_date="20261003", departure_time="070000", train_class_code="00"
+    )
+
+    with pytest.raises(KorailProtocolError):
+        service._with_unlisted_cars(train, "1", 1, ("k",), SimpleNamespace(cars=()))
+
+
+def test_a_later_seat_map_search_page_that_answers_like_a_block_ends_the_pass(no_sleep):
+    from korail_mobile_api import TrainSummary
+    from korail_mobile_api.errors import KorailProtocolError
+
+    rows = [
+        TrainSummary(
+            train_no=f"{101 + 2 * index:05d}",
+            departure_date="20261003",
+            departure_time=f"{7 + index:02d}0000",
+            arrival_time=f"{10 + index:02d}0000",
+            departure_station_name="서울",
+            arrival_station_name="부산",
+            run_date="20261003",
+            train_class_name="KTX",
+            train_group_name="KTX",
+            train_class_code="00",
+            general_reservation_code="13",
+            special_reservation_code="13",
+            general_availability_name="매진",
+            special_availability_name="매진",
+            wait_reservation_flag="-1",
+        )
+        for index in range(10)
+    ]
+    first = SimpleNamespace(
+        trains=rows, next_page=lambda: None, metadata=SimpleNamespace(next_page_flag="Y")
+    )
+    service = KorailService()
+    service._logged_in = True
+    service._modern_client = Mock()
+    service._modern_client.search_trains.side_effect = [
+        first,
+        KorailProtocolError("KORAIL response missing required envelope fields: strResult"),
+    ]
+
+    with pytest.raises(KorailProtocolError):
+        service.search_waitlist_trains(
+            dep_date="20261003",
+            src_locate="서울",
+            dst_locate="부산",
+            dep_time="070000",
+            max_dep_time="2400",
+            train_type=TrainType.KTX,
+            passenger_count=1,
+        )
+
+    assert service._modern_client.search_trains.call_count == 2
+
+
+def _korail2_train():
+    from korail2.korail2 import Train
+
+    return Train(
+        {
+            "h_trn_clsf_cd": "100",
+            "h_trn_clsf_nm": "KTX",
+            "h_trn_gp_cd": "100",
+            "h_trn_no": "00101",
+            "h_dpt_rs_stn_nm": "서울",
+            "h_dpt_rs_stn_cd": "0001",
+            "h_dpt_dt": "20261003",
+            "h_dpt_tm": "070000",
+            "h_arv_rs_stn_nm": "부산",
+            "h_arv_rs_stn_cd": "0020",
+            "h_arv_dt": "20261003",
+            "h_arv_tm": "094100",
+            "h_run_dt": "20261003",
+            "h_rsv_psb_flg": "Y",
+            "h_rsv_psb_nm": "예약가능",
+            "h_spe_rsv_cd": "11",
+            "h_gen_rsv_cd": "11",
+            "h_wait_rsv_flg": "-1",
+        }
+    )
+
+
+def test_a_reservation_list_without_str_result_ends_the_watch_before_reserving():
+    service, replies = _logged_in_service({"h_msg_cd": ""})
+
+    with pytest.raises(SearchGaveUp) as raised:
+        service.reserve_train(_korail2_train())
+
+    assert raised.value.reason == "blocked"
+    assert replies.sent == 1
+
+
+def test_a_reservation_answered_without_str_result_ends_the_watch_not_the_train():
+    service, replies = _logged_in_service(
+        {"strResult": "FAIL", "h_msg_cd": "P100", "h_msg_txt": "예약 내역이 없습니다."},
+        {"h_msg_cd": ""},
+    )
+
+    with pytest.raises(SearchGaveUp) as raised:
+        service.reserve_train(_korail2_train())
+
+    assert raised.value.reason == "blocked"
+    assert replies.sent == 2
 
 
 # ==================== Unavailable for too long ====================
@@ -446,7 +646,7 @@ def _record(started_ago: timedelta):
     [
         ("blocked", 3, "코레일이 접속을 막은 것 같아 감시를 멈췄어요"),
         ("unavailable", 4, "코레일 응답이 10분째 없어 감시를 멈췄어요"),
-        ("expired", 5, "1시간 동안 자리가 나지 않아 감시를 멈췄어요"),
+        ("expired", 5, "1시간 동안 좌석을 잡지 못해 감시를 멈췄어요"),
     ],
 )
 def test_a_watch_that_gave_up_says_why_in_its_own_status(monkeypatch, reason, status, words):
@@ -465,6 +665,19 @@ def test_a_watch_that_gave_up_says_why_in_its_own_status(monkeypatch, reason, st
     assert "서울 → 부산" in message
     # Neither a booking nor a sold-out train.
     assert "잡았어요" not in message and "매진" not in message
+
+
+def test_a_watch_that_holds_some_seats_says_so_when_it_runs_out_of_time(monkeypatch):
+    monkeypatch.setattr(settings, "WATCH_MAX_SECONDS", 3600.0)
+    process = _process(KorailService())
+    process._seats_held = 1
+
+    process._give_up("expired")
+
+    message = process._send_callback.call_args.args[0]
+    assert message.splitlines()[0] == "⏱ 1석은 잡았고 나머지 감시는 시간 상한으로 멈췄어요"
+    assert "잡은 좌석은 결제 기한 안에 결제해 주세요" in message
+    assert "좌석을 잡지 못해" not in message
 
 
 def test_a_login_that_answers_like_a_block_ends_the_watch_without_retrying(monkeypatch):
