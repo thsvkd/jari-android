@@ -1,5 +1,7 @@
 """All shared railway records use a mobile-only key namespace and key."""
 
+import json
+
 import redis
 from redis.backoff import NoBackoff
 from redis.retry import Retry
@@ -196,6 +198,38 @@ class MobileStorage(RedisStorage):
         keys -= {f"{kind}:{chat_id}" for kind in self.KEPT_ON_DELETE}
         self.redis.delete(*keys)
         return len(keys)
+
+    # Korail sells 60 days ahead; a standby record is kept a little past that at most. Finished
+    # ones are pruned well before (MobileGateway.check_waitlists).
+    WAITLIST_TTL = 70 * 24 * 3600
+
+    def get_waitlists(self, chat_id):
+        """The Korail standbys this owner applied for through the app, oldest first."""
+        raw = self.redis.get(f"waitlist:{chat_id}")
+        try:
+            entries = json.loads(raw) if raw else []
+        except ValueError:
+            return []
+        return (
+            [entry for entry in entries if isinstance(entry, dict)]
+            if isinstance(entries, list)
+            else []
+        )
+
+    def save_waitlists(self, chat_id, entries):
+        key = f"waitlist:{chat_id}"
+        if entries:
+            self.redis.set(key, json.dumps(entries, ensure_ascii=False), ex=self.WAITLIST_TTL)
+        else:
+            self.redis.delete(key)
+
+    def waitlist_owners(self):
+        owners = []
+        for key in self.redis.scan_iter(match="waitlist:*", count=100):
+            owner = key.split(":", 1)[1]
+            if owner.lstrip("-").isdigit():
+                owners.append(int(owner))
+        return owners
 
     def is_developer(self, chat_id):
         return False

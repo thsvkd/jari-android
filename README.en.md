@@ -147,7 +147,7 @@ docs/       Product, spec and guide documents
 - **Korail trains only.** SRT accounts are not used; high-speed trains from Suseo are searched with your Korail account too.
 - **No payment.** Once a seat is held, you pay in the Korail app before the payment deadline.
 - **Approval required.** Anyone can apply for an account, but railway features stay locked until the operator approves it.
-- Korail's official waitlist is requested for standard class only, without choosing seat positions.
+- When a sold-out train takes Korail's official waitlist, the app recommends it first. The waitlist is requested once, for standard class only, without choosing seat positions, and the app checks for an assigned seat no more often than every 10 minutes. The cancellation watch is for trains without a waitlist or when first class or seat conditions are a must.
 - Installs on Android 7.0 (API 24) or later.
 - Automated tests never reach the real Korail. They use a fake Korail built from the real library classes ([development guide](docs/development.md#테스트와-검증)).
 

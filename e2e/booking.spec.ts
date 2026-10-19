@@ -24,10 +24,11 @@ test.describe("빈자리를 찾아 예약하기", () => {
             const target = area === "padding" ? card : card.locator(".train-actions");
             await target.scrollIntoViewIfNeeded();
             const box = (await target.boundingBox())!;
-            // 아래쪽 카드 패딩, 한 버튼 옆 빈 칸 또는 두 버튼 사이 틈을 직접 눌러요.
+            // 아래쪽 카드 패딩, 한 버튼 옆 빈 칸 또는 두 버튼 사이 틈을 직접 눌러요. 코레일 예약 대기가 되는 열차는
+            // 첫 줄을 대기 신청 버튼이 다 쓰니 좌석 버튼이 있는 마지막 줄을 눌러요.
             await target.click({ position: area === "padding"
               ? { x: 5, y: box.height - 5 }
-              : { x: seatClasses?.length === 2 ? box.width / 2 : box.width * 0.75, y: 24 } });
+              : { x: seatClasses?.length === 2 ? box.width / 2 : box.width * 0.75, y: box.height - 24 } });
           }
         };
         await clickArea();

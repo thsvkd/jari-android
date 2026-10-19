@@ -133,6 +133,29 @@ export interface PendingReservation {
   seatClass?: SeatClass | "";
 }
 
+/**
+ * 앱에서 신청한 코레일 예약 대기 하나. 서버가 정한 간격(10분 이상)으로만 코레일에 확인해요.
+ * waiting 대기 중 · assigned 좌석 배정(결제 필요) · paid 결제 확인 · ended 코레일 목록에서 사라짐 · cancelled 앱에서 취소.
+ */
+export interface WaitlistEntry {
+  id: string;
+  trainNo: string;
+  trainInfo: string;
+  depDate: string;
+  depTime: string;
+  passengerCount: number;
+  state: "waiting" | "assigned" | "paid" | "ended" | "cancelled";
+  createdAt: string | null;
+  checkedAt: string | null;
+  /** 마지막 확인이 실패했어요. 대기가 끝났다는 뜻은 아니에요. */
+  checkFailed?: boolean;
+  /** "login": 코레일 로그인이 거절돼 계정을 다시 연결할 때까지 확인을 멈췄어요. */
+  checkError?: string | null;
+  expiresAt?: string | null;
+  seatLabels?: string[] | null;
+  finishedAt?: string | null;
+}
+
 export interface Favourite {
   id: string;
   name: string;
@@ -156,6 +179,9 @@ export interface BootstrapState {
   running: RunningSearch | null;
   scheduled: ScheduledSearch | null;
   pending: PendingReservation[];
+  /** 옛 서버에는 없어요. */
+  waitlists?: WaitlistEntry[];
+  waitlistCheckMinutes?: number;
   favourites: Favourite[];
   notifyMinutes: number;
   draft: Conditions | null;
@@ -175,7 +201,8 @@ export interface TrainOption {
   arr_time?: string;
   name?: string;
   soldout: boolean;
-  waitlistEligible?: boolean;
+  /** null: 코레일이 예약 대기 여부를 알려 주지 않았어요(가능·불가 어느 쪽도 아니에요). */
+  waitlistEligible?: boolean | null;
   trainKey?: string;
   generalAvailable?: boolean;
   specialAvailable?: boolean;
@@ -291,6 +318,7 @@ export interface StatusResult {
   running: RunningSearch | null;
   scheduled: ScheduledSearch | null;
   pending: PendingReservation[];
+  waitlists?: WaitlistEntry[];
 }
 
 export interface MobileApi {
@@ -329,6 +357,8 @@ export interface MobileApi {
   schedule(payload: BookingPayload & { start_at: string }): Promise<{ scheduled: boolean; startAt: string }>;
   cancelSearch(): Promise<{ stopped: boolean; unscheduled: boolean }>;
   cancelReservations(): Promise<{ cancelled: boolean; pending: PendingReservation[] }>;
+  /** 신청한 코레일 예약 대기 하나를 취소해요. id 는 서버가 준 예약 대기 목록의 것이에요. */
+  cancelWaitlist(id: string): Promise<{ cancelled: boolean; waitlists: WaitlistEntry[] }>;
   requestAccess(): Promise<{ requested: boolean; approved?: boolean }>;
   favourites(): Promise<{ favourites: Favourite[] } | Favourite[]>;
   saveFavourite(payload: { conditions: Conditions; name?: string }): Promise<{ saved: boolean; favourites: Favourite[] }>;

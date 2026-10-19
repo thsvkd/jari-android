@@ -28,6 +28,11 @@ export interface Scenario {
   failure_stop_seconds?: number | null;
   /** 감시를 이만큼(초) 하면 멈춰요. 예약 워커가 시작할 때 읽어요. */
   watch_max_seconds?: number | null;
+  /** 예약 대기 신청에 코레일이 하는 답 */
+  waitlist_request?: "ok" | "refused" | "unavailable";
+  /** 신청된 예약 대기를 다시 읽을 때 코레일이 하는 답 */
+  waitlist?: "waiting" | "assigned" | "paid" | "ended" | "unavailable";
+  waitlist_cancel_refused?: boolean;
 }
 
 /** e2e 스택의 제어 서버. 가짜 코레일 시나리오와 호출 기록을 다뤄요. */

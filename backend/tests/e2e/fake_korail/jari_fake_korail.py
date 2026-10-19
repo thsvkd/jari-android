@@ -24,9 +24,15 @@ from zoneinfo import ZoneInfo
 import redis
 import requests
 from korail2 import TrainType
-from korail2.korail2 import Reservation, Train
-from korail_mobile_api import KorailSeatAssignment
-from korail_mobile_api.errors import KorailTransportError
+from korail2.korail2 import Reservation, Ticket, Train
+from korail_mobile_api import (
+    KorailSeatAssignment,
+    ReservationDetailJourney,
+    ReservationHistoryTrain,
+    ReservationSeatDetail,
+    TicketReservationDetailResponse,
+)
+from korail_mobile_api.errors import KorailReservationRefusedError, KorailTransportError
 from korail_mobile_api.models import (
     PhysicalSeat,
     SeatCar,
@@ -40,6 +46,8 @@ KST = ZoneInfo("Asia/Seoul")
 SCENARIO_KEY = "e2e:scenario"
 LOG_KEY = "e2e:log"
 COUNTER_KEY = "e2e:counter"
+# 가짜 코레일에 신청된 예약 대기: 예약번호 → 열차(JSON). 코레일의 예약 목록 역할이에요.
+WAITLIST_KEY = "e2e:waitlists"
 # 시나리오를 바꾼 뒤 코레일이 로그인에 답하지 않은 횟수. 스택이 시나리오를 바꿀 때 지워요.
 LOGIN_UNREACHABLE_KEY = "e2e:login_unreachable"
 
@@ -115,6 +123,13 @@ DEFAULT_SCENARIO = {
     # 코레일이 취소를 거절하는 예약번호. 번호는 예약이 잡힌 뒤에야 알 수 있어, 테스트가 /status 에서 읽어 넣어요.
     # 거절한 호출도 기록에 "cancel" 로 남고(refused: true), 예약은 그대로 결제 대기예요.
     "cancel_refused": [],
+    # 예약 대기 신청에 코레일이 하는 답: ok(대기 등록) | refused(코레일이 거절) | unavailable(HTTP 503)
+    "waitlist_request": "ok",
+    # 신청된 예약 대기를 다시 읽을 때: waiting(대기 중) | assigned(좌석 배정, 결제 대기) | paid(결제되어 승차권)
+    # | ended(목록에서 사라짐) | unavailable(코레일이 답하지 않음)
+    "waitlist": "waiting",
+    # 예약 대기 취소를 코레일이 거절하는지
+    "waitlist_cancel_refused": False,
     "trains": DEFAULT_TRAINS,
     # 예약 워커가 시작할 때 운영 설정 대신 쓰는 값(초). None 이면 스택 설정 그대로예요.
     # 조회 실패가 이만큼 이어지면 감시를 멈춰요(SEARCH_FAILURE_STOP_SECONDS).
@@ -473,11 +488,124 @@ class FakeKorail:
         _log("cancel", rsv_id=rsv_id, refused=refused)
         return not refused
 
-    def request_waitlist(
-        self, *, dep_date, src_locate, dst_locate, dep_time, train_no, passenger_count
-    ):
-        _log("waitlist", train_no=train_no)
-        return {"train_no": train_no}
+    def _register_standby(self, train, passenger_count):
+        # 실제 request_waitlist 가 열차를 다시 찾고 예약 대기 대상(" 9")인지 본 뒤에 오는 자리예요.
+        mode = scenario()["waitlist_request"]
+        _log("waitlist", train_no=train.train_no, passengers=passenger_count, mode=mode)
+        if mode == "unavailable":
+            raise KorailTransportError(
+                "KORAIL HTTP 503 for POST /classes/com.korail.mobile.certification.TicketReservation"
+            )
+        if mode == "refused":
+            raise KorailReservationRefusedError("WRR800029", "동일한 예약 내역이 있습니다.")
+        pnr = _next_id("WAIT")
+        _client().hset(
+            WAITLIST_KEY,
+            pnr,
+            json.dumps(
+                {
+                    "train_no": train.train_no,
+                    "dep_date": train.departure_date,
+                    "dep_time": train.departure_time,
+                    "arr_time": train.arrival_time,
+                    "passengers": passenger_count,
+                }
+            ),
+        )
+        return ReservationHoldResponse(str_result="SUCC", pnr_no=pnr, journey_count="0001")
+
+    def _reservation_rows(self):
+        mode = scenario()["waitlist"]
+        _log("waitlist_list", mode=mode)
+        if mode == "unavailable":
+            raise KorailTransportError(
+                "KORAIL HTTP 503 for GET /classes/com.korail.mobile.reservation.ReservationView"
+            )
+        if mode not in ("waiting", "assigned"):
+            return ()
+        limit_date, limit_time = _deadline()
+        rows = []
+        for pnr, raw in _client().hgetall(WAITLIST_KEY).items():
+            train = json.loads(raw)
+            fields = {
+                "h_pnr_no": pnr,
+                "h_trn_no": train["train_no"],
+                "h_run_dt": train["dep_date"],
+                "h_dpt_tm": train["dep_time"],
+                "h_arv_tm": train["arr_time"],
+                "h_tot_seat_cnt": f"{train['passengers']:03d}",
+            }
+            if mode == "assigned":
+                fields.update({"h_ntisu_lmt_dt": limit_date, "h_ntisu_lmt_tm": limit_time})
+            rows.append(
+                ReservationHistoryTrain(
+                    pnr_no=pnr,
+                    train_no=train["train_no"],
+                    run_date=train["dep_date"],
+                    departure_time=train["dep_time"],
+                    arrival_time=train["arr_time"],
+                    seat_count=train["passengers"],
+                    raw=fields,
+                )
+            )
+        return tuple(rows)
+
+    def _hold_detail(self, rsv_id):
+        assigned = scenario()["waitlist"] == "assigned"
+        _log("waitlist_detail", assigned=assigned)
+        seats = (ReservationSeatDetail(car_no="3", seat_no="7A", room_class_code="1"),)
+        return TicketReservationDetailResponse(
+            str_result="SUCC",
+            pnr_no=rsv_id,
+            journeys=(ReservationDetailJourney(seats=seats if assigned else ()),),
+        )
+
+    def _ticket_rows(self):
+        if scenario()["waitlist"] != "paid":
+            return []
+        tickets = []
+        for raw in _client().hgetall(WAITLIST_KEY).values():
+            train = json.loads(raw)
+            tickets.append(
+                Ticket(
+                    {
+                        "ticket_list": [
+                            {
+                                "train_info": [
+                                    {
+                                        "h_trn_clsf_cd": "100",
+                                        "h_trn_clsf_nm": "KTX",
+                                        "h_trn_gp_cd": "100",
+                                        "h_trn_no": train["train_no"],
+                                        "h_dpt_rs_stn_nm": "서울",
+                                        "h_dpt_rs_stn_cd": "0001",
+                                        "h_dpt_dt": train["dep_date"],
+                                        "h_dpt_tm": train["dep_time"],
+                                        "h_arv_rs_stn_nm": "부산",
+                                        "h_arv_rs_stn_cd": "0020",
+                                        "h_arv_dt": train["dep_date"],
+                                        "h_arv_tm": train["arr_time"],
+                                        "h_run_dt": train["dep_date"],
+                                        "h_seat_cnt": f"{train['passengers']:03d}",
+                                        "h_rcvd_amt": "00059800",
+                                        "h_srcar_no": "3",
+                                        "h_seat_no": "7A",
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                )
+            )
+        return tickets
+
+    def cancel_waitlist(self, rsv_id, journey_count=""):
+        refused = bool(scenario()["waitlist_cancel_refused"])
+        _log("waitlist_cancel", rsv_id=rsv_id, refused=refused)
+        if refused:
+            raise KorailReservationRefusedError("ERR000000", "취소할 수 없는 예약입니다.")
+        _client().hdel(WAITLIST_KEY, rsv_id)
+        return True
 
     def issued_tickets(self):
         return []
@@ -542,6 +670,10 @@ def install() -> None:
     ):
         if state.get(key) is not None:
             setattr(settings, name, float(state[key]))
+    # 예약 대기 확인 간격의 하한(운영 10분)을 풀어요. 스택이 짧은 간격을 줘서 배정까지 몇 초 안에 봐요.
+    from korail_bot.mobile import config
+
+    config.WAITLIST_CHECK_MIN_MINUTES = 0
     # 역 목록도 코레일에서 받아 와요. 내장 목록으로 답해요.
     StationManager._fetch_stations_from_api = lambda self: set(FALLBACK_STATIONS)
     # 스택은 서버가 이 기록을 남겨야 준비됐다고 봐요. 가짜 없이 뜬 서버는 쓰지 않아요.

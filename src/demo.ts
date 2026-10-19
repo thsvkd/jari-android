@@ -14,6 +14,7 @@ import type {
   SeatInventory,
   SeatMapSeat,
   TrainOption,
+  WaitlistEntry,
 } from "./types";
 
 const initialConditions: Omit<Conditions, "dep_date"> = {
@@ -95,6 +96,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
   let running: RunningSearch | null = null;
   let scheduled: ScheduledSearch | null = null;
   let pending: PendingReservation[] = [];
+  let waitlists: WaitlistEntry[] = [];
   let favourites: Favourite[] = [
     {
       id: "demo-home",
@@ -175,6 +177,8 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     running,
     scheduled,
     pending,
+    waitlists,
+    waitlistCheckMinutes: 10,
     favourites,
     notifyMinutes,
     draft: { ...conditions },
@@ -242,6 +246,19 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     },
     search: async (payload) => {
       if (payload.conditions.waitlist) {
+        const train = trainFixtures.find((item) => item.no === payload.trains[0]);
+        waitlists = [...waitlists, {
+          id: `DEMO-WAIT-${waitlists.length + 1}`,
+          trainNo: payload.trains[0] ?? "",
+          trainInfo: `체험 데이터 · ${train?.name ?? "KTX"} ${payload.trains[0] ?? ""} ${payload.conditions.src_station} → ${payload.conditions.dst_station}`,
+          depDate: payload.conditions.dep_date,
+          depTime: train?.dep_time ?? "",
+          passengerCount: payload.conditions.passenger_count,
+          state: "waiting",
+          createdAt: clock().toISOString(),
+          checkedAt: null,
+          checkFailed: false,
+        }];
         return { started: false, waitlisted: true, trainNo: payload.trains[0] };
       }
       running = asSearch(payload.conditions, payload.trains);
@@ -274,6 +291,12 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
       pending = [];
       return { cancelled: true, pending };
     },
+    cancelWaitlist: async (id) => {
+      waitlists = waitlists.map((entry) => entry.id === id && entry.state === "waiting"
+        ? { ...entry, state: "cancelled", finishedAt: clock().toISOString() }
+        : entry);
+      return { cancelled: true, waitlists };
+    },
     requestAccess: async () => ({ requested: true, approved: true }),
     favourites: async () => ({ favourites }),
     saveFavourite: async ({ conditions, name }) => {
@@ -300,7 +323,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
     notifications: async () => ({ items: [...notifications], pushAvailable: false }),
     registerDevice: async () => ({ ok: false, pushAvailable: false }),
     deleteDevice: async () => ({ ok: true, pushAvailable: false }),
-    status: async () => ({ running, scheduled, pending }),
+    status: async () => ({ running, scheduled, pending, waitlists }),
     agents: async () => ({ agents: agents.map((agent) => ({ ...agent })) }),
     agentSetBooking: async (id, allowBooking) => {
       agents = agents.map((agent) => (agent.id === id ? { ...agent, allowBooking } : agent));

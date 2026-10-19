@@ -30,6 +30,7 @@ from korail_mobile_api import (
     KorailSeatAssignment,
     KorailSeatClass,
     MutationConsent,
+    ReservationHoldResponse,
     SeatCarListResponse,
     SeatInventoryResponse,
     TicketReservationDetailRequest,
@@ -1421,8 +1422,10 @@ class KorailService(RailService):
                 getattr(train, field, None) == "11"
                 for field in ("general_reservation_code", "special_reservation_code")
             ),
-            "waitlistEligible": getattr(train, "wait_reservation_flag", None)
-            == KORAIL_STANDBY_WAIT_FLAG,
+            # None when Korail sent no flag: unknown, which is neither "takes a standby" nor not.
+            "waitlistEligible": None
+            if getattr(train, "wait_reservation_flag", None) is None
+            else train.wait_reservation_flag == KORAIL_STANDBY_WAIT_FLAG,
         }
 
     def looks_blocked(self, error: BaseException) -> bool:
@@ -1778,10 +1781,15 @@ class KorailService(RailService):
         dep_time: str,
         train_no: str,
         passenger_count: int = 1,
-    ) -> dict[str, str]:
-        """Apply for Korail's official standby list for one eligible train."""
-        client = self._modern_client
-        if not self._logged_in or client is None:
+    ) -> dict:
+        """
+        Apply for Korail's official standby list for one eligible train.
+
+        One listing to find the train again and one standby request; nothing here repeats. The
+        answer names the standby's reservation number and journey count, which a later status
+        check and cancellation need.
+        """
+        if not self._logged_in:
             raise ValueError("코레일에 로그인한 뒤 예약 대기를 신청해 주세요.")
 
         trains = self.search_waitlist_trains(
@@ -1797,9 +1805,26 @@ class KorailService(RailService):
         train = next((item for item in trains if str(item.train_no) == str(train_no)), None)
         if train is None:
             raise ValueError("선택한 열차를 다시 찾지 못했어요. 목록을 새로 조회해 주세요.")
-        if str(getattr(train, "wait_reservation_flag", "") or "") != " 9":
+        if str(getattr(train, "wait_reservation_flag", "") or "") != KORAIL_STANDBY_WAIT_FLAG:
             raise ValueError("선택한 열차는 현재 코레일 예약 대기 대상이 아니에요.")
 
+        hold = self._register_standby(train, passenger_count)
+        logger.info("Korail standby registration completed for train %s", train_no)
+        return {
+            "train_no": str(train_no),
+            "reservation_id": str(getattr(hold, "pnr_no", "") or "").strip(),
+            "journey_count": str(getattr(hold, "journey_count", "") or "").strip(),
+            "dep_date": str(getattr(train, "departure_date", "") or dep_date),
+            "dep_time": str(getattr(train, "departure_time", "") or ""),
+            # The listed train itself, for the caller to name it the way the app names trains.
+            "train": train,
+        }
+
+    def _register_standby(self, train, passenger_count: int):
+        """The standby request itself: a 예약대기 hold, then its options. Released if half done."""
+        client = self._modern_client
+        if client is None:
+            raise ValueError("코레일에 로그인한 뒤 예약 대기를 신청해 주세요.")
         reserve_consent = MutationConsent(allow_reserve=True, dry_run=False)
         hold = client.reserve(
             train,
@@ -1828,9 +1853,93 @@ class KorailService(RailService):
                     type(cancel_error).__name__,
                 )
             raise
+        return hold
 
-        logger.info("Korail standby registration completed for train %s", train_no)
-        return {"train_no": str(train_no)}
+    def waitlist_state(self, rsv_id: str, *, train_no: str, dep_date: str, dep_time: str) -> dict:
+        """
+        Where one standby stands, read without changing anything.
+
+        - "waiting": Korail still lists the reservation and has given it no seat.
+        - "assigned": Korail lists it with seats - a seat was given and payment is due. Carries
+          "seats" and, when Korail sent one, the payment deadline ("deadline": (date, time)).
+        - "paid": no longer listed, and a ticket on the same train and day was issued.
+        - "ended": no longer listed and no such ticket: cancelled, expired or the train left.
+
+        Raises when Korail could not be asked: a failed read is not "ended". Telling a seat
+        given from one still awaited by the seats on the PNR is this app's reading of Korail's
+        answer; the listing names no standby state of its own.
+        """
+        if not self._logged_in:
+            raise ValueError("코레일에 로그인한 뒤 예약 대기를 확인해 주세요.")
+        wanted = str(rsv_id).strip()
+        row = next(
+            (item for item in self._reservation_rows() if str(item.pnr_no or "").strip() == wanted),
+            None,
+        )
+        if row is None:
+            issued = any(
+                str(getattr(ticket, "train_no", "")) == str(train_no)
+                and str(getattr(ticket, "dep_date", "")) == str(dep_date)
+                and (not dep_time or str(getattr(ticket, "dep_time", ""))[:4] == str(dep_time)[:4])
+                for ticket in self._ticket_rows()
+            )
+            return {"state": "paid" if issued else "ended"}
+        seats = [
+            f"{int(str(seat.car_no).strip())}호차 {str(seat.seat_no).strip()}"
+            for journey in self._hold_detail(wanted).journeys
+            for seat in journey.seats
+            if str(seat.car_no or "").strip().isdigit() and str(seat.seat_no or "").strip()
+        ]
+        if not seats:
+            return {"state": "waiting"}
+        raw = row.raw if isinstance(row.raw, dict) else {}
+        deadline = (raw.get("h_ntisu_lmt_dt"), raw.get("h_ntisu_lmt_tm"))
+        return {
+            "state": "assigned",
+            "seats": seats,
+            "deadline": deadline if all(isinstance(part, str) for part in deadline) else None,
+        }
+
+    def _reservation_rows(self):
+        """This account's live reservations (ReservationView), standbys among them."""
+        if self._modern_client is None:
+            raise ValueError("코레일에 로그인한 뒤 예약 대기를 확인해 주세요.")
+        return self._modern_client.get_reservation_history().items
+
+    def _hold_detail(self, rsv_id: str):
+        """One reservation read again by its number (certification.ReservationList), with seats."""
+        if self._modern_client is None:
+            raise ValueError("코레일에 로그인한 뒤 예약 대기를 확인해 주세요.")
+        return self._modern_client.get_ticket_reservation_detail(
+            TicketReservationDetailRequest(pnr_no=rsv_id)
+        )
+
+    def _ticket_rows(self) -> list:
+        """The tickets already issued to this account (korail2 Ticket); none is an answer."""
+        if self._korail_instance is None:
+            raise ValueError("코레일에 로그인한 뒤 예약 대기를 확인해 주세요.")
+        try:
+            return list(self._korail_instance.tickets() or [])
+        except NoResultsError:
+            return []
+
+    def cancel_waitlist(self, rsv_id: str, journey_count: str = "") -> bool:
+        """
+        Withdraw one standby. Korail's own standby screen gives a hold back the same way
+        (ReservationCancelChk with the PNR and its journey count). True once Korail took it;
+        a refusal raises.
+        """
+        client = self._modern_client
+        if not self._logged_in or client is None:
+            raise ValueError("코레일에 로그인한 뒤 예약 대기를 취소해 주세요.")
+        hold = ReservationHoldResponse(
+            str_result="SUCC",
+            pnr_no=str(rsv_id).strip(),
+            journey_count=str(journey_count or "1").strip(),
+        )
+        client.cancel_unpaid_hold(hold, consent=MutationConsent(allow_cancel=True, dry_run=False))
+        logger.info("Korail standby withdrawn")
+        return True
 
     # ==================== Payment, observed rather than performed ====================
     #

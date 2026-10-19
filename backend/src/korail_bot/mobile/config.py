@@ -9,6 +9,12 @@ from urllib.parse import urlsplit
 # submission boundary that re-reads the conditions out of that body.
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 
+# How often a registered Korail standby (예약 대기) is looked up, and the least that may be set.
+# Each look is a login and two or three reads on the person's own Korail account; asking often is
+# what got accounts blocked as macros, so this stays slow on purpose.
+WAITLIST_CHECK_MINUTES = 10
+WAITLIST_CHECK_MIN_MINUTES = 10
+
 
 @dataclass(frozen=True)
 class MobileConfig:
@@ -25,6 +31,7 @@ class MobileConfig:
     public_url: str | None = None
     google_client_id: str | None = None
     google_client_secret: str | None = field(default=None, repr=False)
+    waitlist_check_minutes: float = WAITLIST_CHECK_MINUTES
 
     @property
     def google_enabled(self):
@@ -76,6 +83,15 @@ class MobileConfig:
                 "Google login requires MOBILE_PUBLIC_URL, MOBILE_GOOGLE_CLIENT_ID, and "
                 "MOBILE_GOOGLE_CLIENT_SECRET together"
             )
+        raw_minutes = os.environ.get("MOBILE_WAITLIST_CHECK_MINUTES", "").strip()
+        try:
+            waitlist_minutes = float(raw_minutes) if raw_minutes else WAITLIST_CHECK_MINUTES
+        except ValueError:
+            waitlist_minutes = -1.0
+        if not waitlist_minutes >= WAITLIST_CHECK_MIN_MINUTES:
+            raise ValueError(
+                f"MOBILE_WAITLIST_CHECK_MINUTES must be at least {WAITLIST_CHECK_MIN_MINUTES}"
+            )
         return cls(
             str(data / "identity.sqlite3"),
             secret,
@@ -86,6 +102,7 @@ class MobileConfig:
             external_url,
             google_client_id,
             google_client_secret,
+            waitlist_minutes,
         )
 
 

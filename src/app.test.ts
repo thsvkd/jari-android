@@ -2107,7 +2107,7 @@ it("asks before 코레일 예약 대기 is submitted, and does nothing when dism
 
   root.querySelector<HTMLButtonElement>("[data-official-waitlist='015']")!.click();
   expect(root.querySelector(".action-sheet")?.textContent).toContain("코레일 예약 대기를 신청할까요?");
-  expect(root.querySelector(".action-sheet")?.textContent).toContain("07:27→10:12 KTX · 일반실만 · 1명");
+  expect(root.querySelector(".action-sheet")?.textContent).toContain("07:27→10:12 KTX · 일반실 · 1명. 좌석 위치·방향·범위는 고를 수 없어요.");
   const card = root.querySelector("[data-official-waitlist='015']")!.closest(".train-card")!;
   expect(card.querySelector("[data-train-toggle]")!.getAttribute("aria-pressed")).toBe("false");
   expect(card.classList.contains("selected")).toBe(false);

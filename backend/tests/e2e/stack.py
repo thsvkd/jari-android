@@ -47,6 +47,8 @@ HERE = Path(__file__).resolve().parent
 BACKEND = HERE.parent.parent
 FAKE_KORAIL = HERE / "fake_korail"
 SCENARIO_KEY, LOG_KEY = "e2e:scenario", "e2e:log"
+# 가짜 코레일에 신청된 예약 대기(jari_fake_korail 참고). 테스트마다 비워요.
+WAITLIST_KEY = "e2e:waitlists"
 # 가짜 코레일이 로그인에 답하지 않은 횟수. 시나리오를 바꿀 때마다 새로 세요(jari_fake_korail 참고).
 LOGIN_UNREACHABLE_KEY = "e2e:login_unreachable"
 
@@ -61,6 +63,8 @@ FAST_SETTINGS = {
     "SCHEDULE_POLL_SECONDS": "1",
     "MAX_CONCURRENT_SEARCHES": "0",
     "LOGIN_RETRY_DELAYS_SECONDS": "0.2,0.2,0.2",
+    # 예약 대기 확인 간격(운영 10분). 가짜 코레일이 하한을 풀어요.
+    "MOBILE_WAITLIST_CHECK_MINUTES": "0.02",
 }
 
 
@@ -224,7 +228,7 @@ class Stack:
                     child.kill()
             except psutil.Error:
                 pass
-        self.redis.delete(SCENARIO_KEY, LOG_KEY, LOGIN_UNREACHABLE_KEY)
+        self.redis.delete(SCENARIO_KEY, LOG_KEY, LOGIN_UNREACHABLE_KEY, WAITLIST_KEY)
         with sqlite3.connect(self.data / "identity.sqlite3") as db:
             db.execute("DELETE FROM rate_limits")
 

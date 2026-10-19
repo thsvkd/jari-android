@@ -477,6 +477,16 @@ def _trains(result):
         notes.append(
             "이 시간대에 열차가 없어요. 아직 승차권을 팔지 않는 먼 날짜도 이렇게 보일 수 있어요."
         )
+    if any(
+        train.get("waitlistEligible") is True and not train.get("generalAvailable")
+        for train in result.get("trains", [])
+    ):
+        notes.append(
+            "waitlistEligible 이 true 인 매진 열차는 취소표 감시보다 코레일 예약 대기"
+            "(start_watch 의 waitlist)를 먼저 권해 주세요. 한 번 신청하면 코레일이 배정해서 반복 "
+            "조회가 없어요. 일반실만 되고 좌석 위치는 고를 수 없어요. "
+            "waitlistEligible 이 null 이면 코레일이 알려 주지 않은 것이에요."
+        )
     return {
         "notes": notes,
         "trains": [
@@ -686,7 +696,7 @@ def _started(result):
             **result,
             "notes": [
                 "코레일 예약 대기를 신청했어요. 감시는 시작하지 않았고 get_status 에도 나오지 않아요. "
-                "배정 결과는 사용자가 앱이나 코레일에서 확인해야 해요."
+                "앱이 몇 분 간격으로 배정 여부를 확인해 알리고, 앱 홈과 코레일에서도 볼 수 있어요."
             ],
         }
     running = result.get("running")

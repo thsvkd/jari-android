@@ -227,6 +227,7 @@ def create_app(
                 "/schedule",
                 "/reservations/cancel",
                 "/reservations/designated",
+                "/waitlist/cancel",
             }:
                 limited("rail:" + g.user["id"], 10, 60)
             with locks[abs(g.user["storage_id"]) % len(locks)]:
@@ -424,6 +425,7 @@ def create_app(
         ("schedule", "schedule_search", True),
         ("search/cancel", "cancel_search", False),
         ("reservations/cancel", "cancel_pending", False),
+        ("waitlist/cancel", "cancel_waitlist", True),
         ("access-request", "request_access", False),
         ("favourites", "save_favourite", True),
         ("logout", "logout", False),

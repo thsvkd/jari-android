@@ -325,6 +325,10 @@ small { color: var(--muted); }
 .train-actions .button { min-height: 48px; padding: 10px; font-size: 13px; }
 .train-actions .button + .button { margin-top: 0; }
 .train-actions .text-button { grid-column: 1 / -1; min-height: 48px; }
+.train-actions .waitlist-action { grid-column: 1 / -1; }
+.waitlist-card .waitlist-train { display: block; margin-top: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.waitlist-card .route-meta { margin: 6px 0 0; }
+.waitlist-card .text-button, .waitlist-card .button { margin-top: 10px; }
 .seat-action { position: relative; border: 1px solid transparent; background: var(--accent-soft); color: var(--accent-ink); }
 /* 손가락에는 hover 가 남아 눌린 뒤에도 색이 바뀐 채로 있어요. 마우스가 있을 때만 써요. */
 @media (hover: hover) { .seat-action:hover { background: color-mix(in srgb, var(--accent-soft) 76%, var(--accent)); } }

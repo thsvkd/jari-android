@@ -53,6 +53,7 @@ import type {
   SeatSelectionMode,
   SeatTarget,
   TrainOption,
+  WaitlistEntry,
 } from "./types";
 
 export type AppView =
@@ -143,6 +144,9 @@ const keptCarNos = (dialog: SeatDialogState): Set<number> => {
   const ordered = [...dialog.cars].sort((a, b) => a.carNo - b.carNo);
   return new Set(ordered.slice(dialog.trimCars, ordered.length - dialog.trimCars).map((car) => car.carNo));
 };
+
+// 열차 목록에서 코레일 예약 대기를 먼저 권할 때의 안내. 코드·라이브러리로 확인된 한계만 적어요(일반실만, 좌석 지정 없음).
+const WAITLIST_ADVICE = "한 번 신청하면 코레일이 취소표를 배정해 주고, 자리났다는 코레일을 반복 조회하지 않아요. 일반실만 되고 좌석 위치·방향·범위는 고를 수 없어요. 특실이나 좌석 조건이 꼭 필요할 때만 취소표 대기를 고르세요.";
 
 const SEAT_OPTIONS: Record<string, string> = {
   "1": "일반실 우선",
@@ -690,6 +694,7 @@ export class JariApp {
       this.state.running = status.running;
       this.state.scheduled = status.scheduled;
       this.state.pending = status.pending;
+      this.state.waitlists = status.waitlists;
       this.connection = "online";
       this.pollMisses = 0;
       if (this.view === "home" || this.view === "activity") this.render();
@@ -942,6 +947,7 @@ export class JariApp {
       connection: this.connection,
     });
     const paymentFirst = state.pending.length > 0;
+    const waitlistCards = this.renderWaitlistCards();
     // 결제할 예약이 있어도 다른 자리 찾기가 돌고 있으면 둘 다 보여요. 예약만 그리면 찾는 중인 것이 사라진 것처럼 보여요.
     const journey = state.running ?? state.scheduled?.search ?? null;
     const route = journey
@@ -955,10 +961,10 @@ export class JariApp {
     // 찾는 중인 검색은 배지·구간·조건 한 줄이면 충분해요. 설명과 마지막 조회 시각은 검색 상세의 몫이에요.
     const busy = Boolean(state.running || state.scheduled || state.pending.length);
     // 결제할 예약만 있으면 결제 카드가 곧 상태예요. 연결이 끊겼을 때만 그 사실을 따로 알려요.
-    const statusCard = paymentFirst && this.connection === "online" && !journey
+    const statusCard = (paymentFirst || waitlistCards) && this.connection === "online" && !journey
       ? ""
       : status.kind === "idle"
-      ? this.renderIdleCard()
+      ? waitlistCards ? "" : this.renderIdleCard()
       : (status.kind === "healthy" || status.kind === "running-unverified") && journey
         ? this.renderRunningCard(status.kind, journey)
         : `<section class="card search-status-card" data-search-status data-state="${status.kind}" aria-label="자리 찾기 상태 요약">
@@ -974,6 +980,7 @@ export class JariApp {
     return `<div class="home-layout"><div class="home-primary">
       ${chips.length ? `<section class="chip-shelf">${this.renderChipShelf(chips)}</section>` : ""}
       ${paymentFirst ? `${this.renderPendingCard(true)}${statusCard}` : statusCard}
+      ${waitlistCards}
       ${state.scheduled ? this.renderScheduledCard() : ""}
       ${button({ roomy: true, action: "new-journey", disabled: !state.capabilities.korail, content: `<span>${state.capabilities.korail ? this.journeyDirty ? "입력하던 여정 이어서 찾기" : "새 여정 찾기" : "예약 서버에 연결해 주세요"}</span><b>＋</b>` })}
       </div><aside class="home-secondary">
@@ -1069,10 +1076,61 @@ export class JariApp {
     const progress = total > pending.length ? ` · ${pending.length}/${total}석 확보${rest}` : "";
     return `<section class="card payment-card ${compact ? "compact-card" : ""}">
       ${badge({ element: "div", shape: "tag", tone: "warning", dot: true, className: "card-label", label: `결제가 필요한 예약 ${pending.length}건${progress}` })}
-      ${pending.map((item) => `<div class="payment-row"><div><strong>${escapeHtml(item.trainInfo)}</strong><small>${item.seatClass ? `${item.seatClass === "general" ? "일반실" : "특실"} · ` : ""}${item.seatLabels?.length ? `${escapeHtml(item.seatLabels.join(", "))} · ` : item.seatNumber !== null ? `좌석 ${escapeHtml(item.seatNumber)} · ` : ""}${item.reservationId ? `예약번호 ${escapeHtml(item.reservationId)}` : "예약번호 정보 없음"}</small></div><b>${item.expiresAt ? `${escapeHtml(formatStamp(item.expiresAt))}까지${this.renderTimeLeft(item.expiresAt)}` : "결제 기한 정보 없음"}</b></div>`).join("")}
+      ${pending.map((item) => `<div class="payment-row"><div><strong>${escapeHtml(item.trainInfo)}</strong><small>${(this.state!.waitlists ?? []).some((entry) => entry.id === item.reservationId) ? "코레일 예약 대기 배정 · " : ""}${item.seatClass ? `${item.seatClass === "general" ? "일반실" : "특실"} · ` : ""}${item.seatLabels?.length ? `${escapeHtml(item.seatLabels.join(", "))} · ` : item.seatNumber !== null ? `좌석 ${escapeHtml(item.seatNumber)} · ` : ""}${item.reservationId ? `예약번호 ${escapeHtml(item.reservationId)}` : "예약번호 정보 없음"}</small></div><b>${item.expiresAt ? `${escapeHtml(formatStamp(item.expiresAt))}까지${this.renderTimeLeft(item.expiresAt)}` : "결제 기한 정보 없음"}</b></div>`).join("")}
       ${linkButton({ label: "코레일에서 결제하기", trailing: "↗", href: this.state!.paymentUrl, attrs: { "data-korail-pay": true } })}
       ${compact ? button({ variant: "text", view: "activity", label: "예약 관리" }) : button({ variant: "ghost-danger", action: "cancel-pending", label: "예약 전체 취소" })}
     </section>`;
+  }
+
+  private waitlistMinutes(): number {
+    return Math.max(1, Math.round(this.state?.waitlistCheckMinutes ?? 10));
+  }
+
+  /**
+   * 앱에서 신청한 코레일 예약 대기. 신청은 좌석 확보가 아니라서 결제 카드와 따로 보여요.
+   * 배정돼 결제 카드로 넘어간 대기는 결제 카드가 보여 주니 여기서는 빼요.
+   */
+  private renderWaitlistCards(): string {
+    const state = this.state!;
+    const paying = new Set(state.pending.map((item) => item.reservationId));
+    const minutes = this.waitlistMinutes();
+    return (state.waitlists ?? [])
+      .filter((entry) => !(entry.state === "assigned" && paying.has(entry.id)))
+      .map((entry) => {
+        const since = relativeTime(entry.checkedAt, Date.now());
+        const view: Record<WaitlistEntry["state"], { tone: Tone; label: string; text: string }> = {
+          waiting: {
+            tone: "accent",
+            label: "코레일 예약 대기 중",
+            text: entry.checkError === "login"
+              ? "코레일 로그인이 안 돼 확인을 멈췄어요. 코레일 계정을 다시 연결해 주세요."
+              : entry.checkFailed
+                ? `마지막 확인에 실패했어요. ${minutes}분 뒤 다시 확인해요.`
+                : `${since ? `${since} 확인 · ` : ""}좌석이 배정되면 알려드려요. ${minutes}분 간격으로 확인해요.`,
+          },
+          assigned: {
+            tone: "warning",
+            label: "좌석 배정됨 · 결제 필요",
+            text: `${entry.seatLabels?.length ? `${entry.seatLabels.join(", ")} · ` : ""}${entry.expiresAt ? `${formatStamp(entry.expiresAt)}까지 결제해 주세요.` : "결제 기한은 코레일 앱에서 확인해 주세요."}`,
+          },
+          paid: { tone: "success", label: "결제 확인", text: "코레일 승차권에서 확인해 주세요." },
+          ended: { tone: "muted", label: "예약 대기 끝남", text: "코레일 목록에서 사라졌어요. 취소됐거나 기한이 지났을 수 있어요." },
+          cancelled: { tone: "muted", label: "예약 대기 취소함", text: "코레일 예약 대기를 취소했어요." },
+        };
+        const shown = view[entry.state] ?? view.ended;
+        const action = entry.state === "waiting"
+          ? button({ variant: "text-danger", label: "예약 대기 취소", attrs: { "data-waitlist-cancel": entry.id } })
+          : entry.state === "assigned"
+            ? linkButton({ label: "코레일에서 결제하기", trailing: "↗", href: state.paymentUrl, attrs: { "data-korail-pay": true } })
+            : "";
+        return `<section class="card waitlist-card" data-waitlist="${escapeHtml(entry.id)}" data-state="${escapeHtml(entry.state)}">
+          ${badge({ element: "div", shape: "tag", tone: shown.tone, dot: entry.state === "waiting" || entry.state === "assigned", className: "card-label", label: shown.label })}
+          <strong class="waitlist-train">${escapeHtml(entry.trainInfo)}</strong>
+          <p class="route-meta">${escapeHtml(`${entry.passengerCount}명 · 일반실 · ${shown.text}`)}</p>
+          ${action}
+        </section>`;
+      })
+      .join("");
   }
 
   private renderScheduledCard(): string {
@@ -1190,13 +1248,15 @@ export class JariApp {
                 ? `${button({ variant: "seat", label: "바로 예약", attrs: { "data-immediate-any": train.no } })}`
                 // An older draft may already hold special-class seats; keep their button so they stay editable.
                 : directionSelected ? "" : `${seatButton("general", false, false)}${this.cancellationTargets.some((target) => target.trainNo === train.no && target.seatClass === "special") ? seatButton("special", false, true) : ""}`;
-            const official = train.waitlistEligible && !directionSelected
-              ? `${button({ variant: "text", label: "코레일 예약 대기", attrs: { "data-official-waitlist": train.no } })}`
+            // 코레일 예약 대기가 되는 매진 열차는 대기 신청을 먼저 둬요. 한 번 신청하면 코레일이 배정해서 반복 조회가 없어요.
+            // 취소표 대기(좌석 지정·카드 선택)는 그 아래에 남겨 특실·좌석 조건이 필요할 때 고를 수 있어요.
+            const official = this.waitlistFirst(train, conditions)
+              ? button({ className: "waitlist-action", label: "코레일 예약 대기 신청", attrs: { "data-official-waitlist": train.no } })
               : "";
             const targets = this.cancellationTargets.filter((target) => target.trainNo === train.no);
             const selectedCount = targets.reduce((sum, target) => sum + target.targets.length, 0);
             const wholeTrain = targets.some((target) => !target.targets.length);
-            return `<article class="train-card ${targets.length ? "selected" : ""}" data-train-card="${escapeHtml(train.no)}"><button type="button" class="train-main" data-train-toggle="${escapeHtml(train.no)}" aria-pressed="${wholeTrain}"><span class="train-check" aria-hidden="true"></span><span class="train-main-text"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b></span></button>${badge({ shape: "tag", className: "seat-badge", tone: wholeTrain ? "solid" : anyAvailable ? "success" : "danger", label: wholeTrain ? directionSelected ? "방향 조건으로 선택" : "좌석 무관 선택" : selectedCount ? `${selectedCount}석 지정` : anyAvailable ? "좌석 있음" : "매진" })}<div class="train-actions">${anyAction}${official}</div></article>`;
+            return `<article class="train-card ${targets.length ? "selected" : ""}" data-train-card="${escapeHtml(train.no)}"><button type="button" class="train-main" data-train-toggle="${escapeHtml(train.no)}" aria-pressed="${wholeTrain}"><span class="train-check" aria-hidden="true"></span><span class="train-main-text"><small>${escapeHtml(train.name || `열차 ${train.no}`)}</small><b>${departure && arrival ? `${escapeHtml(departure)} <i>→</i> ${escapeHtml(arrival)}` : escapeHtml(train.label)}</b></span></button>${badge({ shape: "tag", className: "seat-badge", tone: wholeTrain ? "solid" : anyAvailable ? "success" : "danger", label: wholeTrain ? directionSelected ? "방향 조건으로 선택" : "좌석 무관 선택" : selectedCount ? `${selectedCount}석 지정` : anyAvailable ? "좌석 있음" : "매진" })}<div class="train-actions">${official}${anyAction}</div></article>`;
           })
           .join("")
       : emptyState({ mark: "train", title: "조회된 열차가 없어요", text: "시간이나 구간을 바꿔 다시 조회해 주세요." });
@@ -1204,10 +1264,18 @@ export class JariApp {
       <div class="context-line"><b>${escapeHtml(conditions.src_station)} → ${escapeHtml(conditions.dst_station)}</b><span>${escapeHtml(formatWindow(conditions))}</span></div>
       <p class="intro">좌석이 있으면 바로 예약할 수 있어요. 매진이면 원하는 좌석 범위를 골라 취소표 대기를 시작하세요.<br>카드를 누르면 그 열차의 어떤 자리든 기다려요.</p>
       ${this.trainListTruncated ? notice({ tone: "warning", text: "목록이 길어 일부 열차만 보여드려요. 시간대를 좁혀 다시 조회하면 나머지를 볼 수 있어요." }) : ""}
+      ${this.trainOptions.some((train) => this.waitlistFirst(train, conditions)) ? notice({ tone: "calm", className: "waitlist-advice", title: "매진 열차는 코레일 예약 대기를 먼저 권해요.", text: WAITLIST_ADVICE }) : ""}
       <div class="train-list">${list}</div>
       ${this.renderError()}
       ${this.renderAccessRequest()}
       ${button({ action: "trains-next", className: "sticky-action", label: this.cancellationTargets.length ? `${new Set(this.cancellationTargets.map((target) => target.trainNo)).size}편 선택 · 다음: 조건 확인` : "다음: 조건 확인", trailing: "→" })}`;
+  }
+
+  /** 코레일 예약 대기를 먼저 권할 열차: 대기 대상(" 9")이고 일반실이 매진이며, 일반실을 원하고 방향을 고르지 않았을 때. */
+  private waitlistFirst(train: TrainOption, conditions: Conditions): boolean {
+    if (train.waitlistEligible !== true || train.generalAvailable) return false;
+    if (conditions.seat_direction === "forward" || conditions.seat_direction === "backward") return false;
+    return this.draft.seatGradeMode !== "specific" || !conditions.seat_classes?.length || conditions.seat_classes.includes("general");
   }
 
   private renderSeatDialog(): string {
@@ -1801,6 +1869,10 @@ export class JariApp {
     const capabilities = this.state!.capabilities;
     const waitlist = conditions.waitlist;
     const seatSummary = this.describeConfirmSeats(conditions);
+    // 감시하려는 열차가 코레일 예약 대기가 되면 그쪽을 먼저 권해요. 열차를 고르지 않았으면 시간대의 열차 전체를 봐요.
+    const waitlistTrains = waitlist
+      ? 0
+      : this.trainOptions.filter((train) => (!this.selectedTrains.length || this.selectedTrains.includes(train.no)) && this.waitlistFirst(train, conditions)).length;
     return `${this.renderSubhead("마지막 확인", waitlist ? "이 열차의 예약 대기를 신청할게요" : "이 조건으로 찾아드릴게요")}
       <section class="summary-card">
         <div class="route-hero"><span>${escapeHtml(conditions.src_station)}</span><i>→</i><span>${escapeHtml(conditions.dst_station)}</span></div>
@@ -1814,6 +1886,7 @@ export class JariApp {
           ${waitlist ? "<dt>신청 방식</dt><dd>코레일 예약 대기</dd>" : ""}
         </dl>
       </section>
+      ${waitlistTrains ? notice({ tone: "warning", className: "waitlist-advice", title: `선택한 열차 중 ${waitlistTrains}편은 코레일 예약 대기가 돼요.`, text: "취소표 대기는 자리났다가 코레일을 계속 조회해요. 특실이나 좌석 조건이 꼭 필요하지 않다면 열차 목록에서 '코레일 예약 대기 신청'을 먼저 써 보세요." }) : ""}
       ${notice({ tone: "calm", title: waitlist ? "코레일 예약 대기만 신청해요." : "예약까지만 자동으로 진행해요.", text: waitlist ? "빈자리 자동 감시는 함께 돌리지 않아요. 배정 결과는 코레일 앱이나 홈페이지에서도 확인해 주세요." : "좌석이 예약되면 알려드려요. 결제는 안내된 기한 안에 코레일에서 직접 해 주세요." })}
       <label class="field favourite-name"><span>즐겨찾기 이름 <small>선택</small></span><input id="favourite-name" maxlength="40" placeholder="예: 주말에 집으로"></label>
       ${this.renderError()}
@@ -1840,10 +1913,12 @@ export class JariApp {
     const detail = radar.kind === "healthy" || radar.kind === "running-unverified"
       ? running?.attemptCount ? `<p class="center muted activity-check">${escapeHtml(checkLine)}</p>` : ""
       : notice({ tone: radar.kind === "error" || radar.kind === "stale" ? "warning" : "calm", title: radar.title, text: radar.description });
+    const waitlistCards = this.renderWaitlistCards();
     return `${this.renderPendingCard(false)}
+      ${waitlistCards}
       ${running ? `<section class="card activity-card"><div class="row-between">${badge({ dot: true, className: `status-pill status-${radar.kind}`, tone: RADAR_TONE[radar.kind] ?? "accent", label: radar.eyebrow })}<small>${sinceCheck ? "" : "확인 시각 없음"}</small></div><div class="route-hero small"><span>${escapeHtml(running.srcLocate)}</span><i>→</i><span>${escapeHtml(running.dstLocate)}</span></div>${this.renderRunningConditions(running)}${detail}${button({ variant: "ghost-danger", action: "cancel-search", label: "그만 찾기" })}</section>` : ""}
       ${state.scheduled ? this.renderScheduledCard() : ""}
-      ${!state.running && !state.scheduled && !state.pending.length ? emptyState({ mark: "train", title: "찾고 있는 자리가 없어요", text: "새 여정을 등록하고 빈자리를 찾아보세요.", action: button({ action: "new-journey", label: "새 여정 찾기" }) }) : ""}`;
+      ${!state.running && !state.scheduled && !state.pending.length && !waitlistCards ? emptyState({ mark: "train", title: "찾고 있는 자리가 없어요", text: "새 여정을 등록하고 빈자리를 찾아보세요.", action: button({ action: "new-journey", label: "새 여정 찾기" }) }) : ""}`;
   }
 
   private renderFavourites(): string {
@@ -2362,7 +2437,9 @@ ${agentHost(agent)}`;
     const label = this.trainOptions.find((train) => train.no === trainNo)?.label || `열차 ${trainNo}`;
     const confirmed = await this.confirmSheet({
       title,
-      body: `${label} · ${SEAT_OPTIONS[conditions.seat_option]} · ${conditions.passenger_count}명${conditions.seat_direction === "forward" ? " · 순방향" : conditions.seat_direction === "backward" ? " · 역방향" : ""}`,
+      body: conditions.waitlist
+        ? `${label} · 일반실 · ${conditions.passenger_count}명. 좌석 위치·방향·범위는 고를 수 없어요. 좌석이 배정되면 알려드려요(${this.waitlistMinutes()}분 간격 확인).`
+        : `${label} · ${SEAT_OPTIONS[conditions.seat_option]} · ${conditions.passenger_count}명${conditions.seat_direction === "forward" ? " · 순방향" : conditions.seat_direction === "backward" ? " · 역방향" : ""}`,
       confirmLabel,
     });
     if (!confirmed) return;
@@ -2386,6 +2463,19 @@ ${agentHost(agent)}`;
       if (!isCurrent()) return;
       this.state!.favourites = result.favourites;
       this.showToast("즐겨찾기를 삭제했어요.");
+    });
+  }
+
+  private async cancelWaitlist(id: string): Promise<void> {
+    const entry = this.state?.waitlists?.find((item) => item.id === id);
+    if (!entry) return;
+    const confirmed = await this.confirmSheet({ title: "코레일 예약 대기를 취소할까요?", body: entry.trainInfo, confirmLabel: "대기 취소", danger: true });
+    if (!confirmed) return;
+    await this.run(async (isCurrent) => {
+      const result = await this.api.cancelWaitlist(id);
+      if (!isCurrent()) return;
+      this.state!.waitlists = result.waitlists;
+      this.showToast("코레일 예약 대기를 취소했어요.");
     });
   }
 
@@ -2738,6 +2828,10 @@ ${agentHost(agent)}`;
         "바로 예약할까요?",
         "예약하기",
       );
+      return;
+    }
+    if (button.dataset.waitlistCancel) {
+      void this.cancelWaitlist(button.dataset.waitlistCancel);
       return;
     }
     if (button.dataset.officialWaitlist) {

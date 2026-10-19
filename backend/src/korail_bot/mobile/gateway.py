@@ -17,7 +17,7 @@ from korail_mobile_api.errors import (
 
 from korail_bot.config.settings import settings
 from korail_bot.handlers.conversation_handler import ConversationHandler
-from korail_bot.mobile.config import MAX_REQUEST_BYTES
+from korail_bot.mobile.config import MAX_REQUEST_BYTES, WAITLIST_CHECK_MINUTES
 from korail_bot.models import OnboardedAccount, PaymentStatus, SeatPreference, SeatTarget
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.access_service import AccessDecision, AccessLevel, AccessService
@@ -126,9 +126,16 @@ class MobileConversation(ConversationHandler):
 
 
 class MobileGateway(MiniAppGateway):
-    def __init__(self, *args, seat_map_service=None, **kwargs):
+    def __init__(
+        self,
+        *args,
+        seat_map_service=None,
+        waitlist_check_minutes=WAITLIST_CHECK_MINUTES,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.seat_maps = seat_map_service or SeatMapService()
+        self.waitlist_check_minutes = waitlist_check_minutes
         # chat_id -> (rail, expires_at, korail_id). Only touched under the
         # owner's operation lock, so a plain dict is enough.
         self._rails = {}
@@ -136,7 +143,12 @@ class MobileGateway(MiniAppGateway):
     @serialized_operation
     def register(self, chat_id, username, password):
         self._forget_rail(chat_id)
-        return super().register(chat_id, username, password)
+        result = super().register(chat_id, username, password)
+        # A standby check paused on a refused login may log in again with the new account.
+        entries = self._stored_waitlists(chat_id)
+        if any(entry.pop("checkError", None) for entry in entries):
+            self.storage.save_waitlists(chat_id, entries)
+        return result
 
     @serialized_operation
     def list_trains(self, chat_id, payload):
@@ -669,6 +681,17 @@ class MobileGateway(MiniAppGateway):
         if credentials is None:
             raise MiniAppError("코레일 계정을 다시 연결한 뒤 신청해 주세요.", 428)
 
+        train_no = selected_trains[0]
+        if any(
+            entry.get("trainNo") == train_no
+            and entry.get("depDate") == submission.dep_date
+            and entry.get("state") in ("waiting", "assigned")
+            for entry in self._stored_waitlists(chat_id)
+        ):
+            raise MiniAppError(
+                "이미 이 열차에 코레일 예약 대기를 신청했어요. 홈에서 확인해 주세요.", 409
+            )
+
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(credentials.korail_id, credentials.korail_pw):
             raise login_failure(rail, LOGIN_REFUSED, 428)
@@ -678,11 +701,23 @@ class MobileGateway(MiniAppGateway):
                 src_locate=submission.src_station,
                 dst_locate=submission.dst_station,
                 dep_time=f"{submission.dep_time}00",
-                train_no=selected_trains[0],
+                train_no=train_no,
                 passenger_count=submission.passenger_count,
             )
         except ValueError as exc:
             raise MiniAppError(str(exc), 409) from exc
+        except (KorailSoldOutError, KorailReservationRefusedError) as exc:
+            # Korail answered and would not take it (already applied, no standby left): not an outage.
+            logger.warning(
+                "Korail refused a standby for chat_id=%s (%s %s)",
+                chat_id,
+                type(exc).__name__,
+                getattr(exc, "code", None),
+            )
+            raise MiniAppError(
+                "코레일이 예약 대기 신청을 받아 주지 않았어요. 코레일 앱에서 예약 내역을 확인해 주세요.",
+                422,
+            ) from exc
         except Exception as exc:
             logger.error(
                 "Could not register Korail standby for chat_id=%s (%s)",
@@ -694,11 +729,53 @@ class MobileGateway(MiniAppGateway):
                 502,
             ) from exc
 
+        train = registered.get("train")
+        entry = {
+            "id": registered.get("reservation_id") or "",
+            "journeyCount": registered.get("journey_count") or "",
+            "trainNo": registered["train_no"],
+            "trainInfo": train_label(train) if train is not None else f"열차 {train_no}",
+            "depDate": registered.get("dep_date") or submission.dep_date,
+            "depTime": registered.get("dep_time") or "",
+            "passengerCount": submission.passenger_count,
+            "state": "waiting",
+            "createdAt": utc_now().isoformat(),
+            "checkedAt": None,
+            "checkFailed": False,
+        }
+        try:
+            if not entry["id"]:
+                raise ValueError("Korail named no reservation number for the standby")
+            self.storage.save_waitlists(chat_id, [*self._stored_waitlists(chat_id), entry])
+        except Exception as exc:
+            # A standby the app cannot follow would be assigned without anyone hearing of it.
+            logger.error(
+                "Could not record a Korail standby for chat_id=%s (%s)",
+                chat_id,
+                type(exc).__name__,
+            )
+            try:
+                rail.cancel_waitlist(entry["id"], entry["journeyCount"])
+            except Exception as cancel_error:
+                logger.critical(
+                    "Could not withdraw an unrecorded Korail standby for chat_id=%s (%s)",
+                    chat_id,
+                    type(cancel_error).__name__,
+                )
+                raise MiniAppError(
+                    "예약 대기는 신청됐지만 앱에 저장하지 못했어요. 코레일 앱에서 예약 내역을 확인해 주세요.",
+                    503,
+                ) from exc
+            raise MiniAppError(
+                "예약 대기 정보를 안전하게 저장하지 못해 신청을 취소했어요. 잠시 후 다시 신청해 주세요.",
+                503,
+            ) from exc
+
         try:
             self.telegram.send_message(
                 chat_id,
-                f"{selected_trains[0]}편 코레일 예약 대기를 신청했어요. "
-                "배정 결과는 코레일 앱이나 홈페이지에서도 확인해 주세요.",
+                f"{entry['trainInfo']} 코레일 예약 대기를 신청했어요. 좌석이 배정되면 알려드려요. "
+                f"배정 여부는 {self._check_minutes_text()} 간격으로 확인하니, 코레일 앱 알림도 함께 확인해 주세요.",
             )
             session.reset()
             self.storage.save_user_session(session)
@@ -710,6 +787,291 @@ class MobileGateway(MiniAppGateway):
                 type(exc).__name__,
             )
         return {"started": False, "waitlisted": True, "trainNo": registered["train_no"]}
+
+    # ==================== Korail standby (예약 대기) after the request ====================
+    #
+    # A standby is one request; Korail assigns a freed seat by itself. What is left for the app
+    # is to notice an assignment, which it does by reading the person's own reservation list -
+    # no oftener than waitlist_check_minutes (never under ten), so following a standby costs a
+    # handful of reads an hour, unlike a watch that searches every few seconds.
+
+    # A finished standby (paid, ended, withdrawn) stays on the home screen this long.
+    WAITLIST_FINISHED_KEPT = timedelta(hours=24)
+
+    def _stored_waitlists(self, chat_id):
+        reader = getattr(self.storage, "get_waitlists", None)
+        return reader(chat_id) if reader else []
+
+    def _check_minutes_text(self):
+        minutes = max(1, round(self.waitlist_check_minutes))
+        return f"{minutes}분"
+
+    def _waitlists(self, chat_id, now=None):
+        """The standbys to show: the ones not yet past keeping, without their private fields."""
+        now = now or utc_now()
+        return [
+            {
+                key: entry.get(key)
+                for key in (
+                    "id",
+                    "trainNo",
+                    "trainInfo",
+                    "depDate",
+                    "depTime",
+                    "passengerCount",
+                    "state",
+                    "createdAt",
+                    "checkedAt",
+                    "checkFailed",
+                    "checkError",
+                    "expiresAt",
+                    "seatLabels",
+                    "finishedAt",
+                )
+            }
+            for entry in self._stored_waitlists(chat_id)
+            if self._waitlist_kept(entry, now)
+        ]
+
+    def bootstrap(self, chat_id):
+        return {
+            **super().bootstrap(chat_id),
+            "waitlists": self._waitlists(chat_id),
+            "waitlistCheckMinutes": self.waitlist_check_minutes,
+        }
+
+    def status(self, chat_id):
+        return {**super().status(chat_id), "waitlists": self._waitlists(chat_id)}
+
+    @staticmethod
+    def _stamp(value):
+        try:
+            return as_utc(datetime.fromisoformat(value)) if isinstance(value, str) else None
+        except ValueError:
+            return None
+
+    def _waitlist_kept(self, entry, now):
+        """Whether a standby still belongs on the screen (and in storage)."""
+        departs = self._departure(entry)
+        if departs is not None and now > departs + timedelta(hours=1):
+            return False
+        state = entry.get("state")
+        if state == "waiting":
+            return True
+        if state == "assigned":
+            expires = self._stamp(entry.get("expiresAt"))
+            if expires is not None:
+                return now < expires
+            assigned = self._stamp(entry.get("finishedAt"))
+            return assigned is None or now < assigned + self.WAITLIST_FINISHED_KEPT
+        finished = self._stamp(entry.get("finishedAt"))
+        return finished is not None and now < finished + self.WAITLIST_FINISHED_KEPT
+
+    @staticmethod
+    def _departure(entry):
+        moment = f"{entry.get('depDate') or ''}{(entry.get('depTime') or '')[:4]}"
+        try:
+            return as_utc(datetime.strptime(moment, "%Y%m%d%H%M"), naive_zone=RAIL_TIMEZONE)
+        except ValueError:
+            return None
+
+    def _waitlist_due(self, entry, now, interval):
+        if entry.get("state") != "waiting" or entry.get("checkError") == "login":
+            return False
+        checked = self._stamp(entry.get("checkedAt")) or self._stamp(entry.get("createdAt"))
+        return checked is None or now - checked >= interval
+
+    def check_waitlists(self, interval=None, now=None):
+        """
+        One pass over every owner's standbys: each is asked about only when its last look is at
+        least `interval` old (waitlist_check_minutes). Returns how many were looked up.
+        """
+        interval = interval or timedelta(minutes=self.waitlist_check_minutes)
+        owners = getattr(self.storage, "waitlist_owners", None)
+        checked = 0
+        for chat_id in owners() if owners else []:
+            current = now or utc_now()
+            entries = self._stored_waitlists(chat_id)
+            if any(not self._waitlist_kept(e, current) for e in entries) or any(
+                self._waitlist_due(e, current, interval) for e in entries
+            ):
+                try:
+                    checked += self._check_waitlists(chat_id, interval, now)
+                except Exception as exc:
+                    logger.error(
+                        "Standby check failed for chat_id=%s (%s)", chat_id, type(exc).__name__
+                    )
+        return checked
+
+    @serialized_operation
+    def _check_waitlists(self, chat_id, interval, now=None):
+        now = now or utc_now()
+        entries = [e for e in self._stored_waitlists(chat_id) if self._waitlist_kept(e, now)]
+        checked = 0
+        for entry in entries:
+            if not self._waitlist_due(entry, now, interval):
+                continue
+            checked += 1
+            self._check_waitlist(chat_id, entry, now)
+        self.storage.save_waitlists(chat_id, entries)
+        return checked
+
+    def _check_waitlist(self, chat_id, entry, now):
+        """Ask Korail about one standby and act on what it says. Failures change only the stamp."""
+        entry["checkedAt"] = now.isoformat()
+        try:
+            rail = self._logged_in_rail(chat_id)
+            answer = self._again_if_expired(
+                chat_id,
+                rail,
+                lambda: rail.waitlist_state(
+                    entry["id"],
+                    train_no=entry.get("trainNo") or "",
+                    dep_date=entry.get("depDate") or "",
+                    dep_time=entry.get("depTime") or "",
+                ),
+            )
+        except MiniAppError as exc:
+            entry["checkFailed"] = True
+            if exc.status == 428:
+                # A refused login asked again every pass is how an account gets locked. Waits
+                # for the account to be connected again (register).
+                entry["checkError"] = "login"
+            self._forget_rail(chat_id)
+            logger.warning(
+                "Standby check for chat_id=%s could not log in (%s)", chat_id, exc.status
+            )
+            return
+        except Exception as exc:
+            entry["checkFailed"] = True
+            self._forget_rail(chat_id)
+            logger.warning("Standby check for chat_id=%s failed (%s)", chat_id, type(exc).__name__)
+            return
+        entry["checkFailed"] = False
+        entry.pop("checkError", None)
+        state = answer.get("state")
+        if state == "waiting":
+            return
+        entry["state"] = state
+        entry["finishedAt"] = now.isoformat()
+        if state == "assigned":
+            self._waitlist_assigned(chat_id, entry, answer)
+        elif state == "paid":
+            self._publish_waitlist(
+                chat_id,
+                entry,
+                f"{entry['trainInfo']} 코레일 예약 대기로 배정된 좌석의 결제를 확인했어요.",
+                kind="payment",
+            )
+        else:
+            self._publish_waitlist(
+                chat_id,
+                entry,
+                f"{entry['trainInfo']} 코레일 예약 대기가 더 이상 보이지 않아요. "
+                "취소됐거나 기한이 지났을 수 있으니 코레일 앱에서 확인해 주세요.",
+            )
+
+    def _waitlist_assigned(self, chat_id, entry, answer):
+        """A seat was assigned: the same payment record and notice a seat this app booked gets."""
+        deadline = answer.get("deadline")
+        expires_at = None
+        if deadline:
+            try:
+                local = datetime.strptime(f"{deadline[0]}{deadline[1][:6]}", "%Y%m%d%H%M%S")
+                expires_at = as_utc(local, naive_zone=RAIL_TIMEZONE)
+            except (TypeError, ValueError):
+                expires_at = None
+        entry["expiresAt"] = expires_at.isoformat() if expires_at else None
+        entry["seatLabels"] = list(answer.get("seats") or [])
+        if not self.pending_payments.pending(chat_id):
+            # One payment record per owner: with another seat already awaiting payment, the
+            # standby keeps its own card instead of taking that one's place.
+            try:
+                self.storage.save_payment_status(
+                    PaymentStatus(
+                        chat_id=chat_id,
+                        completed=False,
+                        reminder_active=True,
+                        reservation_id=entry["id"],
+                        train_info=entry["trainInfo"],
+                        expires_at=expires_at,
+                        train_no=entry.get("trainNo") or "",
+                        dep_date=entry.get("depDate") or "",
+                        dep_time=entry.get("depTime") or "",
+                        seat_labels=entry["seatLabels"],
+                        seat_class="general",
+                    )
+                )
+                entry["handedOver"] = True
+            except Exception as exc:
+                logger.error(
+                    "Could not record the assigned standby for chat_id=%s (%s)",
+                    chat_id,
+                    type(exc).__name__,
+                )
+        seats = f" {', '.join(entry['seatLabels'])}" if entry["seatLabels"] else ""
+        self._publish_waitlist(
+            chat_id,
+            entry,
+            f"{entry['trainInfo']}{seats} 코레일 예약 대기에 좌석이 배정됐어요. "
+            "결제 기한 안에 코레일에서 결제해 주세요.",
+            kind="payment",
+        )
+
+    def _publish_waitlist(self, chat_id, entry, text, *, kind="reservation"):
+        try:
+            self.telegram.publish(
+                chat_id,
+                text,
+                kind=kind,
+                dedupe=f"waitlist:{chat_id}:{entry['id']}:{entry['state']}",
+            )
+        except Exception as exc:
+            logger.error(
+                "Could not publish a standby notice for chat_id=%s (%s)",
+                chat_id,
+                type(exc).__name__,
+            )
+
+    @serialized_operation
+    def cancel_waitlist(self, chat_id, payload):
+        """
+        Withdraw one standby this owner applied for. The reservation number comes from the
+        owner's own records; the request only says which of them.
+        """
+        wanted = payload.get("id") if isinstance(payload, dict) else None
+        entries = self._stored_waitlists(chat_id)
+        entry = next(
+            (
+                e
+                for e in entries
+                if isinstance(wanted, str) and e.get("id") == wanted and e.get("state") == "waiting"
+            ),
+            None,
+        )
+        if entry is None:
+            raise MiniAppError("취소할 예약 대기를 찾지 못했어요. 홈을 새로 불러와 주세요.", 404)
+        rail = self._logged_in_rail(chat_id)
+        try:
+            self._again_if_expired(
+                chat_id, rail, lambda: rail.cancel_waitlist(entry["id"], entry.get("journeyCount"))
+            )
+        except MiniAppError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Could not withdraw a Korail standby for chat_id=%s (%s)",
+                chat_id,
+                type(exc).__name__,
+            )
+            raise MiniAppError(
+                "예약 대기를 취소하지 못했어요. 코레일 앱에서 예약 내역을 확인해 주세요.", 502
+            ) from exc
+        now = utc_now()
+        entry["state"] = "cancelled"
+        entry["finishedAt"] = now.isoformat()
+        self.storage.save_waitlists(chat_id, entries)
+        return {"cancelled": True, "waitlists": self._waitlists(chat_id, now)}
 
     @serialized_operation
     def schedule_search(self, chat_id, payload):

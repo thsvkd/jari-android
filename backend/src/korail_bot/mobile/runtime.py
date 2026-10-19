@@ -94,6 +94,37 @@ def _answer_by(deadline, call, *args, name, unless=None):
     return answer["value"]
 
 
+class WaitlistWatch:
+    """
+    Looks up registered Korail standbys on a daemon thread of its own: a slow or hanging Korail
+    read must not hold up notifications. The gateway decides which are due (each at most once per
+    waitlist_check_minutes); this only wakes often enough to notice.
+    """
+
+    WAKE_SECONDS = 60
+
+    def __init__(self, gateway):
+        self.gateway = gateway
+        self._stop_event = threading.Event()
+        self._thread = None
+
+    def start(self):
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self.run, daemon=True, name="waitlist-watch")
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+
+    def run(self):
+        interval = self.gateway.waitlist_check_minutes * 60
+        while not self._stop_event.wait(min(self.WAKE_SECONDS, interval)):
+            try:
+                self.gateway.check_waitlists()
+            except Exception as exc:
+                logger.error("Standby check pass failed (%s)", type(exc).__name__)
+
+
 class MobileRuntime:
     # How long start() waits out a lease left behind by a runtime that is gone.
     # A live owner keeps renewing, so it outlasts this and is still refused.
@@ -131,6 +162,7 @@ class MobileRuntime:
         self.thread = None
         self.lease_thread = None
         self.services = []
+        self.waitlist_watch = None
         self.owner = secrets.token_hex(24)
         self.lease_until = 0.0
         self.lease_lost = False
@@ -155,12 +187,14 @@ class MobileRuntime:
                 conversation_handler=conversation,
                 scheduled_search_service=scheduler,
                 seat_map_service=self.seat_maps,
+                waitlist_check_minutes=config.waitlist_check_minutes,
             )
             self.services = [
                 scheduler,
                 SearchWatchdogService(self.reservation),
                 PaymentWatchdogService(self.storage, self.notifications),
             ]
+            self.waitlist_watch = WaitlistWatch(self.gateway)
         else:
             self.gateway = UnavailableGateway()
         self.app = create_app(
@@ -202,7 +236,11 @@ class MobileRuntime:
                 target=self._keep_renewing, daemon=True, name="mobile-lease"
             )
             self.lease_thread.start()
-            steps = [self.reservation.reconcile_after_restart, *(s.start for s in self.services)]
+            steps = [
+                self.reservation.reconcile_after_restart,
+                *(s.start for s in self.services),
+                self.waitlist_watch.start,
+            ]
         self.thread = threading.Thread(target=self._run, daemon=True, name="mobile-notifications")
         steps.append(self.thread.start)
         # The lease thread may find the lease lost while these run. Each runs
@@ -397,6 +435,11 @@ class MobileRuntime:
             # Each step is tried whatever became of the ones before: searches
             # left running, or a lease left held, outlast this process.
             steps = [service.stop for service in self.services]
+            # Told to stop but not waited for: a pass only reads Korail and records what it read,
+            # and one cut short is simply done again by the next run. Waiting would add a join
+            # to a teardown already sized to docker's stop_grace_period.
+            if self.waitlist_watch:
+                steps.append(self.waitlist_watch.stop)
             if self.reservation:
                 steps.append(self.reservation.shutdown)
             for step in steps:
