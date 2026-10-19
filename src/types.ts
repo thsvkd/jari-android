@@ -341,7 +341,8 @@ export interface MobileApi {
   setUserApproval(id: string, status: "approved" | "rejected"): Promise<{ user: AppUser }>;
   logoutApp(): Promise<{ ok: boolean }>;
   /** 회원 탈퇴. 성공하면 이 폰의 로그인도 지워요. */
-  deleteAccount(password: string): Promise<{ deleted: boolean }>;
+  /** acknowledgeWaitlists: 남은 코레일 예약 대기는 코레일 앱에서 직접 관리하겠다는 동의. 없으면 대기가 남은 계정은 409(waitlists_active). */
+  deleteAccount(password: string, acknowledgeWaitlists?: boolean): Promise<{ deleted: boolean }>;
   bootstrap(): Promise<BootstrapState>;
   railwayRegister(input: { username: string; password: string }): Promise<{ registered: boolean }>;
   railwayLogout(): Promise<{ registered: boolean }>;

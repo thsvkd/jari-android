@@ -93,15 +93,37 @@ test.describe("코레일 예약 대기", () => {
       body: JSON.stringify({ username: "0000000001", password: "korail-e2e" }),
     });
     expect(linked.ok).toBe(true);
-    await nextPoll(page);
 
+    // 다음 확인이 새 계정의 예약 목록을 한 번 읽어 그 대기가 없다는 것을 봐요.
     const card = page.locator("[data-waitlist]");
+    for (let attempt = 0; attempt < 15 && (await card.getAttribute("data-state")) !== "other-account"; attempt++) {
+      await page.waitForTimeout(1_000);
+      await nextPoll(page);
+    }
     await expect(card).toHaveAttribute("data-state", "other-account");
     await expect(card).toContainText("다른 코레일 계정으로 신청한 대기예요");
     await expect(card.locator("[data-waitlist-cancel]")).toHaveCount(0);
     await expectCleanLayout(page, "다른 코레일 계정의 예약 대기 카드");
     const calls = await control.korailLog();
     expect(calls.filter((call) => call.event === "waitlist_cancel")).toHaveLength(0);
+  });
+
+  test("예약 대기가 남은 채 탈퇴하면 코레일 앱에서 직접 관리하겠다는 동의를 받아요 @layout", async ({ signedIn: page, user, control }) => {
+    await applyForWaitlist(page);
+    await page.locator(".bottom-nav [data-view='settings']").click();
+    await page.locator("[data-action='delete-account']").click();
+    await page.locator("#sheet-password").fill(user.password);
+    await page.locator("[data-action='sheet-confirm']").click();
+
+    const sheet = page.locator(".action-sheet");
+    await expect(sheet).toContainText("코레일 예약 대기가 1건 남아 있어요");
+    await expect(sheet).toContainText("코레일 앱에서 직접 확인하고 관리");
+    await expectCleanLayout(page, "탈퇴 전 예약 대기 동의");
+    await page.locator("[data-action='sheet-confirm']").click();
+
+    await expect(page.locator(".auth-shell")).toBeVisible();
+    // 동의했으니 앱은 대기를 지우기만 하고, 코레일에 취소를 보내지 않아요.
+    expect((await control.korailLog()).some((call) => call.event === "waitlist_cancel")).toBe(false);
   });
 
   test("신청한 예약 대기를 취소하면 코레일에 취소를 보내고 취소함으로 보여요 @layout", async ({ signedIn: page, control }) => {

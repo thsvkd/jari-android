@@ -311,8 +311,10 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
         body: {}, authenticated: false, revokedToken: token,
       });
     },
-    deleteAccount: async (password) => {
-      const result = await request<{ deleted: boolean }>("/account/delete", { body: { password } });
+    deleteAccount: async (password, acknowledgeWaitlists = false) => {
+      const result = await request<{ deleted: boolean }>("/account/delete", {
+        body: acknowledgeWaitlists ? { password, acknowledgeWaitlists } : { password },
+      });
       // The account is gone on the server, so is its session: drop the token that now names nothing.
       await options.tokenStorage.clear();
       return result;

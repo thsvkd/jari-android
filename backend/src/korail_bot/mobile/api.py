@@ -38,7 +38,7 @@ PUBLIC_PAGES = {"/": homepage, "/privacy": privacy_page, "/delete-account": dele
 OAUTH_PREFIXES = ("/oauth/", "/.well-known/")
 
 
-def erase_account(identity, gateway, notifications, user):
+def erase_account(identity, gateway, notifications, user, *, acknowledge_waitlists=False):
     """
     Delete one app account and everything kept for it, in the order that lets
     a failure be retried: the railway side first (the search stopped and its
@@ -47,7 +47,10 @@ def erase_account(identity, gateway, notifications, user):
     """
     if user["role"] == "admin" and identity.admin_count() <= 1:
         raise AuthError(LAST_ADMIN_MESSAGE, 409)
-    gateway.delete_account(user["storage_id"])
+    if acknowledge_waitlists:
+        gateway.delete_account(user["storage_id"], acknowledge_waitlists=True)
+    else:
+        gateway.delete_account(user["storage_id"])
     if notifications:
         notifications.forget(user["storage_id"])
     identity.delete_user(
@@ -103,7 +106,7 @@ def create_app(
         if status in (502, 504):
             status = 503
         payload = {"error": str(exc)}
-        if isinstance(exc, AuthError) and exc.code:
+        if getattr(exc, "code", None):
             payload["code"] = exc.code
         return jsonify(payload), status
 
@@ -312,7 +315,13 @@ def create_app(
         if not identity.check_password(g.user["id"], g.payload.get("password")):
             raise AuthError("앱 비밀번호가 맞지 않아요.", 403)
         if g.user["status"] == "approved":
-            erase_account(identity, gateway, notifications, g.user)
+            erase_account(
+                identity,
+                gateway,
+                notifications,
+                g.user,
+                acknowledge_waitlists=g.payload.get("acknowledgeWaitlists") is True,
+            )
         else:
             identity.delete_user(
                 g.user["id"],

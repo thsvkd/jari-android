@@ -6,7 +6,7 @@ being handed to the payment watch, and withdrawable only from the account it was
 
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import DEFAULT, MagicMock
 
 import fakeredis
 import pytest
@@ -23,9 +23,9 @@ from korail_mobile_api.read_parsers import (
 
 from korail_bot.mobile import config as mobile_config
 from korail_bot.mobile.config import MobileConfig
-from korail_bot.mobile.gateway import WAITLIST_LIMIT
+from korail_bot.mobile.gateway import WAITLIST_LIMIT, WaitlistsActive
 from korail_bot.mobile.runtime import MobileRuntime
-from korail_bot.models import OnboardedAccount
+from korail_bot.mobile.storage import MobileStorage
 from korail_bot.services.korail_service import KorailService
 from korail_bot.utils.timezone import RAIL_TIMEZONE, utc_now
 
@@ -62,11 +62,38 @@ def app(tmp_path, monkeypatch):
     rail = MagicMock()
     rail.login.return_value = True
     rail.login_unavailable = False
-    rail.request_waitlist.side_effect = lambda **kwargs: registered(kwargs["train_no"])
+    # Korail's member number for each login id: one member may log in by phone or by number.
+    members = {}
+    current = {"member": None}
+
+    def login(username, password):
+        digits = "".join(ch for ch in username if ch.isdigit())
+        current["member"] = members.get(digits, f"M{digits}")
+        return DEFAULT
+
+    rail.login.side_effect = login
+    rail.member_number.side_effect = lambda: current["member"]
+    # Which member's reservation list each standby is in (Korail keeps one list per account).
+    owned = {}
+
+    def request(**kwargs):
+        answer = registered(kwargs["train_no"])
+        owned[answer["reservation_id"]] = current["member"]
+        return answer
+
+    rail.request_waitlist.side_effect = request
     states = {}
-    rail.waitlist_states.side_effect = lambda standbys: {
-        standby["id"]: dict(states.get(standby["id"], {"state": "waiting"})) for standby in standbys
-    }
+
+    def answers(standbys):
+        reply = {}
+        for standby in standbys:
+            if standby.get("listed_only") and owned.get(standby["id"]) != current["member"]:
+                reply[standby["id"]] = {"state": "unlisted"}
+            else:
+                reply[standby["id"]] = dict(states.get(standby["id"], {"state": "waiting"}))
+        return reply
+
+    rail.waitlist_states.side_effect = answers
     monkeypatch.setattr(runtime.gateway.conversation, "_rail_service", lambda owner: rail)
     user = runtime.identity.register("alice", "a long secure passphrase")
     runtime.identity.set_approval(user["user"]["id"], "approved")
@@ -84,6 +111,8 @@ def app(tmp_path, monkeypatch):
         gateway=runtime.gateway,
         rail=rail,
         states=states,
+        members=members,
+        owned=owned,
         owner=owner,
         http=http,
         headers=headers,
@@ -150,9 +179,8 @@ def test_a_standby_is_one_request_and_is_shown_as_waiting(app):
     # The journey count and the account tag are for withdrawing and matching, not for the app.
     assert "journeyCount" not in entry and "account" not in entry
     stored = app.storage.get_waitlists(app.owner)[0]
-    linked = app.storage.get_onboarded_account(app.owner).korail_id
-    assert stored["account"] == app.storage.account_tag(linked)
-    assert linked not in str(stored) and "12345678" not in str(stored)
+    assert stored["account"] == app.storage.account_tag("member:M01012345678")
+    assert "M01012345678" not in str(stored) and "12345678" not in str(stored)
     # Applying is not a seat: nothing waits for payment.
     assert status(app)["pending"] == []
     assert app.gateway.bootstrap(app.owner)["waitlistCheckMinutes"] == 10
@@ -416,26 +444,92 @@ def test_a_pass_stops_when_the_runtime_is_stopping(app):
     assert looks(app) == 0
 
 
+def test_a_pass_that_learns_of_the_stop_after_reading_does_not_write(app):
+    apply(app)
+    asked = iter([False, False, True])
+    app.gateway.waitlist_should_stop = lambda: next(asked, True)
+
+    app.gateway.check_waitlists(now=utc_now() + LATER)
+
+    assert looks(app) == 1
+    assert app.storage.get_waitlists(app.owner)[0]["checkedAt"] is None
+
+
 # ---------------------------------------------------------------- accounts
 
 
-def test_a_standby_of_another_korail_account_is_neither_looked_up_nor_withdrawn(app):
+def test_a_standby_of_another_korail_account_is_seen_missing_once_then_left_alone(app):
     apply(app)
     app.http.post(
         "/api/mobile/register",
         headers=app.headers,
         json={"username": "01099998888", "password": "other"},
     )
+    later = utc_now() + LATER
 
-    app.gateway.check_waitlists(now=utc_now() + LATER)
+    # Once, this account's own list is read: the standby is not in it, so it is another's.
+    app.gateway.check_waitlists(now=later)
+    app.gateway.check_waitlists(now=later + timedelta(minutes=11))
+    app.gateway.check_waitlists(now=later + timedelta(minutes=22))
 
+    assert looks(app) == 1
+    assert app.rail.waitlist_states.call_args.args[0][0]["listed_only"] is True
     (entry,) = status(app)["waitlists"]
     assert entry["otherAccount"] is True
-    assert looks(app) == 0
+    assert entry["state"] == "waiting"
     refused = cancel(app, "PNR015")
     assert refused.status_code == 409
     assert "다른 코레일 계정" in refused.json["error"]
     app.rail.cancel_waitlist.assert_not_called()
+
+
+def test_the_same_member_logging_in_by_another_id_keeps_its_standbys(app):
+    apply(app)
+    app.members["1234567890"] = "M01012345678"
+    app.http.post(
+        "/api/mobile/register",
+        headers=app.headers,
+        json={"username": "1234567890", "password": "rail password"},
+    )
+
+    app.gateway.check_waitlists(now=utc_now() + LATER)
+
+    (entry,) = status(app)["waitlists"]
+    assert entry["otherAccount"] is False
+    assert entry["checkedAt"] is not None
+    assert app.rail.waitlist_states.call_args.args[0][0]["listed_only"] is False
+    assert cancel(app, "PNR015").status_code == 200
+
+
+def test_a_stale_account_tag_is_mended_by_finding_the_standby_in_this_accounts_list(app):
+    apply(app)
+    entries = app.storage.get_waitlists(app.owner)
+    entries[0]["account"] = "a-tag-made-with-an-old-key"
+    app.storage.save_waitlists(app.owner, entries)
+
+    app.gateway.check_waitlists(now=utc_now() + LATER)
+
+    stored = app.storage.get_waitlists(app.owner)[0]
+    assert stored["account"] == app.storage.account_tag("member:M01012345678")
+    assert status(app)["waitlists"][0]["otherAccount"] is False
+
+
+def test_the_account_tag_does_not_follow_the_server_secret(app):
+    other = MobileStorage(secret="b" * 40, client=app.storage.redis.client)
+
+    assert other.account_tag("member:M1") == app.storage.account_tag("member:M1")
+
+
+def test_another_accounts_standbys_do_not_count_against_the_limit(app):
+    for number in range(WAITLIST_LIMIT):
+        apply(app, f"0{number}1")
+    app.http.post(
+        "/api/mobile/register",
+        headers=app.headers,
+        json={"username": "01099998888", "password": "other"},
+    )
+
+    assert apply(app, "099").status_code == 200
 
 
 def test_with_no_korail_account_linked_a_standby_says_so_and_korail_is_not_asked(app):
@@ -449,25 +543,56 @@ def test_with_no_korail_account_linked_a_standby_says_so_and_korail_is_not_asked
     assert looks(app) == 0
 
 
-def test_an_account_with_a_live_standby_cannot_be_deleted(app):
+def delete(app, **extra):
+    return app.http.post(
+        "/api/mobile/account/delete",
+        headers=app.headers,
+        json={"password": "a long secure passphrase", **extra},
+    )
+
+
+def test_an_account_with_a_live_standby_is_deleted_only_once_it_is_looked_after(app):
     apply(app)
 
-    with pytest.raises(Exception, match="예약 대기를 취소한 뒤 탈퇴"):
-        app.gateway.delete_account(app.owner)
+    refused = delete(app)
 
+    assert refused.status_code == 409
+    assert refused.json["code"] == "waitlists_active"
+    assert "코레일 앱에서 직접 관리" in refused.json["error"]
     assert app.storage.get_waitlists(app.owner)
-    cancel(app, "PNR015")
-    assert app.gateway.delete_account(app.owner) == {"deleted": True}
+    assert delete(app, acknowledgeWaitlists=True).status_code == 200
     assert app.storage.get_waitlists(app.owner) == []
 
 
-def test_an_account_whose_standby_belongs_to_another_korail_account_can_still_be_deleted(app):
+def test_logging_out_of_korail_does_not_let_a_standby_be_erased_unasked(app):
     apply(app)
-    app.storage.save_onboarded_account(
-        OnboardedAccount(chat_id=app.owner, korail_id="01099998888", korail_pw="x")
-    )
+    app.http.post("/api/mobile/logout", headers=app.headers, json={})
+
+    with pytest.raises(WaitlistsActive):
+        app.gateway.delete_account(app.owner)
+
+    assert app.storage.get_waitlists(app.owner)
+    assert app.gateway.delete_account(app.owner, acknowledge_waitlists=True) == {"deleted": True}
+
+
+def test_a_withdrawn_standby_does_not_hold_the_account_back(app):
+    apply(app)
+    cancel(app, "PNR015")
 
     assert app.gateway.delete_account(app.owner) == {"deleted": True}
+
+
+def test_nothing_is_kept_for_an_owner_whose_standbys_are_gone(app):
+    apply(app)
+    app.gateway.check_waitlists(now=utc_now() + LATER)
+    assert app.owner in app.gateway._waitlist_rails
+    app.gateway.delete_account(app.owner, acknowledge_waitlists=True)
+
+    app.gateway.check_waitlists(now=utc_now() + LATER * 3)
+
+    assert app.owner not in app.gateway._waitlist_rails
+    assert app.owner not in app.gateway._waitlist_attempts
+    app.rail.close.assert_called()
 
 
 # ---------------------------------------------------------------- withdrawing
@@ -686,15 +811,38 @@ def test_an_empty_reservation_list_is_an_answer():
 
 
 @pytest.mark.parametrize(
-    ("sold", "expected"),
-    [(TODAY, "paid"), ("20200101", "ended"), (None, "ticketed")],
+    ("sold", "applied", "expected"),
+    [
+        (TODAY, "20200101", "paid"),
+        # Same day: the list has no time of sale, so a ticket bought earlier cannot be ruled out.
+        (TODAY, TODAY, "ticketed"),
+        ("20200101", TODAY, "ended"),
+        (None, TODAY, "ticketed"),
+    ],
 )
-def test_a_standby_gone_from_the_list_is_paid_only_by_a_ticket_sold_after_applying(sold, expected):
+def test_a_standby_gone_from_the_list_is_paid_only_by_a_ticket_sold_after_the_day_applied(
+    sold, applied, expected
+):
     service = korail()
     service._modern_client.get_reservation_history.return_value = history(history_row("OTHER"))
     service._korail_instance.tickets.return_value = [ticket(sold)]
 
-    assert state(service) == {"PNR015": {"state": expected}}
+    assert state(service, {**STANDBY, "applied_on": applied}) == {"PNR015": {"state": expected}}
+
+
+def test_a_standby_this_account_may_not_own_is_only_looked_for_in_its_list():
+    service = korail()
+    service._modern_client.get_reservation_history.return_value = history(history_row("OTHER"))
+
+    assert state(service, {**STANDBY, "listed_only": True}) == {"PNR015": {"state": "unlisted"}}
+    service._korail_instance.tickets.assert_not_called()
+
+
+def test_the_member_number_comes_from_the_login_session():
+    service = korail()
+    service._modern_client.session.current.member_card_no = "1234567890"
+
+    assert service.member_number() == "1234567890"
 
 
 def test_a_list_that_could_not_be_read_is_a_failure_not_an_ending():

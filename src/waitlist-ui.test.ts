@@ -201,3 +201,44 @@ it("takes the standbys from each status poll", async () => {
 
   await vi.waitFor(() => expect(root.querySelector("[data-waitlist='W-waiting']")!.textContent).toContain("예약 대기 끝남"));
 });
+
+it("asks the person to look after standbys in the Korail app before deleting the account", async () => {
+  const state = await withWaitlists([entry("waiting"), entry("waiting", { id: "W-other", otherAccount: true })]);
+  const deleteAccount = vi.fn(async () => ({ deleted: true }));
+  const { app, root } = await mount({ bootstrap: async () => state, deleteAccount });
+  app.navigate("settings");
+
+  const passwordThen = async () => {
+    root.querySelector<HTMLButtonElement>("[data-action='delete-account']")!.click();
+    root.querySelector<HTMLInputElement>("#sheet-password")!.value = "a long secure passphrase";
+    root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".action-sheet")?.textContent).toContain("코레일 예약 대기가 2건 남아 있어요"));
+  };
+  await passwordThen();
+  expect(root.querySelector(".action-sheet")!.textContent).toContain("코레일 앱에서 직접 확인하고 관리");
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-cancel']")!.click();
+  expect(deleteAccount).not.toHaveBeenCalled();
+
+  await passwordThen();
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+
+  await vi.waitFor(() => expect(deleteAccount).toHaveBeenCalledWith("a long secure passphrase", true));
+});
+
+it("asks for the same promise when the server knows of standbys this phone did not", async () => {
+  const state = await withWaitlists([]);
+  const deleteAccount = vi.fn()
+    .mockRejectedValueOnce(new ApiError("코레일 예약 대기가 1건 남아 있어요.", 409, "server", "waitlists_active"))
+    .mockResolvedValueOnce({ deleted: true });
+  const { app, root } = await mount({ bootstrap: async () => state, deleteAccount });
+  app.navigate("settings");
+
+  root.querySelector<HTMLButtonElement>("[data-action='delete-account']")!.click();
+  root.querySelector<HTMLInputElement>("#sheet-password")!.value = "a long secure passphrase";
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+  await vi.waitFor(() => expect(root.querySelector(".action-sheet")?.textContent).toContain("코레일 예약 대기가 남아 있어요"));
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+
+  await vi.waitFor(() => expect(deleteAccount).toHaveBeenLastCalledWith("a long secure passphrase", true));
+  expect(deleteAccount).toHaveBeenCalledTimes(2);
+});

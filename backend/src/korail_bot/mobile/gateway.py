@@ -85,6 +85,12 @@ class _WaitlistLoginRefused(Exception):
     """Korail refused the linked account's login during a standby look."""
 
 
+class WaitlistsActive(MiniAppError):
+    """Deleting an account that still has standbys, without saying they are looked after."""
+
+    code = "waitlists_active"
+
+
 LOGIN_REFUSED = (
     "코레일에 로그인하지 못했어요. 잠시 후 다시 시도하고, 계속되면 계정을 다시 연결해 주세요."
 )
@@ -724,16 +730,17 @@ class MobileGateway(MiniAppGateway):
             raise MiniAppError(
                 "이미 이 열차에 코레일 예약 대기를 신청했어요. 홈에서 확인해 주세요.", 409
             )
-        if len(active) >= WAITLIST_LIMIT:
+        rail = self.conversation._rail_service(chat_id)
+        if not rail.login(credentials.korail_id, credentials.korail_pw):
+            raise login_failure(rail, LOGIN_REFUSED, 428)
+        member = self._member_tag(chat_id, credentials.korail_id, rail)
+        # Only the ones this account can withdraw count: another account's are out of its reach.
+        if sum(self._same_account(entry, member) for entry in active) >= WAITLIST_LIMIT:
             raise MiniAppError(
                 f"코레일 예약 대기는 한 번에 {WAITLIST_LIMIT}건까지 신청할 수 있어요. "
                 "홈에서 필요 없는 대기를 취소한 뒤 신청해 주세요.",
                 409,
             )
-
-        rail = self.conversation._rail_service(chat_id)
-        if not rail.login(credentials.korail_id, credentials.korail_pw):
-            raise login_failure(rail, LOGIN_REFUSED, 428)
         try:
             registered = rail.request_waitlist(
                 dep_date=submission.dep_date,
@@ -780,8 +787,9 @@ class MobileGateway(MiniAppGateway):
         entry = {
             "id": reservation_id,
             "journeyCount": registered.get("journey_count") or "",
-            # The linked account, the one later looks and withdrawals compare against.
-            "account": self._linked_account_tag(chat_id),
+            # The Korail member this was applied with, the one later looks and withdrawals compare
+            # against (a keyed hash, not the number).
+            "account": member,
             "trainNo": registered["train_no"],
             "trainInfo": train_label(train) if train is not None else f"열차 {train_no}",
             "depDate": registered.get("dep_date") or submission.dep_date,
@@ -859,13 +867,36 @@ class MobileGateway(MiniAppGateway):
         reader = getattr(self.storage, "get_waitlists", None)
         return reader(chat_id) if reader else []
 
-    def _account_tag(self, korail_id):
+    def _account_tag(self, value):
         tag = getattr(self.storage, "account_tag", None)
-        return tag(korail_id) if tag and korail_id else None
+        return tag(value) if tag and value else None
 
-    def _linked_account_tag(self, chat_id):
-        account = self.storage.get_onboarded_account(chat_id)
-        return self._account_tag(account.korail_id) if account else None
+    def _member_tag(self, chat_id, korail_id, rail):
+        """
+        The tag of the Korail member a logged-in rail belongs to, remembered against the login
+        it was seen with so the screen can tell another account's standby without a login. The
+        login id alone cannot: one member logs in by phone, membership number or e-mail.
+        """
+        reader = getattr(rail, "member_number", None)
+        number = reader() if callable(reader) else None
+        if not isinstance(number, str) or not number.strip():
+            return None
+        tag = self._account_tag(f"member:{number.strip()}")
+        saver = getattr(self.storage, "save_waitlist_link", None)
+        if saver and tag:
+            try:
+                saver(chat_id, {"login": self._account_tag(f"login:{korail_id}"), "member": tag})
+            except Exception as exc:
+                logger.warning("Could not remember a standby account (%s)", type(exc).__name__)
+        return tag
+
+    def _known_member_tag(self, chat_id, account):
+        """The linked account's member tag if it was seen for this very login, else None."""
+        reader = getattr(self.storage, "get_waitlist_link", None)
+        link = reader(chat_id) if reader and account else None
+        if link and link.get("login") == self._account_tag(f"login:{account.korail_id}"):
+            return link.get("member")
+        return None
 
     def _check_minutes_text(self):
         return f"{max(1, round(self.waitlist_check_minutes))}분"
@@ -878,7 +909,7 @@ class MobileGateway(MiniAppGateway):
         """
         now = now or utc_now()
         account = self.storage.get_onboarded_account(chat_id)
-        tag = self._account_tag(account.korail_id) if account else None
+        tag = self._known_member_tag(chat_id, account)
         shown = []
         for entry in self._stored_waitlists(chat_id) if entries is None else entries:
             if not self._waitlist_kept(entry, now):
@@ -933,13 +964,18 @@ class MobileGateway(MiniAppGateway):
             return None
 
     def _checkable(self, entries, tag):
+        """
+        Standbys a look may ask about. Another account's (by the last known member tag) are
+        included until this account's list has been seen without them once: a tag that went
+        stale is mended by finding the reservation in this account's list.
+        """
         return [
             entry
             for entry in entries
             if entry.get("state") in WAITLIST_ACTIVE
             and entry.get("checkError") != "login"
-            and self._same_account(entry, tag)
             and entry.get("id")
+            and not (tag and entry.get("account") and entry.get("mismatchSeen") == tag)
         ]
 
     def _owner_due(self, chat_id, checkable, now, interval):
@@ -960,9 +996,10 @@ class MobileGateway(MiniAppGateway):
         `interval` (waitlist_check_minutes). Returns how many standbys were looked up.
         """
         interval = interval or timedelta(minutes=self.waitlist_check_minutes)
-        owners = getattr(self.storage, "waitlist_owners", None)
+        lister = getattr(self.storage, "waitlist_owners", None)
+        owners = lister() if lister else []
         checked = 0
-        for chat_id in owners() if owners else []:
+        for chat_id in owners:
             if self.waitlist_should_stop():
                 break
             try:
@@ -971,6 +1008,13 @@ class MobileGateway(MiniAppGateway):
                 logger.error(
                     "Standby check failed for chat_id=%s (%s)", chat_id, type(exc).__name__
                 )
+        # An owner whose standbys are all gone (finished, withdrawn, account deleted) keeps
+        # nothing here: not the floor, and not a login holding their password.
+        alive = set(owners)
+        for chat_id in [owner for owner in self._waitlist_rails if owner not in alive]:
+            self._drop_waitlist_rail(chat_id)
+        for chat_id in [owner for owner in self._waitlist_attempts if owner not in alive]:
+            self._waitlist_attempts.pop(chat_id, None)
         return checked
 
     def _check_owner_waitlists(self, chat_id, interval, now):
@@ -982,21 +1026,30 @@ class MobileGateway(MiniAppGateway):
         account = self.storage.get_onboarded_account(chat_id)
         if account is None:
             self._drop_waitlist_rail(chat_id)
-        tag = self._account_tag(account.korail_id) if account else None
-        checkable = self._checkable(entries, tag) if account else []
+        known = self._known_member_tag(chat_id, account)
+        checkable = self._checkable(entries, known) if account else []
         if not checkable or not self._owner_due(chat_id, checkable, now, interval):
             if any(not self._waitlist_kept(entry, now) for entry in entries):
-                self._merge_waitlists(chat_id, now, {}, ids=())
+                self._merge_waitlists(chat_id, now, {}, ids=(), background=True)
             return 0
         self._waitlist_attempts[chat_id] = now
-        answers, failure = {}, None
+        answers, failure, member, others = {}, None, known, set()
         try:
             rail = self._waitlist_rail(chat_id, account)
-            answers = self._waitlist_call(
-                rail,
-                account,
-                lambda: rail.waitlist_states([self._standby(entry) for entry in checkable]),
-            )
+            member = self._member_tag(chat_id, account.korail_id, rail) or known
+            others = {e["id"] for e in checkable if not self._same_account(e, member)}
+            checkable = [
+                e for e in checkable if e["id"] not in others or e.get("mismatchSeen") != member
+            ]
+            others &= {e["id"] for e in checkable}
+            if checkable:
+                answers = self._waitlist_call(
+                    rail,
+                    account,
+                    lambda: rail.waitlist_states(
+                        [self._standby(e, listed_only=e["id"] in others) for e in checkable]
+                    ),
+                )
         except _WaitlistLoginRefused:
             # One refused login per pass at most: every standby of this account waits for the
             # account to be connected again (register), so the next pass does not try again.
@@ -1010,12 +1063,19 @@ class MobileGateway(MiniAppGateway):
         if self.waitlist_should_stop():
             return 0
         self._merge_waitlists(
-            chat_id, now, answers, failure=failure, ids={entry["id"] for entry in checkable}
+            chat_id,
+            now,
+            answers,
+            failure=failure,
+            ids={entry["id"] for entry in checkable},
+            member=member,
+            others=others,
+            background=True,
         )
         return len(checkable)
 
     @staticmethod
-    def _standby(entry):
+    def _standby(entry, *, listed_only=False):
         created = MobileGateway._stamp(entry.get("createdAt"))
         return {
             "id": entry["id"],
@@ -1023,6 +1083,7 @@ class MobileGateway(MiniAppGateway):
             "dep_date": entry.get("depDate") or "",
             "dep_time": entry.get("depTime") or "",
             "applied_on": created.astimezone(RAIL_TIMEZONE).strftime("%Y%m%d") if created else "",
+            "listed_only": listed_only,
         }
 
     def _waitlist_rail(self, chat_id, account):
@@ -1077,12 +1138,33 @@ class MobileGateway(MiniAppGateway):
                 logger.debug("Closing a standby login failed (%s)", type(exc).__name__)
 
     @serialized_operation
-    def _merge_waitlists(self, chat_id, now, answers, *, failure=None, ids=()):
+    def _merge_waitlists(
+        self,
+        chat_id,
+        now,
+        answers,
+        *,
+        failure=None,
+        ids=(),
+        member=None,
+        others=(),
+        background=False,
+    ):
         entries = [e for e in self._stored_waitlists(chat_id) if self._waitlist_kept(e, now)]
         notices = []
         for entry in entries:
             if entry.get("id") not in ids or entry.get("state") not in WAITLIST_ACTIVE:
                 continue
+            if entry["id"] in others and failure is None:
+                found = (answers.get(entry["id"]) or {}).get("state")
+                if found not in ("waiting", "assigned", "unknown"):
+                    # Not in this account's list: another account's, as its tag said. Not
+                    # asked about again until the linked account changes.
+                    entry["mismatchSeen"] = member
+                    continue
+                # Listed under this account: the tag was stale. It is this account's after all.
+                entry["account"] = member
+                entry.pop("mismatchSeen", None)
             entry["checkedAt"] = now.isoformat()
             if failure == "login":
                 entry["checkFailed"] = True
@@ -1110,6 +1192,9 @@ class MobileGateway(MiniAppGateway):
                 entry["state"] = state
                 entry["finishedAt"] = now.isoformat()
                 notices.append((entry, self._finished_text(entry), "reservation"))
+        if background and self.waitlist_should_stop():
+            # Stopping: the next run looks again rather than this one writing past its lease.
+            return entries
         try:
             self.storage.save_waitlists(chat_id, entries)
         except Exception as exc:
@@ -1201,12 +1286,18 @@ class MobileGateway(MiniAppGateway):
         account = self.storage.get_onboarded_account(chat_id)
         if account is None:
             raise MiniAppError("코레일 계정을 연결한 뒤 예약 대기를 취소해 주세요.", 428)
-        if not self._same_account(entry, self._account_tag(account.korail_id)):
-            raise MiniAppError(
-                "다른 코레일 계정으로 신청한 예약 대기예요. 그 계정의 코레일 앱에서 취소해 주세요.",
-                409,
-            )
+        other_account = MiniAppError(
+            "다른 코레일 계정으로 신청한 예약 대기예요. 그 계정의 코레일 앱에서 취소해 주세요.",
+            409,
+        )
+        known = self._known_member_tag(chat_id, account)
+        if known and entry.get("account") and entry.get("mismatchSeen") == known:
+            raise other_account
         rail = self._logged_in_rail(chat_id)
+        member = self._member_tag(chat_id, account.korail_id, rail) or known
+        # A stale tag is given the benefit of the doubt only as far as this account's own list:
+        # listed there, it is this account's; not listed, it is left alone.
+        foreign = not self._same_account(entry, member)
         now = utc_now()
         unread = MiniAppError(
             "코레일에서 예약 대기 상태를 확인하지 못해 취소하지 않았어요. 잠시 후 다시 시도해 주세요.",
@@ -1214,7 +1305,9 @@ class MobileGateway(MiniAppGateway):
         )
         try:
             answers = self._again_if_expired(
-                chat_id, rail, lambda: rail.waitlist_states([self._standby(entry)])
+                chat_id,
+                rail,
+                lambda: rail.waitlist_states([self._standby(entry, listed_only=foreign)]),
             )
         except MiniAppError:
             raise
@@ -1227,6 +1320,12 @@ class MobileGateway(MiniAppGateway):
             raise unread from exc
         answer = answers.get(entry["id"]) or {}
         state = answer.get("state")
+        if foreign:
+            self._merge_waitlists(
+                chat_id, now, answers, ids={entry["id"]}, member=member, others={entry["id"]}
+            )
+            if state not in ("waiting", "assigned", "unknown"):
+                raise other_account
         if state in (None, "unknown"):
             raise unread
         if state in ("paid", "ticketed", "ended"):
@@ -1365,7 +1464,7 @@ class MobileGateway(MiniAppGateway):
         return {"registered": False}
 
     @serialized_operation
-    def delete_account(self, chat_id):
+    def delete_account(self, chat_id, acknowledge_waitlists=False):
         """
         Stop and erase everything this owner has on the railway side: the search
         (its worker killed, as the user's own cancel does), a search booked for
@@ -1382,15 +1481,18 @@ class MobileGateway(MiniAppGateway):
         not_stopped = MiniAppError("자리 찾기를 멈추지 못했어요. 잠시 후 다시 시도해 주세요.", 409)
         if self.pending_payments.pending(chat_id):
             raise pending
-        account = self.storage.get_onboarded_account(chat_id)
-        tag = self._account_tag(account.korail_id) if account else None
-        if tag and any(
-            entry.get("state") in WAITLIST_ACTIVE and self._same_account(entry, tag)
+        active = [
+            entry
             for entry in self._stored_waitlists(chat_id)
-        ):
-            # Erasing the record would leave Korail assigning a seat nobody here hears of.
-            raise MiniAppError(
-                "신청한 코레일 예약 대기가 남아 있어요. 홈에서 예약 대기를 취소한 뒤 탈퇴해 주세요.",
+            if entry.get("state") in WAITLIST_ACTIVE
+        ]
+        if active and not acknowledge_waitlists:
+            # Erasing the record would leave Korail assigning a seat nobody here hears of. Some
+            # cannot be withdrawn from the app (another account, no account, a refused login),
+            # so the person may instead say they will look after them in the Korail app.
+            raise WaitlistsActive(
+                f"코레일 예약 대기가 {len(active)}건 남아 있어요. 앱에서 취소할 수 있는 대기는 먼저 "
+                "취소하고, 그대로 탈퇴하면 남은 대기는 코레일 앱에서 직접 관리해 주세요.",
                 409,
             )
         # The raw key, not get_running_reservation alone: a record this build
@@ -1464,7 +1566,7 @@ class UnavailableGateway:
     def sync_timezone(self, chat_id, zone):
         pass
 
-    def delete_account(self, chat_id):
+    def delete_account(self, chat_id, acknowledge_waitlists=False):
         # Nothing railway-side was ever stored without a booking server.
         return {"deleted": True}
 

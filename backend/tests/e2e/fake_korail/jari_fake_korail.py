@@ -245,7 +245,12 @@ class FakeKorail:
             )
         accepted = bool(state["login"])
         _log("login", username=username, accepted=accepted, pid=os.getpid())
+        # 코레일 회원번호 역할. 실제 로그인 세션의 member_card_no 처럼 계정마다 달라요.
+        self._e2e_member = f"MB{username}" if accepted else None
         return accepted
+
+    def member_number(self):
+        return getattr(self, "_e2e_member", None)
 
     def close(self) -> None:
         self._logged_in = False
@@ -509,6 +514,8 @@ class FakeKorail:
                     "dep_time": train.departure_time,
                     "arr_time": train.arrival_time,
                     "passengers": passenger_count,
+                    # 코레일 예약 목록은 계정마다 따로예요. 신청한 회원의 목록에만 보여요.
+                    "member": self.member_number(),
                 }
             ),
         )
@@ -527,6 +534,8 @@ class FakeKorail:
         rows = []
         for pnr, raw in _client().hgetall(WAITLIST_KEY).items():
             train = json.loads(raw)
+            if train.get("member") != self.member_number():
+                continue
             fields = {
                 "h_pnr_no": pnr,
                 "h_trn_no": train["train_no"],
@@ -566,6 +575,8 @@ class FakeKorail:
         tickets = []
         for raw in _client().hgetall(WAITLIST_KEY).values():
             train = json.loads(raw)
+            if train.get("member") != self.member_number():
+                continue
             tickets.append(
                 Ticket(
                     {
@@ -587,7 +598,7 @@ class FakeKorail:
                                         "h_arv_tm": train["arr_time"],
                                         "h_run_dt": train["dep_date"],
                                         "h_seat_cnt": f"{train['passengers']:03d}",
-                                        # 신청한 날 이후에 팔린 승차권이라야 대기로 산 것으로 봐요.
+                                        # 신청한 날 팔린 승차권: 시각이 없어 대기로 산 것인지는 단정하지 않아요.
                                         "h_orgtk_sale_dt": datetime.now(KST).strftime("%Y%m%d"),
                                         "h_rcvd_amt": "00059800",
                                         "h_srcar_no": "3",

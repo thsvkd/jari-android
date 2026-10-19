@@ -75,22 +75,23 @@ def test_a_seat_that_seems_assigned_is_said_so_without_becoming_a_pending_paymen
     assert len(assigned) == 1 and assigned[0]["kind"] == "payment"
     assert_app_wording(assigned[0]["text"])
 
-    # Paid in the Korail app: the slow look sees it gone with a ticket sold after applying.
+    # Paid in the Korail app the same day: the ticket list has no time of sale, so the app only
+    # says a ticket on that train is there.
     client.scenario(waitlist="paid")
-    client.wait_for(lambda s: s["waitlists"][0]["state"] == "paid", timeout=30)
+    client.wait_for(lambda s: s["waitlists"][0]["state"] == "ticketed", timeout=30)
 
 
 def test_a_standby_of_another_korail_account_is_left_alone(client, conditions):
     apply(client, conditions)
     client.call("POST", "/register", {"username": "0000000001", "password": "korail-e2e"})
-    client.reset_log()
 
-    status = client.call("GET", "/status")
+    # One look reads the new account's own list; the standby is not in it.
+    status = client.wait_for(lambda s: s["waitlists"][0]["otherAccount"], timeout=30)
 
-    assert status["waitlists"][0]["otherAccount"] is True
+    assert status["waitlists"][0]["state"] == "waiting"
     code, _ = client.error("POST", "/waitlist/cancel", {"id": status["waitlists"][0]["id"]})
     assert code == 409
-    assert not any(call["event"].startswith("waitlist") for call in client.korail_log())
+    assert not any(call["event"] == "waitlist_cancel" for call in client.korail_log())
 
 
 def test_a_failed_look_is_not_an_ending(client, conditions):

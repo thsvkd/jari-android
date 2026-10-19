@@ -1870,6 +1870,8 @@ class KorailService(RailService):
         - {"state": "ticketed"}: gone, and such a ticket exists but says nothing of when it was sold.
         - {"state": "ended"}: gone with no such ticket: cancelled, expired or departed.
         - {"state": "unknown"}: listed, but its own seat read failed.
+        - {"state": "unlisted"}: not listed, for a standby marked "listed_only" - one this
+          account may not own, whose absence says nothing and is not looked for in the tickets.
 
         Raises when the list (or, for a standby gone from it, the ticket list) could not be read:
         a failed read is not "ended".
@@ -1882,6 +1884,9 @@ class KorailService(RailService):
         for standby in standbys:
             wanted = str(standby["id"]).strip()
             row = listed.get(wanted)
+            if row is None and standby.get("listed_only"):
+                answers[wanted] = {"state": "unlisted"}
+                continue
             if row is None:
                 if tickets is None:
                     tickets = self._ticket_rows()
@@ -1926,12 +1931,24 @@ class KorailService(RailService):
             if dep_time and str(getattr(ticket, "dep_time", ""))[:4] != dep_time[:4]:
                 continue
             sold = str(getattr(ticket, "sale_date", "") or "")[:8]
-            if not sold.isdigit():
-                found = "ticketed"
-            elif sold >= str(standby.get("applied_on") or ""):
+            applied = str(standby.get("applied_on") or "")
+            if sold.isdigit() and applied and sold > applied:
                 return "paid"
+            if not sold.isdigit() or sold == applied:
+                # No sale day, or the same day as the application: the ticket list carries no
+                # time, so a ticket bought earlier that day cannot be told from this one.
+                found = "ticketed"
             # A ticket sold before the application is another booking on the same train.
         return found
+
+    def member_number(self) -> str | None:
+        """The Korail membership number of the account this client is logged in with."""
+        client = self._modern_client
+        session = getattr(getattr(client, "session", None), "current", None)
+        number = getattr(session, "member_card_no", None) or getattr(
+            self._korail_instance, "membership_number", None
+        )
+        return str(number).strip() if isinstance(number, str) and number.strip() else None
 
     def _reservation_rows(self):
         """This account's live reservations (ReservationView), standbys among them."""

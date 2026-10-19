@@ -2554,11 +2554,31 @@ ${agentHost(agent)}`;
       this.render();
       return;
     }
+    // 신청한 코레일 예약 대기가 남아 있으면, 남은 대기는 코레일 앱에서 직접 관리하겠다는 동의를 받아요.
+    // 이 폰이 모르는 대기가 있으면 서버가 waitlists_active 로 알려 주고, 그때 같은 동의를 받아요.
+    const active = (this.state?.waitlists ?? []).filter((entry) => entry.state === "waiting" || entry.state === "assigned").length;
+    let acknowledged = active > 0 && await this.confirmWaitlistsOnDelete(active);
+    if (active > 0 && !acknowledged) return;
     let deleted = false;
-    await this.run(async (isCurrent) => {
-      await this.api.deleteAccount(password);
-      deleted = isCurrent();
+    let waitlistsLeft = false;
+    const attempt = () => this.run(async (isCurrent) => {
+      try {
+        await (acknowledged ? this.api.deleteAccount(password, true) : this.api.deleteAccount(password));
+        deleted = isCurrent();
+      } catch (error) {
+        if (!acknowledged && error instanceof ApiError && error.code === "waitlists_active") {
+          waitlistsLeft = true;
+          return;
+        }
+        throw error;
+      }
     });
+    await attempt();
+    if (waitlistsLeft && !deleted) {
+      acknowledged = await this.confirmWaitlistsOnDelete(0);
+      if (!acknowledged) return;
+      await attempt();
+    }
     if (deleted) {
       // 다음에 이 폰으로 로그인하는 사람에게 지운 계정의 구간을 보여 주지 않고, 그 사람의 이름으로 지운 계정의 연결 기록을 올리지 않아요.
       try {
@@ -2576,6 +2596,15 @@ ${agentHost(agent)}`;
       this.error = "";
       this.render();
     }
+  }
+
+  private confirmWaitlistsOnDelete(count: number): Promise<boolean> {
+    return this.confirmSheet({
+      title: count ? `코레일 예약 대기가 ${count}건 남아 있어요` : "코레일 예약 대기가 남아 있어요",
+      body: "앱에서 취소할 수 있는 대기는 홈에서 먼저 취소해 주세요. 그대로 탈퇴하면 자리났다는 더 이상 배정을 확인하지 않아요. 남은 대기는 코레일 앱에서 직접 확인하고 관리해야 해요.",
+      confirmLabel: "코레일 앱에서 관리할게요",
+      danger: true,
+    });
   }
 
   private async loadAgents(): Promise<void> {
