@@ -1380,7 +1380,9 @@ class MobileGateway(MiniAppGateway):
             return False
         connected = getattr(self.storage, "get_waitlist_connected", None)
         since = connected(chat_id) if connected else None
-        return since is None or float(ended.get("at") or 0) > since
+        # search_ended keeps whole seconds; a block in the same second as the connection
+        # counts as after it, since stopping is the safe side of not knowing.
+        return since is None or float(ended.get("at") or 0) >= int(since)
 
     def _pause_blocked(self, chat_id, now):
         """Stop looking at every standby of this owner until the account is connected again."""

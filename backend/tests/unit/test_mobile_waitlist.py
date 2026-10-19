@@ -4,6 +4,7 @@ configured interval (one reservation-list read per owner), shown as "seems assig
 being handed to the payment watch, and withdrawable only from the account it was applied with.
 """
 
+import time
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import DEFAULT, MagicMock
@@ -27,6 +28,7 @@ from korail_bot.mobile.gateway import WAITLIST_LIMIT, WaitlistsActive
 from korail_bot.mobile.runtime import MobileRuntime
 from korail_bot.mobile.storage import MobileStorage
 from korail_bot.services.korail_service import KorailService
+from korail_bot.storage import redis as redis_storage
 from korail_bot.utils.timezone import RAIL_TIMEZONE, utc_now
 
 DEPARTS = (utc_now() + timedelta(days=3)).strftime("%Y%m%d")
@@ -1064,9 +1066,25 @@ def test_a_watch_that_ended_on_a_block_stops_the_standby_look_without_asking(app
     assert status(app)["waitlists"][0]["checkError"] == "blocked"
 
 
-def test_a_block_older_than_the_last_connection_does_not_stop_the_look(app):
+def test_a_block_in_the_same_second_as_the_connection_still_stops_the_look(app):
     apply(app)
+    # The fixture connected the account just now; search_ended keeps whole seconds.
     app.storage.mark_search_ended(app.owner, "blocked", 4242)
+
+    app.gateway.check_waitlists(now=utc_now() + LATER)
+
+    assert looks(app) == 0
+    assert status(app)["waitlists"][0]["checkError"] == "blocked"
+
+
+def test_a_block_older_than_the_last_connection_does_not_stop_the_look(app, monkeypatch):
+    apply(app)
+    # The block is noted a few seconds before the person connects again, as it would be after
+    # they read the notice: a block in the very same second counts as after the connection.
+    noted_at = time.time() - 5
+    with monkeypatch.context() as patch:
+        patch.setattr(redis_storage, "time", SimpleNamespace(time=lambda: noted_at))
+        app.storage.mark_search_ended(app.owner, "blocked", 4242)
     later = utc_now() + LATER
     app.storage.redis.set(f"waitlist_connected:{app.owner}", "1")
     app.gateway.check_waitlists(now=later)
