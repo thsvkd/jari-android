@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 
+import { ApiError } from "./api";
 import { JariApp } from "./app";
 import { createDemoApi } from "./demo";
 import type { BootstrapState, PendingReservation, WaitlistEntry } from "./types";
@@ -115,9 +116,12 @@ it("shows each standby on the home screen by its state, apart from seats awaitin
   expect(card("W-waiting").querySelector("[data-waitlist-cancel='W-waiting']")).not.toBeNull();
   expect(card("W-failed").textContent).toContain("마지막 확인에 실패했어요");
   expect(card("W-login").textContent).toContain("계정을 다시 연결해 주세요");
-  expect(card("W-assigned").textContent).toContain("좌석 배정됨 · 결제 필요");
+  expect(card("W-assigned").textContent).toContain("좌석 배정 확인 필요");
+  expect(card("W-assigned").textContent).toContain("배정된 것 같아요. 코레일 앱에서 확인하고 결제해 주세요.");
   expect(card("W-assigned").textContent).toContain("3호차 7A");
+  expect(card("W-assigned").textContent).toContain("결제 기한은");
   expect(card("W-assigned").querySelector("[data-korail-pay]")).not.toBeNull();
+  expect(card("W-assigned").querySelector("[data-waitlist-cancel]")!.textContent).toContain("좌석 돌려주기");
   expect(card("W-ended").textContent).toContain("예약 대기 끝남");
   expect(card("W-cancelled").textContent).toContain("취소함");
   // 신청한 대기는 좌석 확보가 아니에요.
@@ -125,20 +129,50 @@ it("shows each standby on the home screen by its state, apart from seats awaitin
   expect(root.querySelector(".idle-quiet")).toBeNull();
 });
 
-it("leaves an assigned standby to the payment card once it became the pending payment", async () => {
-  const pending: PendingReservation = {
-    reservationId: "W-assigned",
-    trainInfo: "KTX 015 서울 → 부산 · 10월 22일(목) 07:27→10:12",
-    expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-    seatNumber: null,
-    seatLabels: ["3호차 7A"],
-    seatClass: "general",
-  };
-  const state = await withWaitlists([entry("assigned", { seatLabels: ["3호차 7A"] })], [pending]);
+it("shows a standby of another Korail account, or one with no account linked, without acting on it", async () => {
+  const state = await withWaitlists([
+    entry("waiting", { id: "W-other", otherAccount: true }),
+    entry("waiting", { id: "W-unlinked", checkError: "unlinked" }),
+    entry("ticketed"),
+  ]);
   const { root } = await mount({ bootstrap: async () => state });
 
-  expect(root.querySelector("[data-waitlist]")).toBeNull();
-  expect(root.querySelector(".payment-card")!.textContent).toContain("코레일 예약 대기 배정");
+  const other = root.querySelector("[data-waitlist='W-other']")!;
+  expect(other.getAttribute("data-state")).toBe("other-account");
+  expect(other.textContent).toContain("다른 코레일 계정의 대기");
+  expect(other.querySelector("[data-waitlist-cancel]")).toBeNull();
+  const unlinked = root.querySelector("[data-waitlist='W-unlinked']")!;
+  expect(unlinked.textContent).toContain("코레일 계정 연결이 끊겨");
+  expect(unlinked.querySelector("[data-waitlist-cancel]")).toBeNull();
+  expect(root.querySelector("[data-waitlist='W-ticketed']")!.textContent).toContain("같은 열차 승차권이 보여요");
+});
+
+it("asks to give the seat back before withdrawing a standby that seems assigned", async () => {
+  const state = await withWaitlists([entry("assigned", { seatLabels: ["3호차 7A"] })]);
+  const cancelWaitlist = vi.fn(async () => ({ cancelled: true, waitlists: [entry("cancelled", { id: "W-assigned" })] }));
+  const { root } = await mount({ bootstrap: async () => state, cancelWaitlist });
+
+  root.querySelector<HTMLButtonElement>("[data-waitlist-cancel='W-assigned']")!.click();
+  expect(root.querySelector(".action-sheet")!.textContent).toContain("배정된 것 같은 좌석도 코레일에 돌려줘요");
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+
+  await vi.waitFor(() => expect(cancelWaitlist).toHaveBeenCalledWith("W-assigned", true));
+});
+
+it("says why a withdrawal was refused and reads the state again", async () => {
+  const state = await withWaitlists([entry("waiting")]);
+  const cancelWaitlist = vi.fn(async () => {
+    throw new ApiError("그사이 좌석이 배정된 것 같아요. 취소하면 배정된 좌석도 코레일에 돌려줘요.", 409, "server");
+  });
+  const status = vi.fn(async () => ({ running: null, scheduled: null, pending: [], waitlists: [entry("assigned", { id: "W-waiting" })] }));
+  const { root } = await mount({ bootstrap: async () => state, cancelWaitlist, status });
+
+  root.querySelector<HTMLButtonElement>("[data-waitlist-cancel='W-waiting']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
+
+  await vi.waitFor(() => expect(root.querySelector(".toast")!.textContent).toContain("그사이 좌석이 배정된 것 같아요"));
+  await vi.waitFor(() => expect(root.querySelector("[data-waitlist='W-waiting']")!.getAttribute("data-state")).toBe("assigned"));
+  expect(cancelWaitlist).toHaveBeenCalledWith("W-waiting", false);
 });
 
 it("withdraws a standby only after asking, and shows what the server says is left", async () => {
@@ -153,7 +187,7 @@ it("withdraws a standby only after asking, and shows what the server says is lef
 
   root.querySelector<HTMLButtonElement>("[data-waitlist-cancel='W-waiting']")!.click();
   root.querySelector<HTMLButtonElement>("[data-action='sheet-confirm']")!.click();
-  await vi.waitFor(() => expect(cancelWaitlist).toHaveBeenCalledWith("W-waiting"));
+  await vi.waitFor(() => expect(cancelWaitlist).toHaveBeenCalledWith("W-waiting", false));
   await vi.waitFor(() => expect(root.querySelector("[data-waitlist='W-waiting']")!.textContent).toContain("취소함"));
 });
 

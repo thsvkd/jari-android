@@ -33,6 +33,8 @@ export interface Scenario {
   /** 신청된 예약 대기를 다시 읽을 때 코레일이 하는 답 */
   waitlist?: "waiting" | "assigned" | "paid" | "ended" | "unavailable";
   waitlist_cancel_refused?: boolean;
+  /** 조회가 돌려줄 열차(가짜 코레일 DEFAULT_TRAINS 와 같은 모양) */
+  trains?: Array<{ no: string; name: string; group: string; offset: number; minutes: number; general: string; special: string; wait: number }>;
 }
 
 /** e2e 스택의 제어 서버. 가짜 코레일 시나리오와 호출 기록을 다뤄요. */

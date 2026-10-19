@@ -292,7 +292,7 @@ export function createDemoApi(clock: () => Date = () => new Date()): MobileApi {
       return { cancelled: true, pending };
     },
     cancelWaitlist: async (id) => {
-      waitlists = waitlists.map((entry) => entry.id === id && entry.state === "waiting"
+      waitlists = waitlists.map((entry) => entry.id === id && (entry.state === "waiting" || entry.state === "assigned")
         ? { ...entry, state: "cancelled", finishedAt: clock().toISOString() }
         : entry);
       return { cancelled: true, waitlists };

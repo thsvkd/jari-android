@@ -356,8 +356,8 @@ export function createHttpApi(options: HttpApiOptions): MobileApi {
     cancelSearch: () => request<{ stopped: boolean; unscheduled: boolean }>("/search/cancel", { body: {} }),
     cancelReservations: () =>
       request<{ cancelled: boolean; pending: PendingReservation[] }>("/reservations/cancel", { body: {} }),
-    cancelWaitlist: (id: string) =>
-      request<{ cancelled: boolean; waitlists: WaitlistEntry[] }>("/waitlist/cancel", { body: { id } }),
+    cancelWaitlist: (id: string, releaseAssigned = false) =>
+      request<{ cancelled: boolean; waitlists: WaitlistEntry[] }>("/waitlist/cancel", { body: { id, releaseAssigned } }),
     requestAccess: () => request<{ requested: boolean; approved?: boolean }>("/access-request", { body: {} }),
     favourites: () => request<{ favourites: Favourite[] } | Favourite[]>("/favourites", { method: "GET" }),
     saveFavourite: (payload) =>

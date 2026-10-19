@@ -694,10 +694,7 @@ def _started(result):
     if result.get("waitlisted"):
         return {
             **result,
-            "notes": [
-                "코레일 예약 대기를 신청했어요. 감시는 시작하지 않았고 get_status 에도 나오지 않아요. "
-                "앱이 몇 분 간격으로 배정 여부를 확인해 알리고, 앱 홈과 코레일에서도 볼 수 있어요."
-            ],
+            "notes": [WAITLISTED_NOTE],
         }
     running = result.get("running")
     if isinstance(running, dict):
@@ -803,6 +800,47 @@ _APP_WATCH_FIELDS = {
 }
 
 
+WAITLISTED_NOTE = (
+    "코레일 예약 대기를 신청했어요. 좌석을 잡은 것이 아니고, 감시도 시작하지 않았어요. "
+    "앱이 10분 이상 간격으로 배정 여부를 확인해 알리고, get_status 와 앱 홈, 코레일 앱에서 볼 수 있어요."
+)
+
+
+def _waitlist_note(entry):
+    """One standby, said as it is: an assignment is the app's reading until Korail confirms it."""
+    train = entry.get("trainInfo") or f"열차 {entry.get('trainNo')}"
+    state = entry.get("state")
+    if state in ("waiting", "assigned") and entry.get("otherAccount"):
+        return f"코레일 예약 대기({train})는 다른 코레일 계정으로 신청한 것이라 확인하지 않아요."
+    if state in ("waiting", "assigned") and entry.get("checkError") == "unlinked":
+        return f"코레일 예약 대기({train})가 있지만 코레일 계정 연결이 끊겨 확인하지 않고 있어요."
+    if state in ("waiting", "assigned") and entry.get("checkError") == "login":
+        return (
+            f"코레일 예약 대기({train})는 코레일 로그인이 거절돼 확인을 멈췄어요. "
+            "사용자가 앱에서 코레일 계정을 다시 연결해야 해요."
+        )
+    failed = (
+        " 마지막 확인은 실패했어요(대기가 끝났다는 뜻은 아니에요)."
+        if entry.get("checkFailed")
+        else ""
+    )
+    if state == "waiting":
+        return (
+            f"코레일 예약 대기 중이에요: {train}. 좌석을 잡은 것은 아니고, 배정 여부는 "
+            f"10분 이상 간격으로만 확인해요.{failed}"
+        )
+    if state == "assigned":
+        return (
+            f"코레일 예약 대기({train})에 좌석이 배정된 것 같아요(확정 아님). 사용자가 코레일 앱에서 "
+            f"확인하고 결제 기한 안에 직접 결제해야 해요.{failed}"
+        )
+    return {
+        "paid": f"코레일 예약 대기({train})로 배정된 좌석의 승차권이 발권됐어요.",
+        "ticketed": f"코레일 예약 대기({train})가 끝났고 같은 열차 승차권이 보여요.",
+        "cancelled": f"코레일 예약 대기({train})를 취소했어요.",
+    }.get(state, f"코레일 예약 대기({train})가 코레일 목록에서 사라졌어요(취소·만료 등).")
+
+
 def _status(result):
     """What the app's status says, with where to pay and a Korean reading of the codes."""
     pending = [
@@ -838,6 +876,10 @@ def _status(result):
     if not running and not result.get("scheduled") and isinstance(ended, dict):
         if said := _ended_note(ended.get("reason")):
             notes.append(said)
+    waitlists = result.get("waitlists") or []
+    notes.extend(_waitlist_note(entry) for entry in waitlists)
+    if any(entry.get("state") == "assigned" for entry in waitlists):
+        notes.append(f"결제는 코레일 앱이나 {settings.KORAIL_PAYMENT_URL} 에서 해요.")
     scheduled = result.get("scheduled")
     if isinstance(scheduled, dict) and "search" in scheduled:
         scheduled = {**scheduled, "search": _plain_watch(scheduled["search"])}

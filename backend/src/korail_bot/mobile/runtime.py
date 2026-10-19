@@ -109,12 +109,18 @@ class WaitlistWatch:
         self._thread = None
 
     def start(self):
+        if self._thread and self._thread.is_alive():
+            logger.warning("Standby watch is already running")
+            return
         self._stop_event.clear()
         self._thread = threading.Thread(target=self.run, daemon=True, name="waitlist-watch")
         self._thread.start()
 
     def stop(self):
         self._stop_event.set()
+
+    def stopping(self):
+        return self._stop_event.is_set()
 
     def run(self):
         interval = self.gateway.waitlist_check_minutes * 60
@@ -236,6 +242,15 @@ class MobileRuntime:
                 target=self._keep_renewing, daemon=True, name="mobile-lease"
             )
             self.lease_thread.start()
+            # A standby pass stops between owners and before it writes once the runtime is
+            # stopping, has lost its lease, or is past the time the lease is counted on.
+            self.gateway.waitlist_should_stop = lambda: (
+                self.waitlist_watch.stopping()
+                or self.stop_event.is_set()
+                or self.lease_lost
+                or getattr(self.reservation, "_shutting_down", False)
+                or time.monotonic() >= self.lease_until
+            )
             steps = [
                 self.reservation.reconcile_after_restart,
                 *(s.start for s in self.services),
@@ -435,9 +450,6 @@ class MobileRuntime:
             # Each step is tried whatever became of the ones before: searches
             # left running, or a lease left held, outlast this process.
             steps = [service.stop for service in self.services]
-            # Told to stop but not waited for: a pass only reads Korail and records what it read,
-            # and one cut short is simply done again by the next run. Waiting would add a join
-            # to a teardown already sized to docker's stop_grace_period.
             if self.waitlist_watch:
                 steps.append(self.waitlist_watch.stop)
             if self.reservation:
@@ -451,8 +463,16 @@ class MobileRuntime:
             threads += [self.thread, None if self.lease_lost else self.lease_thread]
             for thread in threads:
                 # join() refuses a thread never started, as after a failed start().
+                started = time.monotonic()
                 if thread and thread.is_alive() and thread is not threading.current_thread():
                     thread.join(timeout=self.JOIN_WAIT)
+                if thread is not None and thread is self.thread:
+                    # The standby watch shares the notification thread's wait, so the teardown
+                    # budget stays what it was. A pass it cuts short only reads Korail and stops
+                    # before writing (waitlist_should_stop); the next run looks again.
+                    watch = getattr(self.waitlist_watch, "_thread", None)
+                    if watch and watch.is_alive() and watch is not threading.current_thread():
+                        watch.join(timeout=max(0.0, started + self.JOIN_WAIT - time.monotonic()))
             if self.storage:
                 try:
                     _answer_by(

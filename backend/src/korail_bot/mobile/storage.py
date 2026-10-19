@@ -1,5 +1,7 @@
 """All shared railway records use a mobile-only key namespace and key."""
 
+import hashlib
+import hmac
 import json
 
 import redis
@@ -161,6 +163,7 @@ class MobileStorage(RedisStorage):
         if client is None and not url:
             raise ValueError("MOBILE_REDIS_URL must be explicitly configured")
         self.box = SecretBox(secret)
+        self._account_tag_key = hashlib.sha256(b"jari-waitlist-account:" + secret.encode()).digest()
         if client is not None:
             self.redis = NamespacedRedis(client)
         else:
@@ -222,6 +225,13 @@ class MobileStorage(RedisStorage):
             self.redis.set(key, json.dumps(entries, ensure_ascii=False), ex=self.WAITLIST_TTL)
         else:
             self.redis.delete(key)
+
+    def account_tag(self, korail_id):
+        """
+        Which Korail account a standby was applied for with, without keeping the account id:
+        a keyed hash, so a phone number cannot be read back by trying them all.
+        """
+        return hmac.new(self._account_tag_key, korail_id.encode(), hashlib.sha256).hexdigest()[:32]
 
     def waitlist_owners(self):
         owners = []

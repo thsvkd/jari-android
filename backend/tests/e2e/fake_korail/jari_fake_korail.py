@@ -587,6 +587,8 @@ class FakeKorail:
                                         "h_arv_tm": train["arr_time"],
                                         "h_run_dt": train["dep_date"],
                                         "h_seat_cnt": f"{train['passengers']:03d}",
+                                        # 신청한 날 이후에 팔린 승차권이라야 대기로 산 것으로 봐요.
+                                        "h_orgtk_sale_dt": datetime.now(KST).strftime("%Y%m%d"),
                                         "h_rcvd_amt": "00059800",
                                         "h_srcar_no": "3",
                                         "h_seat_no": "7A",

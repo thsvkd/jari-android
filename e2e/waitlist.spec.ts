@@ -1,3 +1,4 @@
+import { E2E } from "../playwright.config";
 import { expect, nextPoll, test } from "./fixtures";
 import { keepOnlyTrains, searchTrains, trainLine } from "./flows";
 import { expectCleanLayout } from "./layout";
@@ -6,6 +7,14 @@ import { expectCleanLayout } from "./layout";
 // 신청·확인·취소는 운영 코드가 그대로 돌고, 코레일 호출만 fake_korail 이 답해요.
 
 const WAITLIST_TRAIN = "00103";
+
+// 가짜 코레일의 기본 열차에서 00107 도 매진·예약 대기 대상으로 바꾼 목록이에요.
+const TWO_WAITLIST_TRAINS = [
+  { no: "00101", name: "KTX", group: "KTX", offset: 0, minutes: 161, general: "11", special: "11", wait: -1 },
+  { no: "00103", name: "KTX", group: "KTX", offset: 60, minutes: 158, general: "13", special: "13", wait: 9 },
+  { no: "00105", name: "KTX-산천", group: "KTX", offset: 120, minutes: 165, general: "13", special: "11", wait: -1 },
+  { no: "00107", name: "KTX", group: "KTX", offset: 180, minutes: 160, general: "13", special: "13", wait: 9 },
+];
 
 async function applyForWaitlist(page: import("@playwright/test").Page): Promise<void> {
   await searchTrains(page);
@@ -41,21 +50,58 @@ test.describe("코레일 예약 대기", () => {
     expect(log.some((call) => call.event === "search" || String(call.event).startsWith("reserve"))).toBe(false);
   });
 
-  test("좌석이 배정되면 결제 카드로 넘어가 결제를 안내해요 @layout", async ({ signedIn: page, control }) => {
+  test("좌석이 배정된 것 같으면 대기 카드가 확인과 결제를 안내하고, 결제 카드로 넘기지 않아요 @layout", async ({ signedIn: page, control }) => {
     await applyForWaitlist(page);
     await control.scenario({ waitlist: "assigned" });
 
-    const payment = page.locator(".payment-card");
-    for (let attempt = 0; attempt < 15 && !(await payment.isVisible()); attempt++) {
+    const card = page.locator("[data-waitlist]");
+    for (let attempt = 0; attempt < 15 && (await card.getAttribute("data-state")) !== "assigned"; attempt++) {
       await page.waitForTimeout(1_000);
       await nextPoll(page);
     }
-    await expect(payment).toContainText("코레일 예약 대기 배정");
-    await expect(payment).toContainText("3호차 7A");
-    await expect(payment.locator("[data-korail-pay]")).toBeVisible();
-    // 결제 카드가 보여 주니 대기 카드는 따로 남지 않아요.
-    await expect(page.locator("[data-waitlist]")).toHaveCount(0);
-    await expectCleanLayout(page, "예약 대기 배정 뒤 결제 카드");
+    await expect(card).toHaveAttribute("data-state", "assigned");
+    await expect(card).toContainText("좌석이 배정된 것 같아요. 코레일 앱에서 확인하고 결제해 주세요.");
+    await expect(card).toContainText("3호차 7A");
+    await expect(card.locator("[data-korail-pay]")).toBeVisible();
+    await expect(card.locator("[data-waitlist-cancel]")).toContainText("좌석 돌려주기");
+    // 확인되지 않은 배정은 몇 초마다 묻는 결제 감시로 넘기지 않아요.
+    await expect(page.locator(".payment-card")).toHaveCount(0);
+    await expectCleanLayout(page, "배정 확인이 필요한 예약 대기 카드");
+  });
+
+  test("대기 여러 건은 홈과 자세히 보기에 카드로 보여요 @layout", async ({ signedIn: page, control }) => {
+    await control.scenario({ trains: TWO_WAITLIST_TRAINS });
+    await applyForWaitlist(page);
+    await searchTrains(page);
+    await page.locator("[data-official-waitlist='00107']").click();
+    await page.locator("[data-action='sheet-confirm']").click();
+    await expect(page.locator(".screen-home [data-waitlist]")).toHaveCount(2);
+    await expectCleanLayout(page, "예약 대기 두 건 홈");
+
+    await page.locator(".bottom-nav [data-view='activity']").click();
+    await expect(page.locator("[data-waitlist]")).toHaveCount(2);
+    await expect(page.getByText("찾고 있는 자리가 없어요")).toHaveCount(0);
+    await expectCleanLayout(page, "자세히 보기의 예약 대기 카드");
+  });
+
+  test("다른 코레일 계정으로 신청한 대기는 확인·취소하지 않고 그렇다고 보여요 @layout", async ({ signedIn: page, user, control }) => {
+    await applyForWaitlist(page);
+    // 사용자가 설정에서 다른 코레일 계정을 연결한 것과 같은 요청이에요.
+    const linked = await fetch(`http://127.0.0.1:${E2E.api}/api/mobile/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${user.token}` },
+      body: JSON.stringify({ username: "0000000001", password: "korail-e2e" }),
+    });
+    expect(linked.ok).toBe(true);
+    await nextPoll(page);
+
+    const card = page.locator("[data-waitlist]");
+    await expect(card).toHaveAttribute("data-state", "other-account");
+    await expect(card).toContainText("다른 코레일 계정으로 신청한 대기예요");
+    await expect(card.locator("[data-waitlist-cancel]")).toHaveCount(0);
+    await expectCleanLayout(page, "다른 코레일 계정의 예약 대기 카드");
+    const calls = await control.korailLog();
+    expect(calls.filter((call) => call.event === "waitlist_cancel")).toHaveLength(0);
   });
 
   test("신청한 예약 대기를 취소하면 코레일에 취소를 보내고 취소함으로 보여요 @layout", async ({ signedIn: page, control }) => {

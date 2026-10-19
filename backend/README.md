@@ -28,7 +28,7 @@ Python 3.13 이상과 Redis가 필요합니다. Windows에는 시간대 데이�
 | `MOBILE_PUBLIC_URL` | 선택 사항; 에이전트(MCP)가 바깥에서 부르는 HTTPS 주소(경로 없이). 비우면 에이전트 연결(`/oauth/*`·`/.well-known/*`·`/mcp`)이 꺼짐 |
 | `MOBILE_GOOGLE_CLIENT_ID` | 선택 사항; Google Cloud의 웹 애플리케이션 OAuth 클라이언트 ID. Google 로그인을 쓰려면 아래 세 값을 모두 설정 |
 | `MOBILE_GOOGLE_CLIENT_SECRET` | 선택 사항; 같은 웹 OAuth 클라이언트의 서버 전용 비밀 값. 저장소와 앱 번들에 넣지 않음 |
-| `MOBILE_WAITLIST_CHECK_MINUTES` | 선택 사항; 신청한 코레일 예약 대기의 배정 여부를 확인하는 간격(분). 기본 10, 10 미만이면 시작을 거부 |
+| `MOBILE_WAITLIST_CHECK_MINUTES` | 선택 사항; 신청한 코레일 예약 대기의 배정 여부를 확인하는 간격(분, 소유자당). 기본 10, 10 미만·1440 초과면 시작을 거부 |
 
 선택 설정(감시 속도와 한도, docs/SPEC.md의 "감시 한도"):
 
@@ -146,8 +146,8 @@ uv run --frozen python -m korail_bot.mobile serve --auth-only --host 127.0.0.1 -
 실제 열차 조회·예약·선호 좌석 검사·예약 취소는 기존 Korail 서비스에 위임합니다.
 코레일이 아닌 사업자 요청은 422로 거부합니다. 코레일 예약 대기는 일반실에만 신청할 수 있고
 좌석 위치를 함께 지정하면 422로 거부합니다. 신청한 예약 대기는 `waitlist:{owner}`에 기록하고,
-`MOBILE_WAITLIST_CHECK_MINUTES` 간격으로만 예약 목록을 읽어 배정을 확인합니다. 배정되면 결제 대기로
-넘기고, `POST /waitlist/cancel`로 취소합니다([SPEC §3.5](../docs/SPEC.md#35-코레일-예약-대기waitlists)).
+`MOBILE_WAITLIST_CHECK_MINUTES` 간격으로만 소유자당 예약 목록을 한 번 읽어 배정을 확인합니다. 배정은
+추정이라 결제 대기로 넘기지 않고 대기 카드에서 코레일 앱 확인을 안내하며, `POST /waitlist/cancel`로 취소합니다([SPEC §3.5](../docs/SPEC.md#35-코레일-예약-대기waitlists)).
 결제는 철도 앱에서 사람이 합니다.
 좌석 조건은 기존 형식 `A,D:3-5`, `A,D:`, `:3-5`, 빈 문자열을 사용합니다.
 잘못된 좌석 조건을 임의로 무시하지 않습니다.

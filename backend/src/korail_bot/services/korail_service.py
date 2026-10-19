@@ -1855,50 +1855,83 @@ class KorailService(RailService):
             raise
         return hold
 
-    def waitlist_state(self, rsv_id: str, *, train_no: str, dep_date: str, dep_time: str) -> dict:
+    def waitlist_states(self, standbys: list[dict]) -> dict[str, dict]:
         """
-        Where one standby stands, read without changing anything.
+        Where each standby stands, from ONE read of this account's reservation list, without
+        changing anything. `standbys` are {"id", "train_no", "dep_date", "dep_time",
+        "applied_on" (YYYYMMDD, Korea)}; the answer maps each id to:
 
-        - "waiting": Korail still lists the reservation and has given it no seat.
-        - "assigned": Korail lists it with seats - a seat was given and payment is due. Carries
-          "seats" and, when Korail sent one, the payment deadline ("deadline": (date, time)).
-        - "paid": no longer listed, and a ticket on the same train and day was issued.
-        - "ended": no longer listed and no such ticket: cancelled, expired or the train left.
+        - {"state": "waiting"}: listed, and Korail has put no seat on it.
+        - {"state": "assigned", "seats", "deadline": (date, time) | None}: listed with seats. This
+          is the app's reading - the listing names no standby state of its own - so callers say
+          "seems assigned" until a real answer has confirmed it.
+        - {"state": "paid"}: gone, and a ticket on that train and day was sold on or after the
+          day of the application.
+        - {"state": "ticketed"}: gone, and such a ticket exists but says nothing of when it was sold.
+        - {"state": "ended"}: gone with no such ticket: cancelled, expired or departed.
+        - {"state": "unknown"}: listed, but its own seat read failed.
 
-        Raises when Korail could not be asked: a failed read is not "ended". Telling a seat
-        given from one still awaited by the seats on the PNR is this app's reading of Korail's
-        answer; the listing names no standby state of its own.
+        Raises when the list (or, for a standby gone from it, the ticket list) could not be read:
+        a failed read is not "ended".
         """
         if not self._logged_in:
             raise ValueError("코레일에 로그인한 뒤 예약 대기를 확인해 주세요.")
-        wanted = str(rsv_id).strip()
-        row = next(
-            (item for item in self._reservation_rows() if str(item.pnr_no or "").strip() == wanted),
-            None,
-        )
-        if row is None:
-            issued = any(
-                str(getattr(ticket, "train_no", "")) == str(train_no)
-                and str(getattr(ticket, "dep_date", "")) == str(dep_date)
-                and (not dep_time or str(getattr(ticket, "dep_time", ""))[:4] == str(dep_time)[:4])
-                for ticket in self._ticket_rows()
-            )
-            return {"state": "paid" if issued else "ended"}
-        seats = [
-            f"{int(str(seat.car_no).strip())}호차 {str(seat.seat_no).strip()}"
-            for journey in self._hold_detail(wanted).journeys
-            for seat in journey.seats
-            if str(seat.car_no or "").strip().isdigit() and str(seat.seat_no or "").strip()
-        ]
-        if not seats:
-            return {"state": "waiting"}
-        raw = row.raw if isinstance(row.raw, dict) else {}
-        deadline = (raw.get("h_ntisu_lmt_dt"), raw.get("h_ntisu_lmt_tm"))
-        return {
-            "state": "assigned",
-            "seats": seats,
-            "deadline": deadline if all(isinstance(part, str) for part in deadline) else None,
-        }
+        listed = {str(row.pnr_no or "").strip(): row for row in self._reservation_rows()}
+        tickets = None
+        answers = {}
+        for standby in standbys:
+            wanted = str(standby["id"]).strip()
+            row = listed.get(wanted)
+            if row is None:
+                if tickets is None:
+                    tickets = self._ticket_rows()
+                answers[wanted] = {"state": self._standby_ticket_state(tickets, standby)}
+                continue
+            try:
+                detail = self._hold_detail(wanted)
+            except KorailAuthError:
+                raise
+            except Exception as exc:
+                logger.warning("Could not read a standby's seats (%s)", type(exc).__name__)
+                answers[wanted] = {"state": "unknown"}
+                continue
+            seats = [
+                f"{int(str(seat.car_no).strip())}호차 {str(seat.seat_no).strip()}"
+                for journey in detail.journeys
+                for seat in journey.seats
+                if str(seat.car_no or "").strip().isdigit() and str(seat.seat_no or "").strip()
+            ]
+            if not seats:
+                answers[wanted] = {"state": "waiting"}
+                continue
+            raw = row.raw if isinstance(row.raw, dict) else {}
+            deadline = (raw.get("h_ntisu_lmt_dt"), raw.get("h_ntisu_lmt_tm"))
+            answers[wanted] = {
+                "state": "assigned",
+                "seats": seats,
+                "deadline": deadline if all(isinstance(part, str) for part in deadline) else None,
+            }
+        return answers
+
+    @staticmethod
+    def _standby_ticket_state(tickets, standby: dict) -> str:
+        """paid, ticketed or ended for a standby gone from the reservation list (see above)."""
+        found = "ended"
+        dep_time = str(standby.get("dep_time") or "")
+        for ticket in tickets:
+            if str(getattr(ticket, "train_no", "")) != str(standby.get("train_no")):
+                continue
+            if str(getattr(ticket, "dep_date", "")) != str(standby.get("dep_date")):
+                continue
+            if dep_time and str(getattr(ticket, "dep_time", ""))[:4] != dep_time[:4]:
+                continue
+            sold = str(getattr(ticket, "sale_date", "") or "")[:8]
+            if not sold.isdigit():
+                found = "ticketed"
+            elif sold >= str(standby.get("applied_on") or ""):
+                return "paid"
+            # A ticket sold before the application is another booking on the same train.
+        return found
 
     def _reservation_rows(self):
         """This account's live reservations (ReservationView), standbys among them."""

@@ -57,22 +57,40 @@ def test_a_refused_or_unreachable_request_records_nothing(client, conditions):
     assert client.call("GET", "/status")["waitlists"] == []
 
 
-def test_an_assigned_seat_becomes_the_pending_payment_and_is_announced(client, conditions):
+def test_a_seat_that_seems_assigned_is_said_so_without_becoming_a_pending_payment(
+    client, conditions
+):
     apply(client, conditions)
     client.scenario(waitlist="assigned")
 
-    status = client.wait_for(lambda s: s["pending"], timeout=30)
+    status = client.wait_for(lambda s: s["waitlists"][0]["state"] == "assigned", timeout=30)
 
-    (pending,) = status["pending"]
     (entry,) = status["waitlists"]
-    assert pending["reservationId"] == entry["id"]
-    assert pending["seatLabels"] == ["3호차 7A"]
-    assert pending["expiresAt"]
-    assert entry["state"] == "assigned"
+    assert entry["seatLabels"] == ["3호차 7A"]
+    assert entry["expiresAt"]
+    # The payment watch (every few seconds) is not given an unconfirmed assignment.
+    assert status["pending"] == []
     items = client.call("GET", "/notifications")["items"]
-    assigned = [item for item in items if "배정됐어요" in item["text"]]
+    assigned = [item for item in items if "배정된 것 같아요" in item["text"]]
     assert len(assigned) == 1 and assigned[0]["kind"] == "payment"
     assert_app_wording(assigned[0]["text"])
+
+    # Paid in the Korail app: the slow look sees it gone with a ticket sold after applying.
+    client.scenario(waitlist="paid")
+    client.wait_for(lambda s: s["waitlists"][0]["state"] == "paid", timeout=30)
+
+
+def test_a_standby_of_another_korail_account_is_left_alone(client, conditions):
+    apply(client, conditions)
+    client.call("POST", "/register", {"username": "0000000001", "password": "korail-e2e"})
+    client.reset_log()
+
+    status = client.call("GET", "/status")
+
+    assert status["waitlists"][0]["otherAccount"] is True
+    code, _ = client.error("POST", "/waitlist/cancel", {"id": status["waitlists"][0]["id"]})
+    assert code == 409
+    assert not any(call["event"].startswith("waitlist") for call in client.korail_log())
 
 
 def test_a_failed_look_is_not_an_ending(client, conditions):
@@ -101,6 +119,8 @@ def test_withdrawing_a_standby_sends_its_number_to_korail(client, conditions):
     (entry,) = client.call("GET", "/status")["waitlists"]
 
     result = client.call("POST", "/waitlist/cancel", {"id": entry["id"]})
+    # Korail is asked where it stands first, so a seat assigned meanwhile is not given back unasked.
+    assert any(call["event"] == "waitlist_list" for call in client.korail_log())
 
     assert [e["state"] for e in result["waitlists"]] == ["cancelled"]
     withdrawn = [

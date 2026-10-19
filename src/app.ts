@@ -1076,7 +1076,7 @@ export class JariApp {
     const progress = total > pending.length ? ` · ${pending.length}/${total}석 확보${rest}` : "";
     return `<section class="card payment-card ${compact ? "compact-card" : ""}">
       ${badge({ element: "div", shape: "tag", tone: "warning", dot: true, className: "card-label", label: `결제가 필요한 예약 ${pending.length}건${progress}` })}
-      ${pending.map((item) => `<div class="payment-row"><div><strong>${escapeHtml(item.trainInfo)}</strong><small>${(this.state!.waitlists ?? []).some((entry) => entry.id === item.reservationId) ? "코레일 예약 대기 배정 · " : ""}${item.seatClass ? `${item.seatClass === "general" ? "일반실" : "특실"} · ` : ""}${item.seatLabels?.length ? `${escapeHtml(item.seatLabels.join(", "))} · ` : item.seatNumber !== null ? `좌석 ${escapeHtml(item.seatNumber)} · ` : ""}${item.reservationId ? `예약번호 ${escapeHtml(item.reservationId)}` : "예약번호 정보 없음"}</small></div><b>${item.expiresAt ? `${escapeHtml(formatStamp(item.expiresAt))}까지${this.renderTimeLeft(item.expiresAt)}` : "결제 기한 정보 없음"}</b></div>`).join("")}
+      ${pending.map((item) => `<div class="payment-row"><div><strong>${escapeHtml(item.trainInfo)}</strong><small>${item.seatClass ? `${item.seatClass === "general" ? "일반실" : "특실"} · ` : ""}${item.seatLabels?.length ? `${escapeHtml(item.seatLabels.join(", "))} · ` : item.seatNumber !== null ? `좌석 ${escapeHtml(item.seatNumber)} · ` : ""}${item.reservationId ? `예약번호 ${escapeHtml(item.reservationId)}` : "예약번호 정보 없음"}</small></div><b>${item.expiresAt ? `${escapeHtml(formatStamp(item.expiresAt))}까지${this.renderTimeLeft(item.expiresAt)}` : "결제 기한 정보 없음"}</b></div>`).join("")}
       ${linkButton({ label: "코레일에서 결제하기", trailing: "↗", href: this.state!.paymentUrl, attrs: { "data-korail-pay": true } })}
       ${compact ? button({ variant: "text", view: "activity", label: "예약 관리" }) : button({ variant: "ghost-danger", action: "cancel-pending", label: "예약 전체 취소" })}
     </section>`;
@@ -1088,46 +1088,51 @@ export class JariApp {
 
   /**
    * 앱에서 신청한 코레일 예약 대기. 신청은 좌석 확보가 아니라서 결제 카드와 따로 보여요.
-   * 배정돼 결제 카드로 넘어간 대기는 결제 카드가 보여 주니 여기서는 빼요.
+   * 배정은 서버가 코레일 응답을 읽은 추정이라 "배정된 것 같아요"로 말하고, 코레일 앱에서 확인하게 해요.
    */
   private renderWaitlistCards(): string {
     const state = this.state!;
-    const paying = new Set(state.pending.map((item) => item.reservationId));
     const minutes = this.waitlistMinutes();
     return (state.waitlists ?? [])
-      .filter((entry) => !(entry.state === "assigned" && paying.has(entry.id)))
       .map((entry) => {
+        const active = entry.state === "waiting" || entry.state === "assigned";
         const since = relativeTime(entry.checkedAt, Date.now());
+        const paused = !active ? ""
+          : entry.otherAccount ? "다른 코레일 계정으로 신청한 대기예요. 그 계정의 코레일 앱에서 확인해 주세요."
+          : entry.checkError === "unlinked" ? "코레일 계정 연결이 끊겨 확인을 멈췄어요. 계정을 연결하면 다시 확인해요."
+          : entry.checkError === "login" ? "코레일 로그인이 거절돼 확인을 멈췄어요. 코레일 계정을 다시 연결해 주세요."
+          : entry.checkFailed ? `마지막 확인에 실패했어요. ${minutes}분 뒤 다시 확인해요.`
+          : "";
+        const deadline = entry.expiresAt ? ` 결제 기한은 ${formatStamp(entry.expiresAt)}로 보여요.` : "";
         const view: Record<WaitlistEntry["state"], { tone: Tone; label: string; text: string }> = {
           waiting: {
             tone: "accent",
             label: "코레일 예약 대기 중",
-            text: entry.checkError === "login"
-              ? "코레일 로그인이 안 돼 확인을 멈췄어요. 코레일 계정을 다시 연결해 주세요."
-              : entry.checkFailed
-                ? `마지막 확인에 실패했어요. ${minutes}분 뒤 다시 확인해요.`
-                : `${since ? `${since} 확인 · ` : ""}좌석이 배정되면 알려드려요. ${minutes}분 간격으로 확인해요.`,
+            text: paused || `${since ? `${since} 확인 · ` : ""}좌석이 배정된 것 같으면 알려드려요. ${minutes}분 간격으로 확인해요.`,
           },
           assigned: {
             tone: "warning",
-            label: "좌석 배정됨 · 결제 필요",
-            text: `${entry.seatLabels?.length ? `${entry.seatLabels.join(", ")} · ` : ""}${entry.expiresAt ? `${formatStamp(entry.expiresAt)}까지 결제해 주세요.` : "결제 기한은 코레일 앱에서 확인해 주세요."}`,
+            label: "좌석 배정 확인 필요",
+            text: `${entry.seatLabels?.length ? `${entry.seatLabels.join(", ")} · ` : ""}좌석이 배정된 것 같아요. 코레일 앱에서 확인하고 결제해 주세요.${deadline}${paused ? ` ${paused}` : ""}`,
           },
-          paid: { tone: "success", label: "결제 확인", text: "코레일 승차권에서 확인해 주세요." },
+          paid: { tone: "success", label: "승차권 발권", text: "예약 대기로 배정된 좌석의 승차권이 발권됐어요. 코레일 승차권에서 확인해 주세요." },
+          ticketed: { tone: "success", label: "승차권 확인 필요", text: "대기가 끝났고 같은 열차 승차권이 보여요. 코레일 앱에서 확인해 주세요." },
           ended: { tone: "muted", label: "예약 대기 끝남", text: "코레일 목록에서 사라졌어요. 취소됐거나 기한이 지났을 수 있어요." },
           cancelled: { tone: "muted", label: "예약 대기 취소함", text: "코레일 예약 대기를 취소했어요." },
         };
-        const shown = view[entry.state] ?? view.ended;
-        const action = entry.state === "waiting"
-          ? button({ variant: "text-danger", label: "예약 대기 취소", attrs: { "data-waitlist-cancel": entry.id } })
-          : entry.state === "assigned"
-            ? linkButton({ label: "코레일에서 결제하기", trailing: "↗", href: state.paymentUrl, attrs: { "data-korail-pay": true } })
-            : "";
-        return `<section class="card waitlist-card" data-waitlist="${escapeHtml(entry.id)}" data-state="${escapeHtml(entry.state)}">
-          ${badge({ element: "div", shape: "tag", tone: shown.tone, dot: entry.state === "waiting" || entry.state === "assigned", className: "card-label", label: shown.label })}
+        const shown = entry.otherAccount && active
+          ? { tone: "muted" as Tone, label: "다른 코레일 계정의 대기", text: paused }
+          : view[entry.state] ?? view.ended;
+        const mine = active && !entry.otherAccount && entry.checkError !== "unlinked";
+        const actions = [
+          mine && entry.state === "assigned" ? linkButton({ label: "코레일에서 결제하기", trailing: "↗", href: state.paymentUrl, attrs: { "data-korail-pay": true } }) : "",
+          mine ? button({ variant: "text-danger", label: entry.state === "assigned" ? "대기 취소하고 좌석 돌려주기" : "예약 대기 취소", attrs: { "data-waitlist-cancel": entry.id } }) : "",
+        ].join("");
+        return `<section class="card waitlist-card" data-waitlist="${escapeHtml(entry.id)}" data-state="${escapeHtml(entry.otherAccount && active ? "other-account" : entry.state)}">
+          ${badge({ element: "div", shape: "tag", tone: shown.tone, dot: mine, className: "card-label", label: shown.label })}
           <strong class="waitlist-train">${escapeHtml(entry.trainInfo)}</strong>
           <p class="route-meta">${escapeHtml(`${entry.passengerCount}명 · 일반실 · ${shown.text}`)}</p>
-          ${action}
+          ${actions}
         </section>`;
       })
       .join("");
@@ -2469,13 +2474,27 @@ ${agentHost(agent)}`;
   private async cancelWaitlist(id: string): Promise<void> {
     const entry = this.state?.waitlists?.find((item) => item.id === id);
     if (!entry) return;
-    const confirmed = await this.confirmSheet({ title: "코레일 예약 대기를 취소할까요?", body: entry.trainInfo, confirmLabel: "대기 취소", danger: true });
+    const assigned = entry.state === "assigned";
+    const confirmed = await this.confirmSheet({
+      title: assigned ? "예약 대기를 취소하고 좌석을 돌려줄까요?" : "코레일 예약 대기를 취소할까요?",
+      body: assigned ? `${entry.trainInfo}. 배정된 것 같은 좌석도 코레일에 돌려줘요.` : entry.trainInfo,
+      confirmLabel: assigned ? "취소하고 돌려주기" : "대기 취소",
+      danger: true,
+    });
     if (!confirmed) return;
     await this.run(async (isCurrent) => {
-      const result = await this.api.cancelWaitlist(id);
-      if (!isCurrent()) return;
-      this.state!.waitlists = result.waitlists;
-      this.showToast("코레일 예약 대기를 취소했어요.");
+      try {
+        const result = await this.api.cancelWaitlist(id, assigned);
+        if (!isCurrent()) return;
+        this.state!.waitlists = result.waitlists;
+        this.showToast("코레일 예약 대기를 취소했어요.");
+      } catch (error) {
+        // 그사이 배정됐거나 끝났으면 서버가 409 로 알려요. 홈에는 문구 칸이 없으니 알림으로 말하고 상태를 다시 읽어요.
+        if (!(error instanceof ApiError) || error.kind === "auth" || error.kind === "stale") throw error;
+        if (!isCurrent()) return;
+        this.showToast(error.message);
+        void this.pollStatus(true);
+      }
     });
   }
 

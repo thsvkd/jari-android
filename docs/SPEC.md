@@ -69,7 +69,7 @@
 | `reservations/designated` | POST | 빈 좌석 즉시 예약(홀드) |
 | `search`, `schedule`, `search/cancel` | POST | 대기 시작·예약 시작·중지 |
 | `reservations/cancel` | POST | 결제 대기 예약 전체 취소 |
-| `waitlist/cancel` | POST | 코레일 예약 대기 하나 취소 `{id}` → `{cancelled, waitlists}`. id 는 본인 `waitlists`의 것이고 대기 중(`waiting`)만, 아니면 404. 코레일이 거절하면 503(§3.5) |
+| `waitlist/cancel` | POST | 코레일 예약 대기 하나 취소 `{id, releaseAssigned?}` → `{cancelled, waitlists}`. id 는 본인 `waitlists`의 대기 중·배정 항목, 아니면 404. 다른 계정의 대기·이미 끝남·그사이 배정은 409, 상태를 못 읽거나 코레일이 거절하면 503(§3.5) |
 | `favourites` GET/POST, `favourites/<id>` DELETE | | 즐겨찾기 |
 | `notify`, `notifications`, `devices` | | 알림 간격, 알림 목록, 푸시 토큰 |
 | `health` | GET | 인증 없음. Redis 응답·런타임 리스 보유 → 200 `{ok:true,…}`, 아니면 503. 업타임 프로브와 compose healthcheck용 |
@@ -115,20 +115,22 @@ seatPlanSummary: "015 일반실 3호차 5A·5B · 019 좌석 무관" | ""
 ### 3.5 코레일 예약 대기(`waitlists`)
 코레일 공식 예약 대기는 매진 열차에 한 번 신청하면 코레일이 취소표를 배정한다. 반복 조회가 없어 계정이 매크로로 막힐 위험이 취소표 감시보다 작으므로, 대기가 되는 매진 열차에는 예약 대기를 먼저 권하고 대기가 안 될 때만 감시를 쓴다.
 - 열차 목록의 `waitlistEligible`: `true`(코레일 `h_wait_rsv_flg` = `" 9"`) · `false`(그 밖의 값) · `null`(코레일이 표시를 보내지 않음). 목록 조회 실패는 전체가 오류(502→503)라 `false`와 섞이지 않는다.
-- 신청: `search`에 `conditions.waitlist=true`, 열차 한 편. 서버는 그 열차를 다시 한 번 조회해 대상인지 확인한 뒤 예약대기 요청(작업 코드 1102 + 대기 옵션) 한 번만 보낸다. 대상이 아니면 409, 코레일 거절은 422, 응답 없음은 503. 같은 날 같은 열차에 이미 대기·배정 중이면 409. 성공하면 `{started:false, waitlisted:true, trainNo}`이고 결제 대기(`pending`)가 아니다.
-- 기록: Redis `waitlist:{owner}`(JSON 목록, 70일 TTL). 항목 `{id(PNR), trainNo, trainInfo, depDate, depTime, passengerCount, state, createdAt, checkedAt, checkFailed, checkError?, expiresAt?, seatLabels?, finishedAt?}`. 여정 수는 취소용으로만 저장하고 앱에 보내지 않는다. 저장하지 못하면 코레일 대기를 취소하고 503.
-- 상태: `waiting` 대기 중 · `assigned` 좌석 배정(결제 필요) · `paid` 목록에서 사라지고 같은 열차·날짜 승차권 있음 · `ended` 사라지고 승차권 없음(취소·만료·출발) · `cancelled` 앱에서 취소.
-- 확인(`WaitlistWatch` 데몬 스레드 → `MobileGateway.check_waitlists`): 대기 하나당 `MOBILE_WAITLIST_CHECK_MINUTES`(기본 10, 10 미만이면 서버가 시작을 거부) 간격보다 자주 묻지 않는다. 한 번에 예약 목록(ReservationView) 1회 + 그 PNR 상세(certification.ReservationList) 1회, 목록에서 사라졌을 때만 승차권 목록 1회. 실패해도 확인 시각을 남겨 간격을 지키고(`checkFailed`), 상태는 바꾸지 않는다. 로그인이 거절되면 `checkError:"login"`으로 멈추고 계정을 다시 연결하면 푼다. 출발 1시간 뒤와 끝난 지 24시간 뒤의 항목은 지운다.
-- 배정 판정: 목록에 있고 PNR 상세에 좌석이 있으면 배정으로 본다(코레일 목록에 대기 상태 칸이 따로 없어서다. 실제 응답으로 검증 전). 기한은 목록 행의 `h_ntisu_lmt_dt`/`h_ntisu_lmt_tm`. 다른 결제 대기가 없으면 `PaymentStatus`를 만들어 기존 결제 카드·결제 알림·결제 감시·코레일 결제 버튼을 그대로 쓰고, 있으면 대기 항목만 `assigned`로 남아 대기 카드가 결제 버튼을 보인다.
-- 취소: 저장한 PNR·여정 수로 미결제 홀드 취소(ReservationCancelChk, 여정 순번 0001)를 보낸다.
-- 앱: 대기 대상이고 일반실이 매진인 열차(방향 미지정, 일반실을 원할 때)는 카드 첫 줄에 "코레일 예약 대기 신청"을 두고 목록 위에 한계(일반실만, 좌석 위치·방향·범위 지정 불가)를 알린다. 취소표 대기 버튼과 카드 선택은 그대로 남는다. 감시 확인 화면은 고른 열차가 대기 대상이면 예약 대기를 권한다. 홈·자세히 보기에 대기 카드(상태 배지, 마지막 확인, 취소 또는 결제 버튼)를 두고, 결제 카드로 넘어간 배정은 결제 카드에 "코레일 예약 대기 배정"으로만 보인다.
+- 신청: `search`에 `conditions.waitlist=true`, 열차 한 편. 서버는 그 열차를 다시 한 번 조회해 대상인지 확인한 뒤 예약대기 요청(작업 코드 1102 + 대기 옵션) 한 번만 보낸다. 대상이 아니면 409, 코레일 거절은 422, 응답 없음은 503. 같은 날 같은 열차에 이미 대기 중이면 409, 진행 중인 대기가 소유자당 5건(`WAITLIST_LIMIT`)이면 409. 성공하면 `{started:false, waitlisted:true, trainNo}`이고 결제 대기(`pending`)가 아니다. 코레일이 예약번호를 주지 않으면 기록하지 않고 "코레일 앱에서 확인" 503.
+- 기록: Redis `waitlist:{owner}`(JSON 목록, 70일 TTL). 항목 `{id(PNR), trainNo, trainInfo, depDate, depTime, passengerCount, state, createdAt, checkedAt, checkFailed, checkError?, expiresAt?, seatLabels?, finishedAt?}`. 여정 수와 신청한 코레일 계정의 키 있는 해시(`account`, 서버 비밀로 만든 HMAC)는 서버만 쓴다. 저장하지 못하면 코레일 대기를 취소하고 503(취소도 실패하면 "코레일 앱에서 확인" 503).
+- 상태: `waiting` 대기 중 · `assigned` 좌석이 배정된 것 같음 · `paid` 목록에서 사라지고 같은 열차·날짜에 신청한 날 이후 팔린 승차권 있음 · `ticketed` 사라지고 같은 열차 승차권은 있으나 판매일을 알 수 없음 · `ended` 사라지고 승차권 없음(취소·만료·출발) · `cancelled` 앱에서 취소. 보여 줄 때 `otherAccount`(지금 연결한 코레일 계정과 다름: 확인·취소하지 않는다)와 `checkError:"unlinked"`(연결된 계정 없음)를 덧붙인다.
+- 확인(`WaitlistWatch` 데몬 스레드 → `MobileGateway.check_waitlists`): 소유자당 `MOBILE_WAITLIST_CHECK_MINUTES`(기본 10, 10 미만·하루 초과·숫자 아님은 시작 거부) 간격보다 자주 묻지 않는다. 한 번에 그 소유자 대기 전체를 예약 목록(ReservationView) 1회로 보고, 목록에 있는 대기마다 PNR 상세(certification.ReservationList) 1회, 목록에서 사라진 대기가 있을 때만 승차권 목록 1회. 마지막 시도 시각은 메모리에도 남겨 기록 저장이 실패해도 간격을 지킨다. 코레일 호출은 사용자 락 밖에서 하고 결과만 락 안에서 합친다. 좌석표용 세션과 따로 로그인하므로 확인 실패가 좌석표 세션을 닫지 않는다. 실패해도 확인 시각을 남기고(`checkFailed`) 상태는 바꾸지 않는다. 로그인이 거절되면 그 주기에 한 번만 시도하고, 그 계정의 대기 전부를 `checkError:"login"`으로 멈추며 계정을 다시 연결하면 모두 푼다. 런타임이 멈추거나 리스를 잃으면 소유자 사이와 저장 직전에 멈춘다. 출발 1시간 뒤와 끝난 지 24시간 뒤의 항목은 지운다.
+- 배정: 목록에 있고 PNR 상세에 좌석이 있으면 "배정된 것 같다"고 본다(코레일 목록에 대기 상태 칸이 따로 없어서다. 실제 응답으로 검증 전). 결제 기한은 목록 행의 `h_ntisu_lmt_dt`/`h_ntisu_lmt_tm`. 확정이 아니고 결제 기한이 몇 시간일 수 있어 결제 대기 기록(`PaymentStatus`)과 결제 감시(몇 초 간격)로 넘기지 않는다. 같은 느린 간격으로 계속 확인해 목록에서 사라지면 `paid`·`ticketed`·`ended`로 바꾸고, 대기 카드와 알림은 "좌석이 배정된 것 같아요. 코레일 앱에서 확인하고 결제해 주세요"와 결제 기한(있으면), 코레일 결제 버튼을 보인다. 기한이 없으면 출발 시각까지만 둔다.
+- 취소: 본인 기록의 대기 중·배정 항목만, 지금 연결한 계정으로 신청한 것만(아니면 409). 먼저 그 대기를 한 번 읽어(실패하면 취소하지 않고 503) 이미 끝났으면 409, 그사이 배정됐으면 `releaseAssigned:true`가 없을 때 409("배정된 좌석도 돌려줘요")로 돌려보낸다. 그다음 저장한 PNR·여정 수로 미결제 홀드 취소(ReservationCancelChk, 여정 순번 0001)를 보낸다. 코레일이 취소를 받은 뒤 기록 저장이 실패해도 취소됐다고 답한다.
+- 회원 탈퇴: 연결한 계정으로 신청한 대기 중·배정 항목이 있으면 409(앱에서 먼저 대기 취소). 다른 계정의 대기는 막지 않는다.
+- 앱: 대기 대상이고 일반실이 매진인 열차(방향 미지정, 일반실을 원할 때)는 카드 첫 줄에 "코레일 예약 대기 신청"을 두고 목록 위에 한계(일반실만, 좌석 위치·방향·범위 지정 불가)를 알린다. 취소표 대기 버튼과 카드 선택은 그대로 남는다. 감시 확인 화면은 고른 열차가 대기 대상이면 예약 대기를 권한다. 홈·자세히 보기에 대기 카드(상태 배지, 마지막 확인, 멈춘 이유, 취소 또는 결제 버튼)를 둔다. 취소가 409로 돌아오면 그 문구를 알림으로 보이고 상태를 다시 읽는다.
+- MCP `get_status`: 대기마다 상태를 사실대로(배정은 "확정 아님", 로그인 거절·계정 끊김·다른 계정·확인 실패 포함) `notes`로 말한다.
 
 ## 4. 홈 상태 카드 규칙
 
 | 조건 | 카드 |
 |---|---|
 | pending > 0 | "빈자리를 찾았어요" + 예약 카드 우선 |
-| waitlists 있음 | 상태 카드 아래 대기 카드. 아무것도 없을 때의 자리표시자 대신 보인다 |
+| waitlists 있음 | 상태 카드 아래 대기 카드(배정된 것 같은 대기도 여기서 결제를 안내). 아무것도 없을 때의 자리표시자 대신 보인다 |
 | running 없음, scheduled 있음 | "정한 시각에 찾기 시작해요" |
 | running, healthy/unverified | 컴팩트: 배지 "찾는 중 · N분 전" · 구간 · 날짜·시간대·인원 · 자세히 보기 / 그만 찾기 |
 | running, error/stale/offline | 호박색 `!` 아이콘 + 제목 + 대처 문장 + 자세히 보기 |

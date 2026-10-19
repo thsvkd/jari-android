@@ -1,5 +1,6 @@
 """Explicit, isolated standalone configuration; never loads the bot's .env."""
 
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,8 @@ MAX_REQUEST_BYTES = 2 * 1024 * 1024
 # what got accounts blocked as macros, so this stays slow on purpose.
 WAITLIST_CHECK_MINUTES = 10
 WAITLIST_CHECK_MIN_MINUTES = 10
+# A day: past that a standby would be assigned and lost unseen between two looks.
+WAITLIST_CHECK_MAX_MINUTES = 24 * 60
 
 
 @dataclass(frozen=True)
@@ -88,9 +91,13 @@ class MobileConfig:
             waitlist_minutes = float(raw_minutes) if raw_minutes else WAITLIST_CHECK_MINUTES
         except ValueError:
             waitlist_minutes = -1.0
-        if not waitlist_minutes >= WAITLIST_CHECK_MIN_MINUTES:
+        if not (
+            math.isfinite(waitlist_minutes)
+            and WAITLIST_CHECK_MIN_MINUTES <= waitlist_minutes <= WAITLIST_CHECK_MAX_MINUTES
+        ):
             raise ValueError(
-                f"MOBILE_WAITLIST_CHECK_MINUTES must be at least {WAITLIST_CHECK_MIN_MINUTES}"
+                f"MOBILE_WAITLIST_CHECK_MINUTES must be at least {WAITLIST_CHECK_MIN_MINUTES} "
+                f"and at most {WAITLIST_CHECK_MAX_MINUTES}"
             )
         return cls(
             str(data / "identity.sqlite3"),

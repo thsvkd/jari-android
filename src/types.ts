@@ -135,7 +135,8 @@ export interface PendingReservation {
 
 /**
  * 앱에서 신청한 코레일 예약 대기 하나. 서버가 정한 간격(10분 이상)으로만 코레일에 확인해요.
- * waiting 대기 중 · assigned 좌석 배정(결제 필요) · paid 결제 확인 · ended 코레일 목록에서 사라짐 · cancelled 앱에서 취소.
+ * waiting 대기 중 · assigned 좌석이 배정된 것 같음(확정 아님, 코레일 앱에서 확인) · paid 신청 뒤 팔린 승차권 확인 ·
+ * ticketed 목록에서 사라졌고 같은 열차 승차권이 보임 · ended 코레일 목록에서 사라짐 · cancelled 앱에서 취소.
  */
 export interface WaitlistEntry {
   id: string;
@@ -144,13 +145,15 @@ export interface WaitlistEntry {
   depDate: string;
   depTime: string;
   passengerCount: number;
-  state: "waiting" | "assigned" | "paid" | "ended" | "cancelled";
+  state: "waiting" | "assigned" | "paid" | "ticketed" | "ended" | "cancelled";
+  /** 지금 연결한 것과 다른 코레일 계정으로 신청한 대기. 확인도 취소도 하지 않아요. */
+  otherAccount?: boolean;
   createdAt: string | null;
   checkedAt: string | null;
   /** 마지막 확인이 실패했어요. 대기가 끝났다는 뜻은 아니에요. */
   checkFailed?: boolean;
-  /** "login": 코레일 로그인이 거절돼 계정을 다시 연결할 때까지 확인을 멈췄어요. */
-  checkError?: string | null;
+  /** "login": 코레일 로그인이 거절돼 계정을 다시 연결할 때까지 확인을 멈췄어요. "unlinked": 코레일 계정 연결이 없어요. */
+  checkError?: "login" | "unlinked" | null;
   expiresAt?: string | null;
   seatLabels?: string[] | null;
   finishedAt?: string | null;
@@ -358,7 +361,8 @@ export interface MobileApi {
   cancelSearch(): Promise<{ stopped: boolean; unscheduled: boolean }>;
   cancelReservations(): Promise<{ cancelled: boolean; pending: PendingReservation[] }>;
   /** 신청한 코레일 예약 대기 하나를 취소해요. id 는 서버가 준 예약 대기 목록의 것이에요. */
-  cancelWaitlist(id: string): Promise<{ cancelled: boolean; waitlists: WaitlistEntry[] }>;
+  /** releaseAssigned: 배정된 것 같은 좌석도 돌려준다는 데 동의했어요. 없으면 그사이 배정된 대기는 409 로 돌아와요. */
+  cancelWaitlist(id: string, releaseAssigned?: boolean): Promise<{ cancelled: boolean; waitlists: WaitlistEntry[] }>;
   requestAccess(): Promise<{ requested: boolean; approved?: boolean }>;
   favourites(): Promise<{ favourites: Favourite[] } | Favourite[]>;
   saveFavourite(payload: { conditions: Conditions; name?: string }): Promise<{ saved: boolean; favourites: Favourite[] }>;
