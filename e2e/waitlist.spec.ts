@@ -101,7 +101,7 @@ test.describe("코레일 예약 대기", () => {
       await nextPoll(page);
     }
     await expect(card).toHaveAttribute("data-state", "other-account");
-    await expect(card).toContainText("다른 코레일 계정으로 신청한 대기예요");
+    await expect(card).toContainText("지금 연결한 코레일 계정에서 확인할 수 없는 대기예요");
     await expect(card.locator("[data-waitlist-cancel]")).toHaveCount(0);
     await expectCleanLayout(page, "다른 코레일 계정의 예약 대기 카드");
     const calls = await control.korailLog();

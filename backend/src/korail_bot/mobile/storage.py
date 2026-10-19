@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import time
 
 import redis
 from redis.backoff import NoBackoff
@@ -255,6 +256,17 @@ class MobileStorage(RedisStorage):
 
     def save_waitlist_link(self, chat_id, link):
         self.redis.set(f"waitlist_link:{chat_id}", json.dumps(link), ex=self.WAITLIST_TTL)
+
+    def mark_waitlist_connected(self, chat_id):
+        """When the Korail account was last connected (register): after a block, a fresh start."""
+        self.redis.set(f"waitlist_connected:{chat_id}", str(time.time()), ex=self.WAITLIST_TTL)
+
+    def get_waitlist_connected(self, chat_id):
+        raw = self.redis.get(f"waitlist_connected:{chat_id}")
+        try:
+            return float(raw) if raw else None
+        except ValueError:
+            return None
 
     def waitlist_owners(self):
         owners = []

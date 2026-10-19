@@ -28,6 +28,7 @@ Python 3.13 이상과 Redis가 필요합니다. Windows에는 시간대 데이�
 | `MOBILE_PUBLIC_URL` | 선택 사항; 에이전트(MCP)가 바깥에서 부르는 HTTPS 주소(경로 없이). 비우면 에이전트 연결(`/oauth/*`·`/.well-known/*`·`/mcp`)이 꺼짐 |
 | `MOBILE_GOOGLE_CLIENT_ID` | 선택 사항; Google Cloud의 웹 애플리케이션 OAuth 클라이언트 ID. Google 로그인을 쓰려면 아래 세 값을 모두 설정 |
 | `MOBILE_GOOGLE_CLIENT_SECRET` | 선택 사항; 같은 웹 OAuth 클라이언트의 서버 전용 비밀 값. 저장소와 앱 번들에 넣지 않음 |
+| (Redis 설정) | 예약 대기 기록과 계정 해시 키(`waitlist_tag_key`)가 Redis에 있으므로 축출하지 않게 둡니다(`maxmemory-policy noeviction`, compose.yaml 기본값). 키를 잃어도 다음 확인이 예약 목록으로 다시 맞추지만, 그사이 대기가 "이 계정에서 확인할 수 없는 대기"로 보일 수 있습니다 |
 | `MOBILE_WAITLIST_CHECK_MINUTES` | 선택 사항; 신청한 코레일 예약 대기의 배정 여부를 확인하는 간격(분, 소유자당). 기본 10, 10 미만·1440 초과면 시작을 거부 |
 
 선택 설정(감시 속도와 한도, docs/SPEC.md의 "감시 한도"):

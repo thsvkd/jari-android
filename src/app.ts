@@ -1098,7 +1098,7 @@ export class JariApp {
         const active = entry.state === "waiting" || entry.state === "assigned";
         const since = relativeTime(entry.checkedAt, Date.now());
         const paused = !active ? ""
-          : entry.otherAccount ? "다른 코레일 계정으로 신청한 대기예요. 그 계정의 코레일 앱에서 확인해 주세요."
+          : entry.otherAccount ? "지금 연결한 코레일 계정에서 확인할 수 없는 대기예요. 신청한 계정의 코레일 앱에서 확인해 주세요."
           : entry.checkError === "unlinked" ? "코레일 계정 연결이 끊겨 확인을 멈췄어요. 계정을 연결하면 다시 확인해요."
           : entry.checkError === "blocked" ? "코레일이 접속을 막은 것 같아 확인을 멈췄어요. 코레일 앱에서 대기를 확인해 주세요. 코레일 계정을 다시 연결하면 다시 확인해요."
           : entry.checkError === "login" ? "코레일 로그인이 거절돼 확인을 멈췄어요. 코레일 계정을 다시 연결해 주세요."
@@ -1122,7 +1122,7 @@ export class JariApp {
           cancelled: { tone: "muted", label: "예약 대기 취소함", text: "코레일 예약 대기를 취소했어요." },
         };
         const shown = entry.otherAccount && active
-          ? { tone: "muted" as Tone, label: "다른 코레일 계정의 대기", text: paused }
+          ? { tone: "muted" as Tone, label: "이 계정에서 확인할 수 없는 대기", text: paused }
           : view[entry.state] ?? view.ended;
         const mine = active && !entry.otherAccount && entry.checkError !== "unlinked";
         const actions = [

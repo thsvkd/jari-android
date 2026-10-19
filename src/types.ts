@@ -146,7 +146,7 @@ export interface WaitlistEntry {
   depTime: string;
   passengerCount: number;
   state: "waiting" | "assigned" | "paid" | "ticketed" | "ended" | "cancelled";
-  /** 지금 연결한 것과 다른 코레일 계정으로 신청한 대기. 확인도 취소도 하지 않아요. */
+  /** 지금 연결한 코레일 계정의 예약 목록에서 찾지 못한(또는 아직 맞춰 보지 못한) 대기. 이 계정으로는 취소하지 않아요. */
   otherAccount?: boolean;
   createdAt: string | null;
   checkedAt: string | null;

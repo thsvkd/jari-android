@@ -188,6 +188,8 @@ Docker 이미지에는 알림 의존성이 이미 들어 있습니다. Docker �
 | 빈자리가 얼마나 오래 남는지 보기(감시 간격을 정할 때, 읽기만) | `docker compose exec -T api python -m korail_bot.mobile seat-windows` |
 | 앱이 겪은 연결 실패 보기 | `docker compose logs api 2>&1 \| grep "Client connection miss"` |
 
+탈퇴 요청한 계정에 코레일 예약 대기가 남아 있으면 `delete-account`는 거부하고 그 사실을 알려 줍니다. 코레일은 앱 계정을 지워도 예약 대기를 그대로 두므로, 먼저 사용자에게 "남은 예약 대기는 코레일 앱에서 직접 확인·취소해 주세요"라고 안내하고 답을 받은 뒤에 `--acknowledge-waitlists`를 붙여 다시 실행합니다(`delete-account --username <앱 아이디> --acknowledge-waitlists`).
+
 ## 10. 외부 감시(선택)
 
 [`monitor/`](../monitor/)는 1분마다 `/api/mobile/health`를 앱과 같은 경로로 불러 보고, 2분 연속 실패하면 텔레그램으로 장애를, 풀리면 복구를 알리는 Cloudflare Worker입니다. 배포는 `monitor/deploy.sh`(비밀값은 Doppler에서 꺼냄), 시험 알림은 `monitor/deploy.sh --test-message`입니다. 자세한 판정 기준은 [SPEC §6](SPEC.md#6-연결-상태)에 있습니다.

@@ -811,7 +811,10 @@ def _waitlist_note(entry):
     train = entry.get("trainInfo") or f"열차 {entry.get('trainNo')}"
     state = entry.get("state")
     if state in ("waiting", "assigned") and entry.get("otherAccount"):
-        return f"코레일 예약 대기({train})는 다른 코레일 계정으로 신청한 것이라 확인하지 않아요."
+        return (
+            f"코레일 예약 대기({train})는 지금 연결한 코레일 계정의 예약 목록에서 찾지 못해 "
+            "확인하지 않아요(다른 계정으로 신청했을 수 있어요)."
+        )
     if state in ("waiting", "assigned") and entry.get("checkError") == "unlinked":
         return f"코레일 예약 대기({train})가 있지만 코레일 계정 연결이 끊겨 확인하지 않고 있어요."
     if state in ("waiting", "assigned") and entry.get("checkError") == "blocked":

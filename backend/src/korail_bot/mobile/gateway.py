@@ -65,6 +65,8 @@ WAITLIST_ACTIVE = ("waiting", "assigned")
 # Looks that wait for the person to connect the Korail account again (register): a refused
 # login, and a reply like a block - as a blocked watch ends and only a new one starts again.
 WAITLIST_PAUSED = ("login", "blocked")
+# Passes in a row with the login gone again right after a fresh one, taken as a block.
+WAITLIST_EXPIRY_LIMIT = 2
 # What the app is shown of a standby record (not the journey count or the account tag).
 WAITLIST_FIELDS = (
     "id",
@@ -194,6 +196,8 @@ class MobileGateway(MiniAppGateway):
         # Touched only by the standby look's own thread (WaitlistWatch).
         self._waitlist_rails = {}
         self._waitlist_attempts = {}
+        # Passes in a row whose fresh login was "gone" again at once (_waitlist_call).
+        self._waitlist_expiries = {}
         # chat_id -> (rail, expires_at, korail_id). Only touched under the
         # owner's operation lock, so a plain dict is enough.
         self._rails = {}
@@ -207,6 +211,10 @@ class MobileGateway(MiniAppGateway):
         paused = [entry for entry in entries if entry.pop("checkError", None)]
         if paused:
             self.storage.save_waitlists(chat_id, entries)
+        connected = getattr(self.storage, "mark_waitlist_connected", None)
+        if connected:
+            # Connecting the account again is the person saying to try again after a block.
+            connected(chat_id)
         return result
 
     @serialized_operation
@@ -729,6 +737,23 @@ class MobileGateway(MiniAppGateway):
         if not submission.waitlist:
             return super().start_search(chat_id, payload)
 
+        full = MiniAppError(
+            f"코레일 예약 대기는 한 번에 {WAITLIST_LIMIT}건까지 신청할 수 있어요. "
+            "홈에서 필요 없는 대기를 취소한 뒤 신청해 주세요.",
+            409,
+        )
+        active = [
+            entry
+            for entry in self._stored_waitlists(chat_id)
+            if entry.get("state") in WAITLIST_ACTIVE
+        ]
+        # Only the ones this account can withdraw count: another account's are out of its reach.
+        # Counted from the records first when the account is known, so a full list costs no login.
+        linked = self.storage.get_onboarded_account(chat_id)
+        known = self._known_member_tag(chat_id, linked)
+        if known and sum(self._same_account(e, known) for e in active) >= WAITLIST_LIMIT:
+            raise full
+
         session, submission = self._prepared_session(chat_id, payload)
         selected_trains = self._selected_trains(payload)
         session.train_info["selectedTrains"] = selected_trains
@@ -741,11 +766,6 @@ class MobileGateway(MiniAppGateway):
             raise MiniAppError("코레일 계정을 다시 연결한 뒤 신청해 주세요.", 428)
 
         train_no = selected_trains[0]
-        active = [
-            entry
-            for entry in self._stored_waitlists(chat_id)
-            if entry.get("state") in WAITLIST_ACTIVE
-        ]
         if any(
             entry.get("trainNo") == train_no and entry.get("depDate") == submission.dep_date
             for entry in active
@@ -756,16 +776,20 @@ class MobileGateway(MiniAppGateway):
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(credentials.korail_id, credentials.korail_pw):
             if getattr(rail, "login_blocked", False) is True:
+                self._pause_blocked(chat_id, utc_now())
                 raise MiniAppError(WAITLIST_BLOCKED, 502)
             raise login_failure(rail, LOGIN_REFUSED, 428)
-        member = self._member_tag(chat_id, credentials.korail_id, rail)
-        # Only the ones this account can withdraw count: another account's are out of its reach.
-        if sum(self._same_account(entry, member) for entry in active) >= WAITLIST_LIMIT:
+        # Remembered against the linked login, the one the screen and the slow look compare with.
+        member = self._member_tag(
+            chat_id, linked.korail_id if linked else credentials.korail_id, rail
+        )
+        if member is None:
+            # Without the member a standby could not be told from another account's later.
             raise MiniAppError(
-                f"코레일 예약 대기는 한 번에 {WAITLIST_LIMIT}건까지 신청할 수 있어요. "
-                "홈에서 필요 없는 대기를 취소한 뒤 신청해 주세요.",
-                409,
+                "코레일 회원 정보를 확인하지 못했어요. 잠시 뒤 다시 신청해 주세요.", 502
             )
+        if sum(self._same_account(entry, member) for entry in active) >= WAITLIST_LIMIT:
+            raise full
         try:
             registered = rail.request_waitlist(
                 dep_date=submission.dep_date,
@@ -796,6 +820,8 @@ class MobileGateway(MiniAppGateway):
                 type(exc).__name__,
             )
             if _blocked(rail, exc):
+                # The account's other standbys stop as well: a block is the account's, not a train's.
+                self._pause_blocked(chat_id, utc_now())
                 raise MiniAppError(WAITLIST_BLOCKED, 502) from exc
             raise MiniAppError(
                 "코레일 예약 대기를 신청하지 못했어요. 잠시 후 목록을 새로 조회해 주세요.",
@@ -951,7 +977,11 @@ class MobileGateway(MiniAppGateway):
 
     @staticmethod
     def _same_account(entry, tag):
-        return not entry.get("account") or entry["account"] == tag
+        """
+        Applied with this member. One with no tag (applied before the member was known) is not
+        taken for this account's: it is judged by this account's list alone (listed_only).
+        """
+        return bool(tag) and entry.get("account") == tag
 
     def bootstrap(self, chat_id):
         return {
@@ -987,11 +1017,22 @@ class MobileGateway(MiniAppGateway):
         except ValueError:
             return None
 
-    def _checkable(self, entries, tag):
+    # A standby this account's list was seen without is looked for again after this long.
+    WAITLIST_RECHECK_UNSEEN = timedelta(days=1)
+
+    def _seen_missing(self, entry, tag, now):
+        """Whether this account's list was seen without this standby lately."""
+        seen = entry.get("mismatchSeen")
+        if not tag or not isinstance(seen, dict) or seen.get("member") != tag:
+            return False
+        at = self._stamp(seen.get("at"))
+        return at is not None and now - at < self.WAITLIST_RECHECK_UNSEEN
+
+    def _checkable(self, entries, tag, now):
         """
-        Standbys a look may ask about. Another account's (by the last known member tag) are
-        included until this account's list has been seen without them once: a tag that went
-        stale is mended by finding the reservation in this account's list.
+        Standbys a look may ask about. Another account's (or an untagged one) are included until
+        this account's list has been seen without them, and again a day after that: a tag that
+        went stale is mended by finding the reservation in this account's list.
         """
         return [
             entry
@@ -999,7 +1040,7 @@ class MobileGateway(MiniAppGateway):
             if entry.get("state") in WAITLIST_ACTIVE
             and entry.get("checkError") not in WAITLIST_PAUSED
             and entry.get("id")
-            and not (tag and entry.get("account") and entry.get("mismatchSeen") == tag)
+            and not self._seen_missing(entry, tag, now)
         ]
 
     def _owner_due(self, chat_id, checkable, now, interval):
@@ -1039,6 +1080,8 @@ class MobileGateway(MiniAppGateway):
             self._drop_waitlist_rail(chat_id)
         for chat_id in [owner for owner in self._waitlist_attempts if owner not in alive]:
             self._waitlist_attempts.pop(chat_id, None)
+        for chat_id in [owner for owner in self._waitlist_expiries if owner not in alive]:
+            self._waitlist_expiries.pop(chat_id, None)
         return checked
 
     def _check_owner_waitlists(self, chat_id, interval, now):
@@ -1051,19 +1094,37 @@ class MobileGateway(MiniAppGateway):
         if account is None:
             self._drop_waitlist_rail(chat_id)
         known = self._known_member_tag(chat_id, account)
-        checkable = self._checkable(entries, known) if account else []
+        checkable = self._checkable(entries, known, now) if account else []
         if not checkable or not self._owner_due(chat_id, checkable, now, interval):
             if any(not self._waitlist_kept(entry, now) for entry in entries):
                 self._merge_waitlists(chat_id, now, {}, ids=(), background=True)
+            return 0
+        if self._watch_blocked_since_connected(chat_id):
+            # The account's watch ended on a reply like a block after the account was last
+            # connected: the standby look does not knock on the same door. Nothing is asked.
+            self._merge_waitlists(
+                chat_id,
+                now,
+                {},
+                failure="blocked",
+                ids={entry["id"] for entry in checkable},
+                background=True,
+            )
             return 0
         self._waitlist_attempts[chat_id] = now
         answers, failure, member, others = {}, None, known, set()
         try:
             rail = self._waitlist_rail(chat_id, account)
-            member = self._member_tag(chat_id, account.korail_id, rail) or known
+            member = self._member_tag(chat_id, account.korail_id, rail)
+            if member is None:
+                # Without the member nothing can be told apart: the look counts as failed, and
+                # no standby is marked as missing from a list that was never matched to it.
+                raise RuntimeError("Korail named no member for the login")
             others = {e["id"] for e in checkable if not self._same_account(e, member)}
             checkable = [
-                e for e in checkable if e["id"] not in others or e.get("mismatchSeen") != member
+                e
+                for e in checkable
+                if e["id"] not in others or not self._seen_missing(e, member, now)
             ]
             others &= {e["id"] for e in checkable}
             if checkable:
@@ -1073,7 +1134,9 @@ class MobileGateway(MiniAppGateway):
                     lambda: rail.waitlist_states(
                         [self._standby(e, listed_only=e["id"] in others) for e in checkable]
                     ),
+                    owner=chat_id,
                 )
+            self._waitlist_expiries.pop(chat_id, None)
         except _WaitlistLoginRefused:
             # One refused login per pass at most: every standby of this account waits for the
             # account to be connected again (register), so the next pass does not try again.
@@ -1151,8 +1214,12 @@ class MobileGateway(MiniAppGateway):
             raise RuntimeError("Korail did not take the login")
         raise _WaitlistLoginRefused()
 
-    def _waitlist_call(self, rail, account, call):
-        """call(), and once more on a fresh login if Korail says the login is gone."""
+    def _waitlist_call(self, rail, account, call, *, owner=None):
+        """
+        call(), and once more on a fresh login if Korail says the login is gone. A login that is
+        "gone" again right after a fresh one, in two passes running, is how a block can look
+        too: it stops like one rather than logging in every ten minutes forever.
+        """
         try:
             return call()
         except KorailAuthContinuationRequired:
@@ -1163,7 +1230,16 @@ class MobileGateway(MiniAppGateway):
             if isinstance(exc, KorailAppError) and not _login_gone(exc):
                 raise
         self._log_in_for_waitlist(rail, account)
-        return call()
+        try:
+            return call()
+        except (KorailAuthError, KorailAppError) as exc:
+            if _blocked(rail, exc) or (isinstance(exc, KorailAppError) and not _login_gone(exc)):
+                raise
+            if owner is not None:
+                self._waitlist_expiries[owner] = self._waitlist_expiries.get(owner, 0) + 1
+                if self._waitlist_expiries[owner] >= WAITLIST_EXPIRY_LIMIT:
+                    raise _WaitlistBlocked() from exc
+            raise
 
     def _drop_waitlist_rail(self, chat_id):
         cached = self._waitlist_rails.pop(chat_id, None)
@@ -1196,7 +1272,7 @@ class MobileGateway(MiniAppGateway):
                 if found not in ("waiting", "assigned", "unknown"):
                     # Not in this account's list: another account's, as its tag said. Not
                     # asked about again until the linked account changes.
-                    entry["mismatchSeen"] = member
+                    entry["mismatchSeen"] = {"member": member, "at": now.isoformat()}
                     continue
                 # Listed under this account: the tag was stale. It is this account's after all.
                 entry["account"] = member
@@ -1296,6 +1372,16 @@ class MobileGateway(MiniAppGateway):
                 type(exc).__name__,
             )
 
+    def _watch_blocked_since_connected(self, chat_id):
+        """Whether the account's watch last ended on a block, after it was last connected."""
+        reader = getattr(self.storage, "get_search_ended", None)
+        ended = reader(chat_id) if reader else None
+        if not isinstance(ended, dict) or ended.get("reason") != "blocked":
+            return False
+        connected = getattr(self.storage, "get_waitlist_connected", None)
+        since = connected(chat_id) if connected else None
+        return since is None or float(ended.get("at") or 0) > since
+
     def _pause_blocked(self, chat_id, now):
         """Stop looking at every standby of this owner until the account is connected again."""
         ids = {
@@ -1332,29 +1418,60 @@ class MobileGateway(MiniAppGateway):
         if account is None:
             raise MiniAppError("코레일 계정을 연결한 뒤 예약 대기를 취소해 주세요.", 428)
         other_account = MiniAppError(
-            "다른 코레일 계정으로 신청한 예약 대기예요. 그 계정의 코레일 앱에서 취소해 주세요.",
+            "지금 연결한 코레일 계정의 예약 목록에서 찾지 못한 대기예요. "
+            "신청한 계정의 코레일 앱에서 취소해 주세요.",
             409,
         )
-        known = self._known_member_tag(chat_id, account)
-        if known and entry.get("account") and entry.get("mismatchSeen") == known:
-            raise other_account
-        rail = self._logged_in_rail(chat_id)
-        member = self._member_tag(chat_id, account.korail_id, rail) or known
-        # A stale tag is given the benefit of the doubt only as far as this account's own list:
-        # listed there, it is this account's; not listed, it is left alone.
-        foreign = not self._same_account(entry, member)
         now = utc_now()
+        known = self._known_member_tag(chat_id, account)
+        if self._seen_missing(entry, known, now):
+            raise other_account
         unread = MiniAppError(
             "코레일에서 예약 대기 상태를 확인하지 못해 취소하지 않았어요. 잠시 후 다시 시도해 주세요.",
             502,
         )
+        # A login of its own, like the slow look's: a login answered like a block is seen as one
+        # (rather than "check your password"), and the seat-map session is left alone.
+        rail = self.conversation._rail_service(chat_id)
         try:
-            answers = self._again_if_expired(
-                chat_id,
+            return self._withdraw(chat_id, entry, entries, payload, account, rail, now, unread)
+        except _WaitlistBlocked as exc:
+            self._pause_blocked(chat_id, now)
+            raise MiniAppError(WAITLIST_CANCEL_BLOCKED, 502) from exc
+        except _WaitlistLoginRefused as exc:
+            raise login_failure(rail, LOGIN_REFUSED, 428) from exc
+        finally:
+            try:
+                rail.close()
+            except Exception as exc:
+                logger.debug("Closing a withdrawal login failed (%s)", type(exc).__name__)
+
+    def _withdraw(self, chat_id, entry, entries, payload, account, rail, now, unread):
+        other_account = MiniAppError(
+            "지금 연결한 코레일 계정의 예약 목록에서 찾지 못한 대기예요. "
+            "신청한 계정의 코레일 앱에서 취소해 주세요.",
+            409,
+        )
+        try:
+            self._log_in_for_waitlist(rail, account)
+        except RuntimeError as exc:
+            raise MiniAppError(LOGIN_REFUSED, 502) from exc
+        member = self._member_tag(chat_id, account.korail_id, rail)
+        if member is None:
+            raise MiniAppError(
+                "코레일 회원 정보를 확인하지 못해 취소하지 않았어요. 잠시 뒤 다시 시도해 주세요.",
+                502,
+            )
+        # A stale or missing tag is given the benefit of the doubt only as far as this account's
+        # own list: listed there, it is this account's; not listed, it is left alone.
+        foreign = not self._same_account(entry, member)
+        try:
+            answers = self._waitlist_call(
                 rail,
+                account,
                 lambda: rail.waitlist_states([self._standby(entry, listed_only=foreign)]),
             )
-        except MiniAppError:
+        except (_WaitlistBlocked, _WaitlistLoginRefused):
             raise
         except Exception as exc:
             logger.error(
@@ -1363,8 +1480,7 @@ class MobileGateway(MiniAppGateway):
                 type(exc).__name__,
             )
             if _blocked(rail, exc):
-                self._pause_blocked(chat_id, now)
-                raise MiniAppError(WAITLIST_CANCEL_BLOCKED, 502) from exc
+                raise _WaitlistBlocked() from exc
             raise unread from exc
         answer = answers.get(entry["id"]) or {}
         state = answer.get("state")
@@ -1389,10 +1505,12 @@ class MobileGateway(MiniAppGateway):
                 409,
             )
         try:
-            self._again_if_expired(
-                chat_id, rail, lambda: rail.cancel_waitlist(entry["id"], entry.get("journeyCount"))
+            self._waitlist_call(
+                rail,
+                account,
+                lambda: rail.cancel_waitlist(entry["id"], entry.get("journeyCount")),
             )
-        except MiniAppError:
+        except (_WaitlistBlocked, _WaitlistLoginRefused):
             raise
         except Exception as exc:
             logger.error(
@@ -1401,8 +1519,7 @@ class MobileGateway(MiniAppGateway):
                 type(exc).__name__,
             )
             if _blocked(rail, exc):
-                self._pause_blocked(chat_id, now)
-                raise MiniAppError(WAITLIST_CANCEL_BLOCKED, 502) from exc
+                raise _WaitlistBlocked() from exc
             raise MiniAppError(
                 "예약 대기를 취소하지 못했어요. 코레일 앱에서 예약 내역을 확인해 주세요.", 502
             ) from exc

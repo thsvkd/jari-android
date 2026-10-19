@@ -482,7 +482,7 @@ def test_a_standby_of_another_korail_account_is_seen_missing_once_then_left_alon
     assert entry["state"] == "waiting"
     refused = cancel(app, "PNR015")
     assert refused.status_code == 409
-    assert "다른 코레일 계정" in refused.json["error"]
+    assert "찾지 못한 대기" in refused.json["error"]
     app.rail.cancel_waitlist.assert_not_called()
 
 
@@ -921,7 +921,7 @@ def test_get_status_tells_an_agent_about_standbys_as_they_are():
     assert "아무" not in notes and "없어요." not in result["notes"][0]
     assert "10분 이상 간격" in notes and "끝났다는 뜻은 아니에요" in notes
     assert "배정된 것 같아요(확정 아님)" in notes
-    assert "다시 연결" in notes and "다른 코레일 계정" in notes
+    assert "다시 연결" in notes and "예약 목록에서 찾지 못해" in notes
 
 
 def test_the_watch_thread_starts_once_and_stops_on_request():
@@ -1045,3 +1045,157 @@ def test_get_status_says_a_standby_look_was_stopped_by_a_block():
     )
 
     assert "접속을 막은 것 같아" in " ".join(result["notes"])
+
+
+# ---------------------------------------------------------------- one account, one verdict
+
+
+def test_a_watch_that_ended_on_a_block_stops_the_standby_look_without_asking(app):
+    apply(app)
+    # Connected a while ago; the watch was blocked since.
+    app.storage.redis.set(f"waitlist_connected:{app.owner}", "1")
+    app.storage.mark_search_ended(app.owner, "blocked", 4242)
+    logins = app.rail.login.call_count
+
+    app.gateway.check_waitlists(now=utc_now() + LATER)
+
+    assert looks(app) == 0
+    assert app.rail.login.call_count == logins
+    assert status(app)["waitlists"][0]["checkError"] == "blocked"
+
+
+def test_a_block_older_than_the_last_connection_does_not_stop_the_look(app):
+    apply(app)
+    app.storage.mark_search_ended(app.owner, "blocked", 4242)
+    later = utc_now() + LATER
+    app.storage.redis.set(f"waitlist_connected:{app.owner}", "1")
+    app.gateway.check_waitlists(now=later)
+    assert status(app)["waitlists"][0]["checkError"] == "blocked"
+    # Connecting the account again is the person's fresh start.
+    app.http.post(
+        "/api/mobile/register",
+        headers=app.headers,
+        json={"username": "01012345678", "password": "rail password"},
+    )
+
+    assert app.gateway.check_waitlists(now=later + timedelta(hours=1)) == 1
+
+
+def test_an_application_answered_like_a_block_stops_the_other_standbys_too(app):
+    apply(app, "015")
+    app.rail.request_waitlist.side_effect = blocked_reply()
+
+    assert apply(app, "017").status_code == 503
+
+    assert status(app)["waitlists"][0]["checkError"] == "blocked"
+
+
+def test_a_withdrawal_whose_login_is_answered_like_a_block_is_a_block(app):
+    apply(app)
+    app.rail.login.return_value = False
+    app.rail.login_blocked = True
+
+    answered = cancel(app, "PNR015")
+
+    assert answered.status_code == 503
+    assert "코레일 앱에서 직접 취소" in answered.json["error"]
+    assert status(app)["waitlists"][0]["checkError"] == "blocked"
+    app.rail.cancel_waitlist.assert_not_called()
+
+
+def test_a_login_gone_again_right_after_a_fresh_one_twice_in_a_row_stops_like_a_block(app):
+    apply(app)
+    app.rail.waitlist_states.side_effect = KorailSessionExpiredError("P058", "로그인이 필요합니다")
+    later = utc_now() + LATER
+
+    for passes in range(6):
+        app.gateway.check_waitlists(now=later + timedelta(minutes=11 * passes))
+
+    # Two passes (each: ask, log in again, ask), then nothing more.
+    assert looks(app) == 4
+    assert status(app)["waitlists"][0]["checkError"] == "blocked"
+
+
+def test_a_standby_is_not_applied_for_without_the_korail_member(app):
+    app.rail.member_number.side_effect = lambda: None
+
+    answered = apply(app)
+
+    assert answered.status_code == 503
+    assert "회원 정보" in answered.json["error"]
+    app.rail.request_waitlist.assert_not_called()
+
+
+def test_an_untagged_standby_is_judged_only_by_this_accounts_list(app):
+    apply(app)
+    entries = app.storage.get_waitlists(app.owner)
+    entries[0].pop("account")
+    app.storage.save_waitlists(app.owner, entries)
+    app.owned["PNR015"] = "MSOMEONE"
+
+    app.gateway.check_waitlists(now=utc_now() + LATER)
+
+    asked = app.rail.waitlist_states.call_args.args[0][0]
+    assert asked["listed_only"] is True
+    (entry,) = status(app)["waitlists"]
+    # Not in this account's list: neither "ended" nor this account's to withdraw.
+    assert entry["state"] == "waiting" and entry["otherAccount"] is True
+    assert cancel(app, "PNR015").status_code == 409
+
+
+def test_a_look_without_the_member_is_a_failed_look_and_marks_nothing_missing(app):
+    apply(app)
+    app.rail.member_number.side_effect = lambda: None
+
+    app.gateway.check_waitlists(now=utc_now() + LATER)
+
+    stored = app.storage.get_waitlists(app.owner)[0]
+    assert stored["checkFailed"] is True and "mismatchSeen" not in stored
+    assert looks(app) == 0
+
+
+def test_a_standby_missing_from_this_accounts_list_is_looked_for_again_a_day_later(app):
+    apply(app)
+    app.http.post(
+        "/api/mobile/register",
+        headers=app.headers,
+        json={"username": "01099998888", "password": "other"},
+    )
+    later = utc_now() + LATER
+
+    app.gateway.check_waitlists(now=later)
+    app.gateway.check_waitlists(now=later + timedelta(hours=12))
+    assert looks(app) == 1
+
+    app.gateway.check_waitlists(now=later + timedelta(hours=25))
+    assert looks(app) == 2
+    assert app.rail.waitlist_states.call_args.args[0][0]["listed_only"] is True
+
+
+def test_a_full_list_of_this_accounts_standbys_is_refused_before_logging_in(app):
+    for number in range(WAITLIST_LIMIT):
+        apply(app, f"0{number}1")
+    logins = app.rail.login.call_count
+
+    assert apply(app, "099").status_code == 409
+    assert app.rail.login.call_count == logins
+
+
+def test_the_operator_deletes_an_account_with_standbys_only_when_told_the_user_was_informed(
+    app, monkeypatch
+):
+    from korail_bot.mobile.__main__ import delete_account as delete_account_cli
+
+    apply(app)
+    monkeypatch.setattr("korail_bot.mobile.runtime.MobileRuntime", lambda config, push: app.runtime)
+    monkeypatch.setattr(app.storage, "close", lambda: None)
+
+    with pytest.raises(ValueError, match="--acknowledge-waitlists") as refused:
+        delete_account_cli(app.runtime.config, "alice")
+    assert "코레일 앱에서 예약 대기를 관리하라고 안내했는지" in str(refused.value)
+    assert app.runtime.identity.find_user("alice") is not None
+
+    assert delete_account_cli(app.runtime.config, "alice", acknowledge_waitlists=True).startswith(
+        "Deleted alice"
+    )
+    assert app.runtime.identity.find_user("alice") is None

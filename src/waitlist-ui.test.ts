@@ -139,7 +139,7 @@ it("shows a standby of another Korail account, or one with no account linked, wi
 
   const other = root.querySelector("[data-waitlist='W-other']")!;
   expect(other.getAttribute("data-state")).toBe("other-account");
-  expect(other.textContent).toContain("다른 코레일 계정의 대기");
+  expect(other.textContent).toContain("이 계정에서 확인할 수 없는 대기");
   expect(other.querySelector("[data-waitlist-cancel]")).toBeNull();
   const unlinked = root.querySelector("[data-waitlist='W-unlinked']")!;
   expect(unlinked.textContent).toContain("코레일 계정 연결이 끊겨");

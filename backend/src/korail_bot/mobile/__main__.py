@@ -29,6 +29,12 @@ def main():
         help="Delete an app account and everything kept for it (a deletion request made by email)",
     )
     delete.add_argument("--username", required=True)
+    delete.add_argument(
+        "--acknowledge-waitlists",
+        action="store_true",
+        help="Delete even with Korail standbys left, once the user was told to manage them "
+        "in the Korail app",
+    )
     commands.add_parser(
         "seat-windows",
         help="How long freed seats stayed free, for choosing the search interval (read-only)",
@@ -60,7 +66,11 @@ def main():
             print(json.dumps(seat_windows(config), ensure_ascii=False, indent=2))
             return
         if args.command == "delete-account":
-            print(delete_account(config, args.username))
+            print(
+                delete_account(
+                    config, args.username, acknowledge_waitlists=args.acknowledge_waitlists
+                )
+            )
             return
         from waitress import serve as serve_wsgi
 
@@ -104,7 +114,7 @@ def main():
         pass
 
 
-def delete_account(config, username):
+def delete_account(config, username, *, acknowledge_waitlists=False):
     """
     What the app's own 회원 탈퇴 does, for a request that came by email: run
     beside the API (docker compose exec) against the same Redis and database.
@@ -115,6 +125,9 @@ def delete_account(config, username):
     once the account is gone a last pass stops and erases whatever a request
     already in flight left behind (a search it started, a timezone a poll
     wrote back). A refusal (409) leaves the account, logged out.
+
+    Korail standbys left on the account refuse it too, as in the app, until the operator says
+    (acknowledge_waitlists) the user was told to manage them in the Korail app.
     """
     from korail_bot.mobile.api import erase_account
     from korail_bot.mobile.runtime import MobileRuntime
@@ -128,8 +141,21 @@ def delete_account(config, username):
             raise ValueError(f"No app account named {username!r}")
         runtime.identity.revoke_sessions(user["id"])
         try:
-            erase_account(runtime.identity, runtime.gateway, runtime.notifications, user)
+            erase_account(
+                runtime.identity,
+                runtime.gateway,
+                runtime.notifications,
+                user,
+                acknowledge_waitlists=acknowledge_waitlists,
+            )
         except MiniAppError as exc:
+            if getattr(exc, "code", None) == "waitlists_active":
+                raise ValueError(
+                    f"{exc} Korail keeps these standbys after the account is gone. Check that "
+                    "the user was told to manage them in the Korail app (사용자에게 코레일 앱에서 "
+                    "예약 대기를 관리하라고 안내했는지 확인하세요), then run again with "
+                    "--acknowledge-waitlists."
+                ) from exc
             raise ValueError(str(exc)) from exc
         runtime.gateway.cancel_search(user["storage_id"])
         runtime.storage.delete_user_data(user["storage_id"])
