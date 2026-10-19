@@ -62,6 +62,9 @@ UNSURE_BOOKING = "예약이 됐는지 확인하지 못했어요. 코레일 앱�
 # Standbys an owner may have applied for and still be waiting on (or assigned) at once.
 WAITLIST_LIMIT = 5
 WAITLIST_ACTIVE = ("waiting", "assigned")
+# Looks that wait for the person to connect the Korail account again (register): a refused
+# login, and a reply like a block - as a blocked watch ends and only a new one starts again.
+WAITLIST_PAUSED = ("login", "blocked")
 # What the app is shown of a standby record (not the journey count or the account tag).
 WAITLIST_FIELDS = (
     "id",
@@ -83,6 +86,26 @@ WAITLIST_FIELDS = (
 
 class _WaitlistLoginRefused(Exception):
     """Korail refused the linked account's login during a standby look."""
+
+
+class _WaitlistBlocked(Exception):
+    """Korail answered a standby look (or its login) the way it answers a blocked client."""
+
+
+WAITLIST_BLOCKED = "코레일이 접속을 막은 것 같아요. 더 묻지 않고 멈췄어요. 코레일 앱에서 예약 대기를 확인해 주세요."
+
+
+WAITLIST_CANCEL_BLOCKED = (
+    "코레일이 접속을 막은 것 같아 예약 대기를 취소하지 못했어요. 코레일 앱에서 직접 취소해 주세요."
+)
+
+
+def _blocked(rail, exc):
+    """Whether a failure is the reply a blocked client gets (KorailService.looks_blocked)."""
+    if isinstance(exc, _WaitlistBlocked):
+        return True
+    judge = getattr(rail, "looks_blocked", None)
+    return callable(judge) and judge(exc) is True
 
 
 class WaitlistsActive(MiniAppError):
@@ -732,6 +755,8 @@ class MobileGateway(MiniAppGateway):
             )
         rail = self.conversation._rail_service(chat_id)
         if not rail.login(credentials.korail_id, credentials.korail_pw):
+            if getattr(rail, "login_blocked", False) is True:
+                raise MiniAppError(WAITLIST_BLOCKED, 502)
             raise login_failure(rail, LOGIN_REFUSED, 428)
         member = self._member_tag(chat_id, credentials.korail_id, rail)
         # Only the ones this account can withdraw count: another account's are out of its reach.
@@ -770,6 +795,8 @@ class MobileGateway(MiniAppGateway):
                 chat_id,
                 type(exc).__name__,
             )
+            if _blocked(rail, exc):
+                raise MiniAppError(WAITLIST_BLOCKED, 502) from exc
             raise MiniAppError(
                 "코레일 예약 대기를 신청하지 못했어요. 잠시 후 목록을 새로 조회해 주세요.",
                 502,
@@ -933,9 +960,6 @@ class MobileGateway(MiniAppGateway):
             "waitlistCheckMinutes": self.waitlist_check_minutes,
         }
 
-    def status(self, chat_id):
-        return {**super().status(chat_id), "waitlists": self._waitlists(chat_id)}
-
     @staticmethod
     def _stamp(value):
         try:
@@ -973,7 +997,7 @@ class MobileGateway(MiniAppGateway):
             entry
             for entry in entries
             if entry.get("state") in WAITLIST_ACTIVE
-            and entry.get("checkError") != "login"
+            and entry.get("checkError") not in WAITLIST_PAUSED
             and entry.get("id")
             and not (tag and entry.get("account") and entry.get("mismatchSeen") == tag)
         ]
@@ -1057,9 +1081,17 @@ class MobileGateway(MiniAppGateway):
             self._drop_waitlist_rail(chat_id)
             logger.warning("Standby check for chat_id=%s: Korail refused the login", chat_id)
         except Exception as exc:
-            failure = "failed"
+            rail = self._waitlist_rails.get(chat_id, (None,))[0]
+            failure = "blocked" if _blocked(rail, exc) else "failed"
             self._drop_waitlist_rail(chat_id)
-            logger.warning("Standby check for chat_id=%s failed (%s)", chat_id, type(exc).__name__)
+            if failure == "blocked":
+                # Nothing more is asked for this account - no login, no next standby - until the
+                # person connects the account again, as a watch stops at the first such reply.
+                logger.error("Standby check for chat_id=%s: Korail answered like a block", chat_id)
+            else:
+                logger.warning(
+                    "Standby check for chat_id=%s failed (%s)", chat_id, type(exc).__name__
+                )
         if self.waitlist_should_stop():
             return 0
         self._merge_waitlists(
@@ -1113,6 +1145,8 @@ class MobileGateway(MiniAppGateway):
     def _log_in_for_waitlist(rail, account):
         if rail.login(account.korail_id, account.korail_pw):
             return
+        if getattr(rail, "login_blocked", False) is True:
+            raise _WaitlistBlocked()
         if getattr(rail, "login_unavailable", False) is True:
             raise RuntimeError("Korail did not take the login")
         raise _WaitlistLoginRefused()
@@ -1124,6 +1158,8 @@ class MobileGateway(MiniAppGateway):
         except KorailAuthContinuationRequired:
             raise
         except (KorailAuthError, KorailAppError) as exc:
+            if _blocked(rail, exc):
+                raise
             if isinstance(exc, KorailAppError) and not _login_gone(exc):
                 raise
         self._log_in_for_waitlist(rail, account)
@@ -1166,9 +1202,9 @@ class MobileGateway(MiniAppGateway):
                 entry["account"] = member
                 entry.pop("mismatchSeen", None)
             entry["checkedAt"] = now.isoformat()
-            if failure == "login":
+            if failure in WAITLIST_PAUSED:
                 entry["checkFailed"] = True
-                entry["checkError"] = "login"
+                entry["checkError"] = failure
                 continue
             answer = answers.get(entry["id"]) if failure is None else None
             state = (answer or {}).get("state")
@@ -1260,6 +1296,15 @@ class MobileGateway(MiniAppGateway):
                 type(exc).__name__,
             )
 
+    def _pause_blocked(self, chat_id, now):
+        """Stop looking at every standby of this owner until the account is connected again."""
+        ids = {
+            entry["id"]
+            for entry in self._stored_waitlists(chat_id)
+            if entry.get("state") in WAITLIST_ACTIVE and entry.get("id")
+        }
+        self._merge_waitlists(chat_id, now, {}, failure="blocked", ids=ids)
+
     @serialized_operation
     def cancel_waitlist(self, chat_id, payload):
         """
@@ -1317,6 +1362,9 @@ class MobileGateway(MiniAppGateway):
                 chat_id,
                 type(exc).__name__,
             )
+            if _blocked(rail, exc):
+                self._pause_blocked(chat_id, now)
+                raise MiniAppError(WAITLIST_CANCEL_BLOCKED, 502) from exc
             raise unread from exc
         answer = answers.get(entry["id"]) or {}
         state = answer.get("state")
@@ -1352,6 +1400,9 @@ class MobileGateway(MiniAppGateway):
                 chat_id,
                 type(exc).__name__,
             )
+            if _blocked(rail, exc):
+                self._pause_blocked(chat_id, now)
+                raise MiniAppError(WAITLIST_CANCEL_BLOCKED, 502) from exc
             raise MiniAppError(
                 "예약 대기를 취소하지 못했어요. 코레일 앱에서 예약 내역을 확인해 주세요.", 502
             ) from exc
@@ -1393,6 +1444,8 @@ class MobileGateway(MiniAppGateway):
                 "reason": note["reason"],
                 "at": datetime.fromtimestamp(note["at"], tz=UTC).isoformat(),
             }
+        # Korail standbys are not watches: shown whatever is running.
+        result["waitlists"] = self._waitlists(chat_id)
         return result
 
     def _running(self, chat_id):

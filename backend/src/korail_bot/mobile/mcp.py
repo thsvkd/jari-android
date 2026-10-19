@@ -814,6 +814,11 @@ def _waitlist_note(entry):
         return f"코레일 예약 대기({train})는 다른 코레일 계정으로 신청한 것이라 확인하지 않아요."
     if state in ("waiting", "assigned") and entry.get("checkError") == "unlinked":
         return f"코레일 예약 대기({train})가 있지만 코레일 계정 연결이 끊겨 확인하지 않고 있어요."
+    if state in ("waiting", "assigned") and entry.get("checkError") == "blocked":
+        return (
+            f"코레일 예약 대기({train})는 코레일이 접속을 막은 것 같아 확인을 멈췄어요. 더 묻지 않아요. "
+            "사용자가 코레일 앱에서 대기를 확인해야 하고, 앱에서 코레일 계정을 다시 연결하면 다시 확인해요."
+        )
     if state in ("waiting", "assigned") and entry.get("checkError") == "login":
         return (
             f"코레일 예약 대기({train})는 코레일 로그인이 거절돼 확인을 멈췄어요. "

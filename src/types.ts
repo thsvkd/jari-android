@@ -152,8 +152,11 @@ export interface WaitlistEntry {
   checkedAt: string | null;
   /** 마지막 확인이 실패했어요. 대기가 끝났다는 뜻은 아니에요. */
   checkFailed?: boolean;
-  /** "login": 코레일 로그인이 거절돼 계정을 다시 연결할 때까지 확인을 멈췄어요. "unlinked": 코레일 계정 연결이 없어요. */
-  checkError?: "login" | "unlinked" | null;
+  /**
+   * "login": 코레일 로그인이 거절돼 계정을 다시 연결할 때까지 확인을 멈췄어요. "unlinked": 코레일 계정 연결이 없어요.
+   * "blocked": 코레일이 접속을 막은 것 같은 응답을 받아 더 묻지 않고 멈췄어요(계정을 다시 연결하면 다시 확인).
+   */
+  checkError?: "login" | "unlinked" | "blocked" | null;
   expiresAt?: string | null;
   seatLabels?: string[] | null;
   finishedAt?: string | null;

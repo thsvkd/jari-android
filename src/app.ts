@@ -1100,6 +1100,7 @@ export class JariApp {
         const paused = !active ? ""
           : entry.otherAccount ? "다른 코레일 계정으로 신청한 대기예요. 그 계정의 코레일 앱에서 확인해 주세요."
           : entry.checkError === "unlinked" ? "코레일 계정 연결이 끊겨 확인을 멈췄어요. 계정을 연결하면 다시 확인해요."
+          : entry.checkError === "blocked" ? "코레일이 접속을 막은 것 같아 확인을 멈췄어요. 코레일 앱에서 대기를 확인해 주세요. 코레일 계정을 다시 연결하면 다시 확인해요."
           : entry.checkError === "login" ? "코레일 로그인이 거절돼 확인을 멈췄어요. 코레일 계정을 다시 연결해 주세요."
           : entry.checkFailed ? `마지막 확인에 실패했어요. ${minutes}분 뒤 다시 확인해요.`
           : "";

@@ -139,6 +139,23 @@ test.describe("코레일 예약 대기", () => {
     expect((await control.korailLog()).filter((call) => call.event === "waitlist_cancel")).toHaveLength(1);
   });
 
+  test("코레일이 접속을 막은 것 같으면 대기 확인을 멈추고 그렇다고 보여요 @layout", async ({ signedIn: page, control }) => {
+    await applyForWaitlist(page);
+    await control.scenario({ waitlist: "blocked" });
+
+    const card = page.locator("[data-waitlist]");
+    for (let attempt = 0; attempt < 15 && !(await card.textContent())?.includes("접속을 막은"); attempt++) {
+      await page.waitForTimeout(1_000);
+      await nextPoll(page);
+    }
+    await expect(card).toContainText("코레일이 접속을 막은 것 같아 확인을 멈췄어요");
+    await expect(card).toHaveAttribute("data-state", "waiting");
+    await expectCleanLayout(page, "차단 의심으로 멈춘 예약 대기 카드");
+    const looked = (await control.korailLog()).filter((call) => call.event === "waitlist_list").length;
+    await page.waitForTimeout(3_000);
+    expect((await control.korailLog()).filter((call) => call.event === "waitlist_list")).toHaveLength(looked);
+  });
+
   test("예약 대기 확인이 실패해도 끝났다고 하지 않아요", async ({ signedIn: page, control }) => {
     await applyForWaitlist(page);
     await control.scenario({ waitlist: "unavailable" });

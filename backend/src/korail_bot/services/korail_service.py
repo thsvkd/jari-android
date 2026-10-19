@@ -1874,7 +1874,8 @@ class KorailService(RailService):
           account may not own, whose absence says nothing and is not looked for in the tickets.
 
         Raises when the list (or, for a standby gone from it, the ticket list) could not be read:
-        a failed read is not "ended".
+        a failed read is not "ended". A reply that looks like a block (see looks_blocked) raises
+        at once, with nothing more asked.
         """
         if not self._logged_in:
             raise ValueError("코레일에 로그인한 뒤 예약 대기를 확인해 주세요.")
@@ -1897,6 +1898,10 @@ class KorailService(RailService):
             except KorailAuthError:
                 raise
             except Exception as exc:
+                if self.looks_blocked(exc):
+                    # Like a watch: the first reply that looks like a block ends the look, and
+                    # the standbys after this one are not asked about.
+                    raise SearchBlockedError(f"{type(exc).__name__}: {exc}") from exc
                 logger.warning("Could not read a standby's seats (%s)", type(exc).__name__)
                 answers[wanted] = {"state": "unknown"}
                 continue

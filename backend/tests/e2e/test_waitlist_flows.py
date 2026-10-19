@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import time
+
 from test_booking_flows import assert_app_wording
 
 WAITLIST_TRAIN = "00103"
@@ -130,3 +132,29 @@ def test_withdrawing_a_standby_sends_its_number_to_korail(client, conditions):
     assert withdrawn == [entry["id"]]
     code, _ = client.error("POST", "/waitlist/cancel", {"id": entry["id"]})
     assert code == 404
+
+
+def test_a_look_answered_like_a_block_stops_and_asks_nothing_more(client, conditions):
+    apply(client, conditions)
+    client.scenario(waitlist="blocked")
+
+    status = client.wait_for(lambda s: s["waitlists"][0].get("checkError") == "blocked", timeout=30)
+
+    assert status["waitlists"][0]["state"] == "waiting"
+    calls = len([call for call in client.korail_log() if call["event"] == "waitlist_list"])
+    logins = len([call for call in client.korail_log() if call["event"] == "login"])
+    # The stack looks about every second: several intervals pass with nothing asked.
+    time.sleep(4)
+    log = client.korail_log()
+    assert len([call for call in log if call["event"] == "waitlist_list"]) == calls
+    assert len([call for call in log if call["event"] == "login"]) == logins
+
+
+def test_an_application_answered_like_a_block_is_reported(client, conditions):
+    client.scenario(waitlist_request="blocked")
+
+    code, result = apply(client, conditions)
+
+    assert code == 503
+    assert "접속을 막은 것 같아요" in result["error"]
+    assert client.call("GET", "/status")["waitlists"] == []

@@ -29,9 +29,9 @@ export interface Scenario {
   /** 감시를 이만큼(초) 하면 멈춰요. 예약 워커가 시작할 때 읽어요. */
   watch_max_seconds?: number | null;
   /** 예약 대기 신청에 코레일이 하는 답 */
-  waitlist_request?: "ok" | "refused" | "unavailable";
-  /** 신청된 예약 대기를 다시 읽을 때 코레일이 하는 답 */
-  waitlist?: "waiting" | "assigned" | "paid" | "ended" | "unavailable";
+  waitlist_request?: "ok" | "refused" | "unavailable" | "blocked";
+  /** 신청된 예약 대기를 다시 읽을 때 코레일이 하는 답(blocked: strResult 없는 답) */
+  waitlist?: "waiting" | "assigned" | "paid" | "ended" | "unavailable" | "blocked";
   waitlist_cancel_refused?: boolean;
   /** 조회가 돌려줄 열차(가짜 코레일 DEFAULT_TRAINS 와 같은 모양) */
   trains?: Array<{ no: string; name: string; group: string; offset: number; minutes: number; general: string; special: string; wait: number }>;

@@ -41,6 +41,7 @@ from korail_mobile_api.models import (
     TrainSummary,
 )
 from korail_mobile_api.mutation_models import ReservationHoldResponse
+from korail_mobile_api.read_parsers import parse_reservation_history_response
 
 KST = ZoneInfo("Asia/Seoul")
 SCENARIO_KEY = "e2e:scenario"
@@ -125,6 +126,7 @@ DEFAULT_SCENARIO = {
     "cancel_refused": [],
     # 예약 대기 신청에 코레일이 하는 답: ok(대기 등록) | refused(코레일이 거절) | unavailable(HTTP 503)
     "waitlist_request": "ok",
+    # (blocked: 코레일이 strResult 없는 답을 줌. 신청·확인 모두에 쓸 수 있어요)
     # 신청된 예약 대기를 다시 읽을 때: waiting(대기 중) | assigned(좌석 배정, 결제 대기) | paid(결제되어 승차권)
     # | ended(목록에서 사라짐) | unavailable(코레일이 답하지 않음)
     "waitlist": "waiting",
@@ -503,6 +505,9 @@ class FakeKorail:
             )
         if mode == "refused":
             raise KorailReservationRefusedError("WRR800029", "동일한 예약 내역이 있습니다.")
+        if mode == "blocked":
+            # 실제 라이브러리 파서가 strResult 없는 본문을 읽고 내는 그 예외예요.
+            parse_reservation_history_response(BLOCKED_REPLY)
         pnr = _next_id("WAIT")
         _client().hset(
             WAITLIST_KEY,
@@ -528,6 +533,8 @@ class FakeKorail:
             raise KorailTransportError(
                 "KORAIL HTTP 503 for GET /classes/com.korail.mobile.reservation.ReservationView"
             )
+        if mode == "blocked":
+            parse_reservation_history_response(BLOCKED_REPLY)
         if mode not in ("waiting", "assigned"):
             return ()
         limit_date, limit_time = _deadline()

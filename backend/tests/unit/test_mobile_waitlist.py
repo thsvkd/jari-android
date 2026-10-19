@@ -94,6 +94,9 @@ def app(tmp_path, monkeypatch):
         return reply
 
     rail.waitlist_states.side_effect = answers
+    # The real verdict on what a blocked client gets (a reply without strResult).
+    rail.looks_blocked.side_effect = KorailService().looks_blocked
+    rail.login_blocked = False
     monkeypatch.setattr(runtime.gateway.conversation, "_rail_service", lambda owner: rail)
     user = runtime.identity.register("alice", "a long secure passphrase")
     runtime.identity.set_approval(user["user"]["id"], "approved")
@@ -934,3 +937,111 @@ def test_the_watch_thread_starts_once_and_stops_on_request():
     watch.stop()
     first.join(timeout=2)
     assert not first.is_alive() and watch.stopping()
+
+
+# ---------------------------------------------------------------- a reply like a block
+
+BLOCKED_REPLY = {"h_msg_cd": "", "h_msg_txt": "", "rtnMsg": "비정상적인 접근입니다."}
+
+
+def blocked_reply():
+    """What the library raises on Korail's reply without strResult."""
+    try:
+        parse_reservation_history_response(BLOCKED_REPLY)
+    except Exception as exc:
+        return exc
+    raise AssertionError("the parser took a reply without strResult")
+
+
+def test_a_look_answered_like_a_block_stops_every_standby_with_nothing_more_asked(app):
+    for train in ("015", "017"):
+        apply(app, train)
+    app.rail.waitlist_states.side_effect = blocked_reply()
+    logins = app.rail.login.call_count
+    later = utc_now() + LATER
+
+    app.gateway.check_waitlists(now=later)
+    app.gateway.check_waitlists(now=later + timedelta(minutes=11))
+    app.gateway.check_waitlists(now=later + timedelta(hours=3))
+
+    assert looks(app) == 1
+    # One login for the look itself; none again to "recover" from the block.
+    assert app.rail.login.call_count == logins + 1
+    assert {e["checkError"] for e in status(app)["waitlists"]} == {"blocked"}
+
+    # Connecting the account again is the person saying to try again, as starting a new watch is.
+    app.rail.waitlist_states.side_effect = None
+    app.rail.waitlist_states.return_value = {
+        "PNR015": {"state": "waiting"},
+        "PNR017": {"state": "waiting"},
+    }
+    app.http.post(
+        "/api/mobile/register",
+        headers=app.headers,
+        json={"username": "01012345678", "password": "rail password"},
+    )
+    assert app.gateway.check_waitlists(now=later + timedelta(hours=4)) == 2
+
+
+def test_a_login_answered_like_a_block_stops_the_look(app):
+    apply(app)
+    app.rail.login.return_value = False
+    app.rail.login_blocked = True
+
+    app.gateway.check_waitlists(now=utc_now() + LATER)
+    app.gateway.check_waitlists(now=utc_now() + LATER * 3)
+
+    assert status(app)["waitlists"][0]["checkError"] == "blocked"
+    assert looks(app) == 0
+
+
+def test_an_application_answered_like_a_block_records_nothing_and_says_so(app):
+    app.rail.request_waitlist.side_effect = blocked_reply()
+
+    answered = apply(app)
+
+    assert answered.status_code == 503
+    assert "접속을 막은 것 같아요" in answered.json["error"]
+    assert status(app)["waitlists"] == []
+
+
+def test_a_withdrawal_answered_like_a_block_is_not_sent_and_pauses_the_looks(app):
+    apply(app)
+    app.rail.waitlist_states.side_effect = blocked_reply()
+
+    answered = cancel(app, "PNR015")
+
+    assert answered.status_code == 503
+    assert "코레일 앱에서 직접 취소" in answered.json["error"]
+    app.rail.cancel_waitlist.assert_not_called()
+    assert status(app)["waitlists"][0]["checkError"] == "blocked"
+
+
+def test_a_seat_read_answered_like_a_block_stops_before_the_next_standby():
+    from korail_bot.services.rail_service import SearchBlockedError
+
+    service = korail()
+    service._modern_client.get_reservation_history.return_value = history(
+        history_row("PNR015"), history_row("PNR017")
+    )
+    service._modern_client.get_ticket_reservation_detail.side_effect = blocked_reply()
+
+    with pytest.raises(SearchBlockedError):
+        state(service, STANDBY, {**STANDBY, "id": "PNR017"})
+
+    assert service._modern_client.get_ticket_reservation_detail.call_count == 1
+
+
+def test_get_status_says_a_standby_look_was_stopped_by_a_block():
+    from korail_bot.mobile.mcp import _status
+
+    result = _status(
+        {
+            "running": None,
+            "scheduled": None,
+            "pending": [],
+            "waitlists": [{"trainInfo": "KTX 015", "state": "waiting", "checkError": "blocked"}],
+        }
+    )
+
+    assert "접속을 막은 것 같아" in " ".join(result["notes"])

@@ -242,3 +242,12 @@ it("asks for the same promise when the server knows of standbys this phone did n
   await vi.waitFor(() => expect(deleteAccount).toHaveBeenLastCalledWith("a long secure passphrase", true));
   expect(deleteAccount).toHaveBeenCalledTimes(2);
 });
+
+it("says a standby look was stopped by a reply like a block, and offers nothing that would ask again", async () => {
+  const state = await withWaitlists([entry("waiting", { checkError: "blocked", checkFailed: true })]);
+  const { root } = await mount({ bootstrap: async () => state });
+
+  const card = root.querySelector("[data-waitlist='W-waiting']")!;
+  expect(card.textContent).toContain("코레일이 접속을 막은 것 같아 확인을 멈췄어요");
+  expect(card.textContent).toContain("계정을 다시 연결하면 다시 확인해요");
+});
