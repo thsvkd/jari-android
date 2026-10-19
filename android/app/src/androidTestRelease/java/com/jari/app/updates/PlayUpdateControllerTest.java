@@ -7,11 +7,13 @@ import static org.junit.Assert.assertTrue;
 import android.app.Activity;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.platform.app.InstrumentationRegistry;
 import com.google.android.play.core.appupdate.testing.FakeAppUpdateManager;
 import com.google.android.play.core.install.model.AppUpdateType;
 import com.jari.app.MainActivity;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
@@ -35,16 +37,16 @@ public class PlayUpdateControllerTest {
             AtomicInteger firstResult = new AtomicInteger(Integer.MIN_VALUE);
             CountDownLatch firstFinished = new CountDownLatch(1);
             scenario.onActivity(activity -> controller.get().apply(new Result(firstResult, firstFinished)));
-            assertTrue(manager.get().isImmediateFlowVisible());
+            awaitFlowVisible(manager.get());
             scenario.onActivity(activity -> manager.get().userRejectsUpdate());
-            controller.get().onActivityResult(Activity.RESULT_CANCELED);
-            assertTrue(firstFinished.await(5, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> controller.get().onActivityResult(Activity.RESULT_CANCELED));
+            assertTrue("first update flow did not finish within 5s", firstFinished.await(5, TimeUnit.SECONDS));
             assertEquals(Activity.RESULT_CANCELED, firstResult.get());
 
             manager.get().setUpdateAvailable(42301, AppUpdateType.IMMEDIATE);
             assertEquals(42301, checkAvailable(controller.get()));
             scenario.onActivity(activity -> controller.get().apply(new Result(new AtomicInteger(), new CountDownLatch(1))));
-            assertTrue(manager.get().isImmediateFlowVisible());
+            awaitFlowVisible(manager.get());
         }
     }
 
@@ -61,13 +63,16 @@ public class PlayUpdateControllerTest {
             });
             checkAvailable(controller.get());
             scenario.onActivity(activity -> controller.get().apply(new Result(new AtomicInteger(), new CountDownLatch(1))));
+            awaitFlowVisible(manager.get());
             scenario.onActivity(activity -> {
                 manager.get().userAcceptsUpdate();
                 manager.get().downloadStarts();
                 controller.get().onResume();
             });
-            assertEquals(Integer.valueOf(AppUpdateType.IMMEDIATE), manager.get().getTypeForUpdateInProgress());
-            assertTrue(manager.get().isImmediateFlowVisible());
+            awaitFlowVisible(manager.get());
+            AtomicReference<Integer> typeInProgress = new AtomicReference<>();
+            scenario.onActivity(activity -> typeInProgress.set(manager.get().getTypeForUpdateInProgress()));
+            assertEquals(Integer.valueOf(AppUpdateType.IMMEDIATE), typeInProgress.get());
         }
     }
 
@@ -85,7 +90,7 @@ public class PlayUpdateControllerTest {
             CountDownLatch finished = new CountDownLatch(1);
             controller.get().check(new CountingResult(current, errors, finished));
 
-            assertTrue(finished.await(5, TimeUnit.SECONDS));
+            assertTrue("update check did not finish within 5s", finished.await(5, TimeUnit.SECONDS));
             assertEquals(0, current.get());
             assertEquals(1, errors.get());
         }
@@ -108,13 +113,15 @@ public class PlayUpdateControllerTest {
             scenario.onActivity(activity -> controller.get().apply(new CountingResult(
                 new AtomicInteger(), results, finished
             )));
-            assertTrue(manager.get().isImmediateFlowVisible());
+            awaitFlowVisible(manager.get());
 
-            controller.get().destroy();
-            controller.get().onActivityResult(Activity.RESULT_CANCELED);
+            scenario.onActivity(activity -> {
+                controller.get().destroy();
+                controller.get().onActivityResult(Activity.RESULT_CANCELED);
+            });
 
             assertEquals(0, results.get());
-            assertFalse(finished.await(200, TimeUnit.MILLISECONDS));
+            assertFalse("destroyed controller must not deliver the pending result", finished.await(200, TimeUnit.MILLISECONDS));
         }
     }
 
@@ -127,8 +134,31 @@ public class PlayUpdateControllerTest {
             @Override public void onResult(int ignored) { finished.countDown(); }
             @Override public void onError(Exception ignored) { finished.countDown(); }
         });
-        assertTrue(finished.await(5, TimeUnit.SECONDS));
+        assertTrue("update check did not finish within 5s", finished.await(5, TimeUnit.SECONDS));
         return versionCode.get();
+    }
+
+    /**
+     * PlayUpdateController.apply()/onResume() start the flow from an async getAppUpdateInfo()
+     * success listener, so the flow only becomes visible after the main looper drains.
+     */
+    private static void awaitFlowVisible(FakeAppUpdateManager manager) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        AtomicBoolean visible = new AtomicBoolean();
+        do {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(
+                () -> visible.set(manager.isImmediateFlowVisible())
+            );
+            if (visible.get()) return;
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Interrupted while waiting for the immediate update flow", interrupted);
+            }
+        } while (System.nanoTime() < deadline);
+        throw new AssertionError("Immediate update flow did not become visible within 5s");
     }
 
     private static final class Result implements PlayUpdateController.Callback {
