@@ -138,6 +138,11 @@ class _Rail:
         self.logins = 0
         self.searched = False
         self.login_unavailable = False
+        self.login_blocked = False
+        self.watch_deadline = None
+
+    def check_watch_deadline(self):
+        pass
 
     def login(self, username, password):
         self.logins += 1
@@ -664,7 +669,10 @@ def test_a_search_is_marked_as_ended_before_its_record_goes(tmp_path, monkeypatc
     storage.close()
 
 
-@pytest.mark.parametrize(("status", "reason"), [(0, "booked"), (1, "error")])
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [(0, "booked"), (1, "error"), (3, "blocked"), (4, "unavailable"), (5, "expired")],
+)
 def test_a_search_that_ends_itself_leaves_a_mark_of_how(tmp_path, status, reason):
     from korail_bot.mobile.worker import apply_result
 

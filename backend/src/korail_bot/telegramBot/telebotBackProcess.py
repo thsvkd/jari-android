@@ -38,7 +38,7 @@ from korail_bot.services import (
     TelegramService,
 )
 from korail_bot.services.cancellation_wait_service import train_label
-from korail_bot.services.rail_service import SearchUnavailableError
+from korail_bot.services.rail_service import SearchGaveUp, SearchUnavailableError, duration_words
 from korail_bot.services.seat_windows import SeatWindows
 from korail_bot.storage.redis import RedisStorage
 from korail_bot.telegramBot.messages import Messages
@@ -63,6 +63,10 @@ WAIT_DUPLICATE_NOTICE = (
     "{train}\n\n"
     "코레일 앱의 내 예약을 확인해 주세요."
 )
+
+# How a watch that gave up (rail_service.SearchGaveUp) reports in: the callback status that
+# names its ending, after 0 booked, 1 error and 2 one of several seats.
+GAVE_UP_STATUS = {"blocked": 3, "unavailable": 4, "expired": 5}
 
 # Set recursion limit
 sys.setrecursionlimit(settings.RECURSION_LIMIT)
@@ -360,7 +364,8 @@ class BackgroundReservationProcess:
         for attempt in range(len(delays) + 1):
             if self.rail.login(self.username, self.password):
                 return True
-            if not self.rail.login_unavailable or attempt == len(delays):
+            # A reply that looks like a block is final too: asking again is what it punishes.
+            if not self.rail.login_unavailable or self.rail.login_blocked or attempt == len(delays):
                 return False
             logger.warning(
                 f"Korail could not be reached to log in (try {attempt + 1} of "
@@ -413,11 +418,17 @@ class BackgroundReservationProcess:
     def run(self):
         """Run the reservation process."""
         try:
+            self.rail.watch_deadline = self._watch_deadline()
+            # A watch resumed past its limit ends here, before it logs in to Korail again.
+            self.rail.check_watch_deadline()
             logger.info(f"Logging in as {mask_phone(self.username)}...")
 
             # Login
             if not self._log_in():
                 logger.error("Login failed")
+                if self.rail.login_blocked:
+                    self._give_up("blocked")
+                    return
                 if self.rail.login_unavailable:
                     # Korail never answered. Saying the password is wrong
                     # would send the user off to fix something that is fine,
@@ -519,6 +530,8 @@ class BackgroundReservationProcess:
 """
                 self._send_callback(message, status=1)
                 return
+            except SearchGaveUp:
+                raise
             except Exception as e:
                 # Catch any other unexpected errors from the loop
                 logger.error(f"Unexpected error in reservation loop: {e}", exc_info=True)
@@ -627,6 +640,8 @@ class BackgroundReservationProcess:
                 # 좌석을 잡지 못한 실패예요. 성공(0)으로 보내면 빈 결제 기록이 생겨요.
                 self._send_callback(message, status=1)
 
+        except SearchGaveUp as gave_up:
+            self._give_up(gave_up.reason)
         except Exception as e:
             logger.error(f"Error in reservation process: {e}", exc_info=True)
 
@@ -657,6 +672,50 @@ class BackgroundReservationProcess:
             self._send_callback(message, status=1)
 
         logger.info(f"Reservation process ended for {mask_phone(self.username)}")
+
+    def _watch_deadline(self) -> float | None:
+        """
+        When this watch ends unbooked: WATCH_MAX_SECONDS after it first started.
+
+        The running record carries that start. A restart re-creates the record with the start it
+        had, so a resumed watch keeps counting instead of starting over; a scheduled one started
+        when the schedule fired. Without this process's record (not written yet), from now.
+        """
+        limit = settings.WATCH_MAX_SECONDS
+        if limit <= 0:
+            return None
+        record = self.storage.get_running_reservation(self.chat_id)
+        if record is not None and record.process_id == os.getpid():
+            return as_utc(record.started_at).timestamp() + limit
+        return time.time() + limit
+
+    def _give_up(self, reason: str) -> None:
+        """End a watch that stopped on purpose (SearchGaveUp), saying why in the app's words."""
+        route = f"{self.src_locate} → {self.dst_locate}"
+        if reason == "blocked":
+            message = (
+                "⛔ 코레일이 접속을 막은 것 같아 감시를 멈췄어요\n"
+                f"{route}\n\n"
+                "코레일이 알아볼 수 없는 응답을 보냈어요. 좌석이 없다는 뜻이 아니에요. "
+                "코레일 앱에서 로그인되는지 확인해 주세요. 로그인이 되면 잠시 뒤에 새로 찾아 주세요."
+            )
+        elif reason == "unavailable":
+            minutes = duration_words(settings.KORAIL_FAILURE_STOP_SECONDS)
+            message = (
+                f"🌐 코레일 응답이 {minutes}째 없어 감시를 멈췄어요\n"
+                f"{route}\n\n"
+                "조회가 계속 실패했어요. 좌석이 없다는 뜻이 아니에요. "
+                "코레일이 점검 중이거나 불안정할 수 있어요. 잠시 뒤에 새로 찾아 주세요."
+            )
+        else:
+            limit = duration_words(settings.WATCH_MAX_SECONDS)
+            message = (
+                f"⏱ {limit} 동안 자리가 나지 않아 감시를 멈췄어요\n"
+                f"{route}\n\n"
+                f"감시는 시작하고 {limit}이 지나면 멈춰요. 더 기다리려면 새로 찾아 주세요."
+            )
+        logger.info(f"Watch ended without a seat: {reason}")
+        self._send_callback(message, status=GAVE_UP_STATUS.get(reason, 1))
 
     def _run_cancellation_wait(self) -> None:
         """Hold only the physical seats chosen in the mobile seat map."""
@@ -755,6 +814,8 @@ class BackgroundReservationProcess:
                 for item in active
                 for car_no, seat_no in item.seat_keys
             }
+            # After the seats already held were looked after, before Korail is asked again.
+            self.rail.check_watch_deadline()
             try:
                 capture = service.poll_once(excluded)
                 self.rail.note_search_success()
@@ -1242,7 +1303,7 @@ class BackgroundReservationProcess:
     # Two clocks, with a reason each. The interval is what the user asked for.
     # The preference is re-read from Redis at most every so often, so that
     # /notify reaches a search already running without the loop reading a key
-    # on every one of its roughly-one-a-second passes.
+    # on every one of its passes, a few seconds apart.
 
     def _report_interval_minutes(self) -> int:
         """
@@ -1343,7 +1404,8 @@ class BackgroundReservationProcess:
 
         Args:
             message: Message to send to user
-            status: 0 for success/completion, 1 for error
+            status: 0 for success/completion, 1 for error, 2 for one of several
+                    seats, GAVE_UP_STATUS for a watch that stopped on purpose
             is_multi: True if multi-reservation (random allocation with multiple seats)
             total_seats: Total number of seats reserved
             seat_strategy: Seat allocation strategy used
@@ -1398,6 +1460,8 @@ class BackgroundReservationProcess:
             # Reserve one seat (don't set current_seat_index yet!)
             try:
                 reservation = self._reserve_single_seat_random(seat_index)
+            except SearchGaveUp:
+                raise
             except Exception as e:
                 logger.error(f"Failed to reserve seat {seat_index + 1}: {e}", exc_info=True)
                 error_msg = f"""
@@ -1518,6 +1582,7 @@ class BackgroundReservationProcess:
                 logger.debug(f"🔄 Search attempt #{attempts} for seat {seat_index + 1}")
 
             self.rail.report_progress(attempts)
+            self.rail.check_watch_deadline()
 
             # Search for trains (single passenger)
             try:

@@ -5,6 +5,7 @@ trains, and reserving one. The search loop that drives those calls is in
 :mod:`korail_bot.services.rail_service`, shared with SR.
 """
 
+import json
 import re
 from collections.abc import Iterable
 from contextlib import contextmanager
@@ -39,6 +40,7 @@ from korail_mobile_api import mutation_payloads as _mutation_payloads
 from korail_mobile_api import payloads as _read_payloads
 from korail_mobile_api.constants import KORAIL_STANDBY_WAIT_FLAG
 from korail_mobile_api.errors import (
+    KorailApiError,
     KorailAppError,
     KorailAuthError,
     KorailNetFunnelError,
@@ -48,12 +50,14 @@ from korail_mobile_api.errors import (
     KorailSoldOutError,
     KorailTransportError,
 )
+from korail_mobile_api.redaction import redact_mapping
 
 from korail_bot.config.settings import settings
 from korail_bot.models import ReservationOutcome, SeatPreference, SeatTarget
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.rail_service import (
     RailService,
+    SearchBlockedError,
     SearchProgress,
     SearchUnavailableError,
 )
@@ -146,6 +150,49 @@ def _maintenance_notice(exc: BaseException) -> str | None:
         return None
     # One line, and short: it goes into the app's error and an agent's result as it is.
     return " ".join(str(getattr(exc, "message", None) or "").split())[:200]
+
+
+def _answered_without_result(exc: BaseException | None) -> bool:
+    """
+    Whether Korail replied with JSON that has no strResult, however the client reported it.
+
+    korail2 reads j['strResult'] without looking (KeyError: 'strResult'); korail_mobile_api
+    names the missing envelope field in a KorailProtocolError. Korail's own refusals and its
+    maintenance notice (S000) all carry strResult=FAIL, so they never match: this is the reply
+    an account got on pit5 from 2026-10-19 02:57 UTC, after Korail had restricted it.
+    """
+    for _ in range(5):
+        if exc is None:
+            return False
+        if isinstance(exc, KeyError) and exc.args[:1] == ("strResult",):
+            return True
+        if isinstance(exc, KorailApiError):
+            text = str(exc)
+            if "missing required envelope fields" in text and "strResult" in text:
+                return True
+        exc = exc.__cause__
+    return False
+
+
+def _describe_reply(response, *, body: bool) -> str:
+    """
+    The top-level keys of a reply, and with body=True a redacted excerpt (200 chars), for the log.
+
+    Login replies go in with body=False: they can carry the member's details. Never raises.
+    """
+    if response is None:
+        return "no reply kept"
+    try:
+        status = getattr(response, "status_code", "?")
+        payload = json.loads(response.text)
+        keys = sorted(payload)[:30] if isinstance(payload, dict) else type(payload).__name__
+        said = f"HTTP {status} keys={keys}"
+        if body:
+            shown = redact_mapping(payload) if isinstance(payload, dict) else payload
+            said += f" body={json.dumps(shown, ensure_ascii=False)[:200]!r}"
+        return said
+    except Exception as exc:
+        return f"unreadable reply ({type(exc).__name__})"
 
 
 # PNR-keyed unpaid seat detail. korail2 never calls this; ReservationView
@@ -267,11 +314,16 @@ class _TimedSession(requests.Session):
     a failed reserve. Every request gets a timeout unless the caller set one.
     """
 
+    last_response: requests.Response | None = None
+
     def request(self, method, url, **kwargs):
         kwargs.setdefault(
             "timeout", (settings.KORAIL_CONNECT_TIMEOUT, settings.KORAIL_READ_TIMEOUT)
         )
-        return super().request(method, url, **kwargs)
+        # Kept for the log when a reply turns out to be unreadable: korail2
+        # parses it out of reach and raises a bare KeyError.
+        self.last_response = super().request(method, url, **kwargs)
+        return self.last_response
 
 
 @contextmanager
@@ -325,10 +377,11 @@ class KorailService(RailService):
         self._modern_client: KorailClient | None = None
         self._modern_seat_context: tuple | None = None
         self._seat_layout_references: dict[tuple, object] = {}
+        self._last_modern_reply = None
         # Whether the last search_waitlist_trains stopped at the page limit with more trains behind it.
         self.search_cut_short = False
         # (date, from, to) -> {train number: departure HHMMSS} of the watched trains once seen. A
-        # watch polls every second; knowing when its trains leave, it asks for the page they are on
+        # watch polls every few seconds; knowing when its trains leave, it asks for the page they are on
         # instead of walking the day from the first page every time.
         self._wanted_departures: dict[tuple, dict[str, str]] = {}
         # 코레일이 호차 목록에서 뺀 호차를 다른 날짜의 같은 열차 편성에서 채운 기록. 편성 조회는 열차·등급마다
@@ -421,7 +474,18 @@ class KorailService(RailService):
         config_options = {"enable_dynapath": True}
         if settings.KORAIL_APP_VERSION:
             config_options["version"] = settings.KORAIL_APP_VERSION
-        return KorailClient(KorailConfig(**config_options))
+        client = KorailClient(KorailConfig(**config_options))
+        # The client parses each reply out of reach and reports only what was wrong with it;
+        # the last one is kept so a reply that looks like a block can be described in the log.
+        # ponytail: reaches the library's private httpx client; drop if it grows a reply hook.
+        transport = client.http._client
+        hooks = transport.event_hooks
+        hooks["response"] = [*hooks.get("response", []), self._keep_modern_reply]
+        transport.event_hooks = hooks
+        return client
+
+    def _keep_modern_reply(self, response) -> None:
+        self._last_modern_reply = response
 
     def _activate_legacy_session(
         self, modern: KorailClient, session, username: str, password: str
@@ -443,6 +507,7 @@ class KorailService(RailService):
         self._korail_instance = legacy
 
     def _login_with_current_api(self, username: str, password: str) -> bool:
+        self.login_blocked = False
         candidate = self._build_modern_client()
         # The adapter this login replaces, whether it works or not: its HTTP session is closed
         # rather than left to the collector (a cached mobile rail logs in again in place).
@@ -469,6 +534,13 @@ class KorailService(RailService):
                 mask_phone(username),
                 type(exc).__name__,
             )
+            if _answered_without_result(exc):
+                # Keys only: a login reply can carry the member's details.
+                self.login_blocked = True
+                logger.error(
+                    "Korail login answered without strResult, like a block (%s)",
+                    _describe_reply(self._last_modern_reply, body=False),
+                )
             if _korail_unreachable(exc):
                 # Not an answer about the credentials; login() says so.
                 raise _KorailUnreachable(type(exc).__name__) from exc
@@ -684,7 +756,12 @@ class KorailService(RailService):
                     raise
                 break
             except Exception as exc:
-                if not rows or (wanted and not wanted <= {t.train_no for t in rows}):
+                if (
+                    not rows
+                    or (wanted and not wanted <= {t.train_no for t in rows})
+                    # A reply that looks like a block ends the watch whichever page it came on.
+                    or _answered_without_result(exc)
+                ):
                     raise
                 # The earlier pages are still true: do not lose them to a later page's hiccup.
                 logger.warning(
@@ -1322,6 +1399,21 @@ class KorailService(RailService):
             == KORAIL_STANDBY_WAIT_FLAG,
         }
 
+    def is_block_signal(self, error: Exception) -> bool:
+        """
+        Also the current client's way of saying it: a seat-map watch asks through
+        korail_mobile_api, which reports a reply without strResult as a KorailProtocolError.
+        """
+        if super().is_block_signal(error):
+            return True
+        if not _answered_without_result(error):
+            return False
+        logger.error(
+            "Korail answered without strResult, like a block (%s)",
+            _describe_reply(self._last_modern_reply, body=True),
+        )
+        return True
+
     def search_trains(
         self,
         dep_date: str,
@@ -1465,12 +1557,20 @@ class KorailService(RailService):
                 logger.debug("No trains found for search criteria (NoResultsError)")
             return []
         except Exception as e:
+            if _answered_without_result(e):
+                session = getattr(self._korail_instance, "_session", None)
+                logger.error(
+                    "Korail search answered without strResult, like a block (%s)",
+                    _describe_reply(getattr(session, "last_response", None), body=True),
+                )
+                raise SearchBlockedError(f"{type(e).__name__}: {e}") from e
             if type(e).__name__ == "NeedToLoginError":
                 logger.debug(f"🔒 Session expired during search, re-logging in: {e}")
                 if self._relogin():
                     return []  # Will retry on next loop iteration
-                else:
-                    raise
+                if self.login_blocked:
+                    raise SearchBlockedError("Korail login answered like a block") from e
+                raise
             # Anything else means the request did not get an answer we
             # understand. Raised rather than returned as an empty list: the
             # caller cannot act on what it cannot distinguish from a sold-out

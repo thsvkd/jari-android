@@ -2693,6 +2693,25 @@ it("draws a notification's kind as a picture and splits the server's text into t
   expect(item.querySelector(".notification-text")?.textContent).toBe("결제 기한 안에 코레일에서 결제해 주세요.");
 });
 
+it.each([
+  ["blocked", "⛔ 코레일이 접속을 막은 것 같아 감시를 멈췄어요", "접속 제한", "danger"],
+  ["unavailable", "🌐 코레일 응답이 10분째 없어 감시를 멈췄어요", "응답 없음", "warning"],
+  ["expired", "⏱ 1시간 동안 자리가 나지 않아 감시를 멈췄어요", "시간 끝", "muted"],
+])("draws a watch that stopped on its own (%s) as its own kind, not a problem, a booking or a search", async (kind, title, name, tone) => {
+  const text = `${title}\n서울 → 부산\n\n좌석이 없다는 뜻이 아니에요.`;
+  const { app, root } = await mountLive({
+    notifications: async () => ({ items: [{ id: `n-${kind}`, text, createdAt: new Date().toISOString(), kind }], pushAvailable: false }),
+  });
+  app.navigate("notifications");
+  await vi.waitFor(() => expect(root.querySelector(".notification")).not.toBeNull());
+  const item = root.querySelector(".notification")!;
+  expect(item.getAttribute("data-tone")).toBe(tone);
+  expect(item.querySelector(".notification-icon")?.getAttribute("aria-label")).toBe(name);
+  expect(item.querySelector(".notification-icon svg")).not.toBeNull();
+  expect(item.querySelector(".notification-head b")?.textContent).toBe(title.replace(/^\S+ /, ""));
+  expect(item.querySelector(".notification-detail")?.textContent).toBe("서울 → 부산");
+});
+
 it("draws a new agent connection notice with its own picture and a warning tone", async () => {
   const text = "새 에이전트가 연결됐어요: Claude (claude.ai). 직접 연결한 게 아니라면 설정 → 에이전트 연결에서 끊어 주세요.";
   const { app, root } = await mountLive({

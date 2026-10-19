@@ -15,11 +15,22 @@ from korail_bot.telegramBot.telebotBackProcess import (
     install_shutdown_handlers,
 )
 
+# Callback status -> (the app's notification kind, how the search ended). 2 is one seat of
+# several and ends nothing. 3-5 are the watches that stopped on purpose (GAVE_UP_STATUS):
+# each has a kind of its own, so the app never shows them as booked, sold out or a crash.
+ENDINGS = {
+    0: ("reservation", "booked"),
+    1: ("error", "error"),
+    3: ("blocked", "blocked"),
+    4: ("unavailable", "unavailable"),
+    5: ("expired", "expired"),
+}
+
 
 def apply_result(storage, notifications, owner, message, status=0, seat_strategy="consecutive"):
     """No network callback: the child already has its own private storage scope."""
-    # 앱은 종류로 알림 앞 표시를 정해요: 좌석을 잡음 / 문제 / 찾는 중 소식.
-    kind = {0: "reservation", 1: "error"}.get(status, "search")
+    # 앱은 종류로 알림 앞 표시를 정해요: 좌석을 잡음 / 문제 / 차단 / 응답 없음 / 시간 끝 / 찾는 중 소식.
+    kind, ended = ENDINGS.get(status, ("search", None))
     notifications.publish(owner, message, kind=kind)
     if status == 0 and seat_strategy != "random":
         existing = storage.get_payment_status(owner)
@@ -27,7 +38,7 @@ def apply_result(storage, notifications, owner, message, status=0, seat_strategy
             storage.save_payment_status(
                 PaymentStatus(chat_id=owner, completed=False, reminder_active=True)
             )
-    if status in (0, 1):
+    if ended:
         session = storage.get_user_session(owner)
         if session:
             session.reset()
@@ -35,7 +46,7 @@ def apply_result(storage, notifications, owner, message, status=0, seat_strategy
         # The deploy check counts a vanished record as finished only on this,
         # so it goes first: a failure before the delete leaves a record with
         # a mark, never a record gone without one.
-        storage.mark_search_ended(owner, "booked" if status == 0 else "error", os.getpid())
+        storage.mark_search_ended(owner, ended, os.getpid())
         storage.delete_running_reservation(owner)
         storage.delete_resume_credentials(owner)
         storage.delete_app_session_start(owner)

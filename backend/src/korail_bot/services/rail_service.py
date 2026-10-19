@@ -72,6 +72,39 @@ class SearchUnavailableError(Exception):
     pass
 
 
+class SearchBlockedError(SearchUnavailableError):
+    """
+    The operator answered with something that is not one of its answers.
+
+    Korail's own failures (maintenance S000, sold out, session expired) come
+    back as strResult=FAIL with a code. A reply without strResult at all is
+    what an account Korail had just restricted got on pit5 (2026-10-19), for
+    four hours, while the watch kept asking. Asking again cannot help and may
+    make it worse, so the first one ends the watch.
+    """
+
+
+class SearchGaveUp(Exception):
+    """
+    The watch is over without a seat, on purpose: told apart from a crash.
+
+    reason is what the app and the deploy check are told: "blocked" (the
+    operator seems to have shut this account or client out), "unavailable"
+    (failures went on for KORAIL_FAILURE_STOP_SECONDS) or "expired"
+    (WATCH_MAX_SECONDS passed without a booking).
+    """
+
+    def __init__(self, reason: str, detail: str = ""):
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+        self.reason = reason
+
+
+def duration_words(seconds: float) -> str:
+    """60 -> "1분", 3600 -> "1시간", 5400 -> "90분"."""
+    minutes = max(1, round(seconds / 60))
+    return f"{minutes // 60}시간" if minutes % 60 == 0 else f"{minutes}분"
+
+
 class RailService(ABC):
     """The search-and-reserve loop, minus the operator."""
 
@@ -100,6 +133,12 @@ class RailService(ABC):
     login_unavailable: bool = False
     #: The operator's own sentence when it said it is down for maintenance; None otherwise.
     login_unavailable_notice: str | None = None
+    #: Whether the last login failed on a reply that looked like a block (see
+    #: SearchBlockedError). login_unavailable is set as well; this says to stop.
+    login_blocked: bool = False
+    #: Epoch seconds after which the watch ends unbooked (WATCH_MAX_SECONDS
+    #: from its first start); None means no limit. Set by the process.
+    watch_deadline: float | None = None
 
     def __init__(
         self,
@@ -148,6 +187,7 @@ class RailService(ABC):
         self._failure_threshold = settings.KORAIL_FAILURE_ALERT_THRESHOLD
         self._failure_realert = settings.KORAIL_FAILURE_REALERT_SECONDS
         self._failure_backoff_cap = settings.KORAIL_FAILURE_BACKOFF_CAP
+        self._failure_stop = settings.KORAIL_FAILURE_STOP_SECONDS
         #: Seats given back for not being the ones asked for. Counted across
         #: the whole search rather than per pass, because the cap it is
         #: measured against is about the search as a whole.
@@ -423,6 +463,8 @@ class RailService(ABC):
 
         logger.warning(f"{self.operator_name} session is gone - logging in again before searching")
         if not self._relogin():
+            if self.login_blocked:
+                raise SearchBlockedError(f"{self.operator_name} login answered like a block")
             raise SearchUnavailableError(
                 f"{self.operator_name} session expired and could not be re-established"
             )
@@ -538,7 +580,20 @@ class RailService(ABC):
 
         Returns:
             A multiplier for the next wait between requests
+
+        Raises:
+            SearchGaveUp: "blocked" on the first reply that looks like a block,
+                "unavailable" once failures have gone on for
+                KORAIL_FAILURE_STOP_SECONDS. Raised before any wait, so the
+                watch asks nothing more of the operator.
         """
+        if self.is_block_signal(error):
+            logger.error(
+                f"⛔ {self.operator_name} answered like a block "
+                f"({type(error).__name__}: {error}); ending the watch"
+            )
+            raise SearchGaveUp("blocked", f"{type(error).__name__}: {error}") from error
+
         self._failure_streak += 1
         now = time.time()
         if self._failure_streak == 1:
@@ -550,6 +605,13 @@ class RailService(ABC):
             exc_info=self._failure_streak == 1,
         )
 
+        if self._failure_stop > 0 and now - self._failure_since >= self._failure_stop:
+            logger.error(
+                f"⛔ {self.operator_name} has failed for {now - self._failure_since:.0f}s "
+                f"({self._failure_streak} in a row); ending the watch"
+            )
+            raise SearchGaveUp("unavailable", f"{type(error).__name__}: {error}") from error
+
         due = self._failure_streak >= self._failure_threshold and (
             self._failure_alerted_at == 0.0
             or now - self._failure_alerted_at >= self._failure_realert
@@ -557,21 +619,44 @@ class RailService(ABC):
         if due:
             self._failure_alerted_at = now
             minutes = int((now - self._failure_since) // 60)
+            stop = (
+                f"응답이 {duration_words(self._failure_stop)} 넘게 없으면 검색을 멈춥니다.\n"
+                if self._failure_stop > 0
+                else ""
+            )
             self._announce(
                 f"⚠️ {self.operator_name} 응답을 받지 못하고 있습니다\n\n"
                 f"연속 {self._failure_streak}회 실패"
                 f"{f' (약 {minutes}분째)' if minutes else ''}.\n"
                 f"마지막 오류: {type(error).__name__}\n\n"
-                f"검색은 계속하되 요청 간격을 늘려 재시도합니다.\n"
-                f"{self.operator_name} 점검 중이거나 접속이 차단되었을 수 있습니다.\n\n"
+                f"요청 간격을 늘려 다시 시도합니다. {stop}"
+                f"{self.operator_name} 점검 중이거나 접속이 불안정할 수 있습니다.\n\n"
                 f"💡 중단하려면 /cancel 을 사용하세요."
             )
 
-        # Doubling per failure, capped: at the default 1s interval this walks
-        # 1s, 2s, 4s ... up to a minute between attempts. Shifting instead of
+        # Doubling per failure, capped: at the default 3s interval this walks
+        # 3s, 6s, 12s ... up to a minute between attempts. Shifting instead of
         # ** so a long outage cannot produce a float overflow.
         multiplier = float(1 << min(self._failure_streak - 1, 20))
         return min(multiplier, self._failure_backoff_cap)
+
+    def is_block_signal(self, error: Exception) -> bool:
+        """Whether a failed request means the operator has shut us out; see SearchBlockedError."""
+        return isinstance(error, SearchBlockedError)
+
+    def check_watch_deadline(self) -> None:
+        """
+        End the watch once WATCH_MAX_SECONDS have passed since it first started.
+
+        Called before each pass asks the operator anything, never while a seat
+        is being held or paid for: what is already booked is not touched.
+
+        Raises:
+            SearchGaveUp: "expired"
+        """
+        if self.watch_deadline is not None and time.time() >= self.watch_deadline:
+            logger.info("⏱ Watch reached its time limit; ending it unbooked")
+            raise SearchGaveUp("expired")
 
     def note_search_success(self) -> None:
         """Record that the operator answered, and say so if it had stopped."""
@@ -720,6 +805,7 @@ class RailService(ABC):
                 logger.debug(f"━━━ Search attempt #{attempts} ━━━")
 
             self.report_progress(attempts)
+            self.check_watch_deadline()
             self._check_session_refresh()
 
             # Search for trains
@@ -826,6 +912,7 @@ class RailService(ABC):
             is_summary = attempts % 60 == 0
 
             self.report_progress(attempts)
+            self.check_watch_deadline()
             self._check_session_refresh()
 
             # Search for trains (search for single passenger each time)

@@ -27,6 +27,7 @@ from korail_bot.services.mini_app_gateway import (
     KorailLoginUnavailable,
     MiniAppError,
 )
+from korail_bot.services.rail_service import duration_words
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,27 @@ HEALTH_NOTES = {
     "late": "감시는 돌고 있지만 한동안 코레일 조회 결과가 없어요. 좌석이 없다는 뜻이 아니에요. "
     "사용자에게 앱에서 확인해 달라고 알려 주세요.",
 }
+# How the last watch ended (status "ended", from search_ended), said only when nothing runs.
+# A watch that gave up has not found that there are no seats, and must not be read as sold out.
+ENDED_NOTES = {
+    "blocked": "마지막 감시는 코레일이 접속을 막은 것 같아 멈췄어요. 좌석이 없다는 뜻이 아니에요. "
+    "사용자에게 코레일 앱에서 로그인되는지 확인해 달라고 알려 주세요. 다시 감시를 시작하기 전에 꼭 확인해야 해요.",
+    "unavailable": "마지막 감시는 코레일 응답이 {stop}째 없어 멈췄어요. 좌석이 없다는 뜻이 아니에요. "
+    "코레일이 점검 중이거나 불안정할 수 있어요.",
+    "expired": "마지막 감시는 {limit} 동안 좌석을 잡지 못해 시간 상한으로 멈췄어요. 더 기다리려면 "
+    "사용자에게 확인을 받고 감시를 다시 시작해야 해요.",
+    "error": "마지막 감시는 오류로 멈췄어요. 좌석이 없다는 뜻이 아니에요. 사용자에게 앱에서 확인해 달라고 알려 주세요.",
+}
+
+
+def _ended_note(reason):
+    note = ENDED_NOTES.get(reason)
+    return note and note.format(
+        stop=duration_words(settings.KORAIL_FAILURE_STOP_SECONDS),
+        limit=duration_words(settings.WATCH_MAX_SECONDS),
+    )
+
+
 WATCH_RUNNING_NOTE = (
     "이미 감시 중이에요. 다른 감시를 시작하려면 먼저 멈춰야 하고, "
     "stop_watch 는 사용자에게 확인을 받은 뒤에만 불러 주세요. 지금 감시는 get_status 로 볼 수 있어요."
@@ -676,6 +698,11 @@ def _started(result):
             notes.append(f"감시를 시작했어요: {said}")
             if terms := _seat_terms(running):
                 notes.append(f"좌석 조건: {terms}")
+            if settings.WATCH_MAX_SECONDS > 0:
+                notes.append(
+                    f"감시는 시작하고 {duration_words(settings.WATCH_MAX_SECONDS)}이 지나도 "
+                    "좌석을 잡지 못하면 멈춰요."
+                )
         return {
             **result,
             "running": _plain_watch(running),
@@ -797,6 +824,10 @@ def _status(result):
         held, wanted = (running or {}).get("seatsHeld"), (running or {}).get("seatsWanted")
         if isinstance(held, int) and isinstance(wanted, int) and wanted > held > 0:
             notes.append(f"{wanted}석 중 {held}석을 잡았고 나머지는 감시가 찾고 있어요.")
+    ended = result.get("ended")
+    if not running and not result.get("scheduled") and isinstance(ended, dict):
+        if said := _ended_note(ended.get("reason")):
+            notes.append(said)
     scheduled = result.get("scheduled")
     if isinstance(scheduled, dict) and "search" in scheduled:
         scheduled = {**scheduled, "search": _plain_watch(scheduled["search"])}

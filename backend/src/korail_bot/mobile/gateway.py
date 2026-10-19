@@ -1,7 +1,7 @@
 """Booking adapter: approved identities use their own encrypted railway login."""
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from functools import wraps
 from time import monotonic
 
@@ -722,6 +722,18 @@ class MobileGateway(MiniAppGateway):
         # Opening an unlinked app performs no railway request. The same
         # snapshot is used by the mobile booking boundary.
         return FALLBACK_STATIONS
+
+    def status(self, chat_id):
+        result = super().status(chat_id)
+        # With nothing running, how the last watch ended (search_ended, kept a week and cleared
+        # when a new one starts): an agent asking must hear "blocked" or "expired", not silence.
+        note = None if result["running"] else self.storage.get_search_ended(chat_id)
+        if note:
+            result["ended"] = {
+                "reason": note["reason"],
+                "at": datetime.fromtimestamp(note["at"], tz=UTC).isoformat(),
+            }
+        return result
 
     def _running(self, chat_id):
         self.reservation.detect_dead_searches()

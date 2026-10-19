@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import redis
+import requests
 from korail2 import TrainType
 from korail2.korail2 import Reservation, Train
 from korail_mobile_api import KorailSeatAssignment
@@ -93,6 +94,7 @@ DEFAULT_SCENARIO = {
     # 시나리오를 바꾼 뒤 처음 몇 번의 로그인에 코레일이 답하지 않는지(HTTP 503). 그 뒤로는 login 대로 답해요.
     "login_unreachable": 0,
     # 예약 워커의 조회 결과: seats(몇 번 헛돈 뒤 빈자리) | sold_out(계속 매진) | unavailable(조회 실패)
+    # | blocked(코레일이 strResult 없는 응답을 줌: 2026-10-19 운영에서 계정이 막혔을 때의 답)
     "search": "seats",
     # 열차 목록(앱의 열차 조회·에이전트의 find_trains) 결과: trains(시간표대로) | sold_out(모든 열차 매진)
     # | unavailable(코레일이 답하지 않음, HTTP 503). 조회 실패와 매진을 따로 재현하려고 둬요.
@@ -114,7 +116,40 @@ DEFAULT_SCENARIO = {
     # 거절한 호출도 기록에 "cancel" 로 남고(refused: true), 예약은 그대로 결제 대기예요.
     "cancel_refused": [],
     "trains": DEFAULT_TRAINS,
+    # 예약 워커가 시작할 때 운영 설정 대신 쓰는 값(초). None 이면 스택 설정 그대로예요.
+    # 조회 실패가 이만큼 이어지면 감시를 멈춰요(SEARCH_FAILURE_STOP_SECONDS).
+    "failure_stop_seconds": None,
+    # 감시를 이만큼 하면 멈춰요(WATCH_MAX_SECONDS). 재시작 뒤에도 처음 시작한 때부터 세요.
+    "watch_max_seconds": None,
 }
+
+# 차단 의심 응답 본문. 운영에서 실제로 온 본문은 남지 않았어요(그래서 이번에 키·본문 일부를 로그에 남겨요).
+# 판정에 쓰는 것은 strResult 가 없다는 것뿐이라, 여느 코레일 답처럼 생긴 키로 채워요.
+BLOCKED_REPLY = {"h_msg_cd": "", "h_msg_txt": "", "rtnMsg": "비정상적인 접근입니다."}
+
+# install 이 덮어쓰기 전의 실제 KorailService 메서드. blocked 조회는 실제 코드로 돌아요.
+_REAL: dict = {}
+
+
+class _ReplyAdapter(requests.adapters.BaseAdapter):
+    """korail2 의 HTTP 세션에 끼우는 전송로: 소켓을 열지 않고 정해 둔 JSON 을 HTTP 200 으로 돌려줘요."""
+
+    def __init__(self, body: dict):
+        super().__init__()
+        self.body = body
+
+    def send(self, request, **kwargs):
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps(self.body, ensure_ascii=False).encode()
+        response.headers["Content-Type"] = "application/json;charset=UTF-8"
+        response.encoding = "utf-8"
+        response.url = request.url
+        response.request = request
+        return response
+
+    def close(self) -> None:
+        pass
 
 
 def _client() -> redis.Redis:
@@ -268,6 +303,27 @@ class FakeKorail:
         _log("search", polls=polls, mode=state["search"], pid=os.getpid())
         if state["search"] == "unavailable":
             raise SearchUnavailableError("가짜 코레일: 조회 실패")
+        if state["search"] == "blocked":
+            # 실제 korail2 클라이언트(KorailService._build_client)가 실제 KorailService.search_trains
+            # 로 조회해요. 응답만 정해 둔 것이라 korail2 의 _result_check 가 KeyError 를 내는 데서부터
+            # 차단 판정과 로그까지 운영 코드가 그대로 돌아요.
+            client = self._build_client(self._username or "e2e", "unused")
+            client._session.mount("https://", _ReplyAdapter(BLOCKED_REPLY))
+            client.logined = True
+            self._korail_instance = client
+            return _REAL["search_trains"](
+                self,
+                dep_date,
+                src_locate,
+                dst_locate,
+                dep_time,
+                max_dep_time,
+                train_type,
+                passenger_count,
+                verbose,
+                include_no_seats,
+                train_numbers,
+            )
         if state["search"] == "sold_out" or polls <= state["seat_after_polls"]:
             return []
         rows = [
@@ -472,9 +528,20 @@ def install() -> None:
     from korail_bot.services.korail_service import KorailService
     from korail_bot.utils.station_codes import StationManager
 
+    _REAL["search_trains"] = KorailService.search_trains
     for name, member in vars(FakeKorail).items():
         if callable(member) and not name.startswith("__"):
             setattr(KorailService, name, member)
+    # 시나리오가 정한 감시 한도를 이 프로세스의 설정으로 써요. 워커는 감시마다 새로 뜨니 테스트마다 바뀌어요.
+    from korail_bot.config.settings import settings
+
+    state = scenario()
+    for key, name in (
+        ("failure_stop_seconds", "KORAIL_FAILURE_STOP_SECONDS"),
+        ("watch_max_seconds", "WATCH_MAX_SECONDS"),
+    ):
+        if state.get(key) is not None:
+            setattr(settings, name, float(state[key]))
     # 역 목록도 코레일에서 받아 와요. 내장 목록으로 답해요.
     StationManager._fetch_stations_from_api = lambda self: set(FALLBACK_STATIONS)
     # 스택은 서버가 이 기록을 남겨야 준비됐다고 봐요. 가짜 없이 뜬 서버는 쓰지 않아요.

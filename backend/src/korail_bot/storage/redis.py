@@ -965,7 +965,9 @@ class RedisStorage(StorageInterface):
     def mark_search_ended(self, chat_id: int, reason: str, pid: int) -> None:
         """
         Note how a search ended on its own terms: 'booked', 'cancelled' by its
-        user, or 'error' (the search reported a failure and stopped).
+        user, 'error' (the search reported a failure and stopped), or a watch
+        that gave up on purpose: 'blocked' (Korail seems to have shut it out),
+        'unavailable' (failures went on too long) or 'expired' (time limit).
 
         Written wherever a running record is deleted because the search is
         over, so that a record which is simply gone - unreadable, or lost with
@@ -973,6 +975,11 @@ class RedisStorage(StorageInterface):
         """
         data = json.dumps({"reason": reason, "at": int(time.time()), "pid": pid})
         self.redis.set(f"search_ended:{chat_id}", data, ex=self.SEARCH_MARK_TTL_SECONDS)
+
+    def get_search_ended(self, chat_id: int) -> dict | None:
+        """The note mark_search_ended left for one chat, if any."""
+        data = self.redis.get(f"search_ended:{chat_id}")
+        return json.loads(data) if data else None
 
     def get_search_endings(self) -> dict[int, dict]:
         """Every note mark_search_ended left, by chat ID."""

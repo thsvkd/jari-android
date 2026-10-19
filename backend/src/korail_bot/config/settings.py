@@ -127,7 +127,11 @@ class Settings:
     KORAIL_ADMIN_USER_ID: str | None = (os.environ.get("USERID") or "").strip() or None
     # Not stripped: a password may legitimately begin or end with a space.
     KORAIL_ADMIN_PASSWORD: str | None = os.environ.get("USERPW") or None
-    KORAIL_SEARCH_INTERVAL: float = float(os.environ.get("SEARCH_INTERVAL", "1"))  # seconds
+    # Seconds between passes. 3, not 1: a watch on pit5 asked Korail about
+    # once a second for 30 hours (2026-10-17..19) and the account was
+    # restricted for "macro" use. One pass is one request in the common case
+    # (see KorailService._search_legacy_pages for the paged worst case).
+    KORAIL_SEARCH_INTERVAL: float = float(os.environ.get("SEARCH_INTERVAL", "3"))
     # Every wait between Korail requests is drawn from
     # interval * (1 +/- jitter) instead of being a fixed number of seconds, so
     # the search does not knock on the door on a metronome. 0 disables it and
@@ -151,9 +155,20 @@ class Settings:
         os.environ.get("SEARCH_FAILURE_REALERT_SECONDS", "1800")
     )
     # Failures back the search off instead of keeping it at full rate: if
-    # Korail is refusing us, asking every second is what makes it worse. The
-    # wait doubles per failure, up to this multiple of the search interval.
-    KORAIL_FAILURE_BACKOFF_CAP: float = float(os.environ.get("SEARCH_FAILURE_BACKOFF_CAP", "60"))
+    # Korail is refusing us, asking at full rate is what makes it worse. The
+    # wait doubles per failure, up to this multiple of the search interval:
+    # 20 x 3s is a minute, the longest gap the old 60 x 1s allowed. A longer
+    # cap would leave SEARCH_FAILURE_STOP_SECONDS firing minutes late and a
+    # recovery unnoticed for as long.
+    KORAIL_FAILURE_BACKOFF_CAP: float = float(os.environ.get("SEARCH_FAILURE_BACKOFF_CAP", "20"))
+    # How long a run of failed searches may last before the watch gives up
+    # and says so, whatever the failure (maintenance, timeouts, network). A
+    # watch that cannot ask is not watching, and hammering an outage for
+    # hours is what got an account restricted. 0 never gives up.
+    KORAIL_FAILURE_STOP_SECONDS: float = float(os.environ.get("SEARCH_FAILURE_STOP_SECONDS", "600"))
+    # The longest a watch runs without booking, counted from when it actually
+    # started (a resumed watch keeps its first start). 0 means no limit.
+    WATCH_MAX_SECONDS: float = float(os.environ.get("WATCH_MAX_SECONDS", "3600"))
     # The mobile app build the client reports itself as. korail2 carries the
     # build that was current when it was packaged; this is the escape hatch
     # for when Korail stops serving that build and the library has not caught

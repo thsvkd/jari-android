@@ -29,6 +29,17 @@ Python 3.13 이상과 Redis가 필요합니다. Windows에는 시간대 데이�
 | `MOBILE_GOOGLE_CLIENT_ID` | 선택 사항; Google Cloud의 웹 애플리케이션 OAuth 클라이언트 ID. Google 로그인을 쓰려면 아래 세 값을 모두 설정 |
 | `MOBILE_GOOGLE_CLIENT_SECRET` | 선택 사항; 같은 웹 OAuth 클라이언트의 서버 전용 비밀 값. 저장소와 앱 번들에 넣지 않음 |
 
+선택 설정(감시 속도와 한도, docs/SPEC.md의 "감시 한도"):
+
+| 환경 변수 | 용도 |
+|---|---|
+| `SEARCH_INTERVAL` | 감시 회차 사이 간격(초); 기본 `3`. 실제 대기는 ±`SEARCH_INTERVAL_JITTER`(기본 `0.4`) 안에서 흔들림 |
+| `SEARCH_FAILURE_BACKOFF_CAP` | 조회 실패 때 늘리는 간격의 상한(간격의 배수); 기본 `20`(3초 기준 1분) |
+| `SEARCH_FAILURE_STOP_SECONDS` | 조회 실패가 이만큼 이어지면 감시를 멈춤(초); 기본 `600`, `0`이면 끔 |
+| `WATCH_MAX_SECONDS` | 좌석을 잡지 못한 감시를 처음 시작한 때부터 이만큼 지나면 멈춤(초); 기본 `3600`, `0`이면 끔 |
+
+코레일이 `strResult` 없는 응답(차단 의심)을 주면 감시는 첫 응답에서 멈춥니다. 따로 끄는 설정은 없습니다.
+
 기존 봇 `.env`는 자동으로 읽지 않습니다. 봇의 계정·비밀 키를 모바일 설정으로 복사하지 않습니다.
 모바일 Redis 키에는 `jari:mobile:v1:` 접두어가 붙고, 앱 계정은 `mobile_...` ID 및
 서버가 배정한 별도 정수 키를 사용합니다. 조회·스캔·삭제·런타임 잠금 모두 이 접두어 안에서 실행합니다.

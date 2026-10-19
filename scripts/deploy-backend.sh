@@ -192,7 +192,8 @@ EOF
 #   unreadable <count>      running records this build cannot parse
 #   search <id> <runId> <alive|gone> <in|out> <yes|no> <reason|->
 #   stopped <id> <why> <epoch>   stopped without finishing, or not resumed
-#   ended <id> <why> <epoch>     ended on its own: booked|cancelled|error
+#   ended <id> <why> <epoch>     ended on its own: booked|cancelled|expired|error|
+#                                blocked|unavailable
 # (in|out: logged in to Korail; yes|no: resumable). Only that line is read,
 # so whatever else reaches stdout cannot spoil it; fails without one.
 running_rows() {
@@ -273,9 +274,11 @@ snapshot_running() {
 }
 
 # judge_resumes <rows>: one line per expected search -
-#   ok <id> <note>    searching again, or booked or cancelled while this waited
+#   ok <id> <note>    searching again, or booked, cancelled or past its time
+#                     limit (expired) while this waited
 #   wait <id> <why>   not back yet; may still come back
-#   lost <id> <why>   stopped, not resumed, or ended on an error after the
+#   lost <id> <why>   stopped, not resumed, or ended on an error (error,
+#                     blocked, unavailable) after the
 #                     snapshot; or more records the new build cannot read
 #                     than there were at the snapshot
 # A record that is simply gone counts as finished only with the mark the end
@@ -305,7 +308,7 @@ judge_resumes() {
       } else if (id in stopped)          print "lost", id, "stopped (" stopped[id] ")"
       # "in" before any lookup: reading ended[id] would create the entry.
       else if (!(id in ended))           print "wait", id, "record gone with no mark of how it ended"
-      else if (ended[id] == "booked" || ended[id] == "cancelled")
+      else if (ended[id] == "booked" || ended[id] == "cancelled" || ended[id] == "expired")
                                          print "ok", id, "ended while this waited (" ended[id] ")"
       else                               print "lost", id, "ended on an error (" ended[id] ")"
     }

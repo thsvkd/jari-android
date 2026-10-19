@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 
 from korail_bot.config.settings import settings
 from korail_bot.models import (
@@ -78,6 +79,7 @@ class ReservationService:
         resumed: bool = False,
         resumed_message: str | None = None,
         restoring: bool = False,
+        started_at: datetime | None = None,
     ) -> bool:
         """
         Start a background reservation process.
@@ -100,6 +102,9 @@ class ReservationService:
                      stopped, and a retry that works means they never need to
                      be - where a death notice followed by the search coming
                      back is two contradictory messages about one search.
+            started_at: When the search first started, for one an earlier run
+                     left behind: the watch's time limit (WATCH_MAX_SECONDS)
+                     keeps counting from there instead of starting over.
 
         Returns:
             True if process started successfully
@@ -259,6 +264,7 @@ class ReservationService:
                 korail_id=username,
                 search_params=search_params,
                 run_id=settings.RUN_ID,
+                **({"started_at": started_at} if started_at else {}),
             )
             # Before the record: the worker waits for the record before it
             # logs in, so no mark of its own can be written yet, and any mark
@@ -1091,6 +1097,7 @@ class ReservationService:
             search_params=reservation.search_params,
             resumed=True,
             restoring=True,
+            started_at=reservation.started_at,
         )
 
     def _give_up_resuming(self, reservation: RunningReservation) -> bool:

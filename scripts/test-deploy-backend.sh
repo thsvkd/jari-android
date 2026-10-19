@@ -350,6 +350,9 @@ RESUMED_OK="$(verify_resumed_against "$(running 1300 - "$(search -1 new true tru
 # Booked while the deploy waited; an older stop on file changes nothing.
 RESUMED_ENDED="$(verify_resumed_against "$(ENDED="$(ended -1 booked 1200)" running 1300 "$(stopped -1 crashed 900)")")"
 RESUMED_CANCELLED="$(verify_resumed_against "$(ENDED="$(ended -1 cancelled 1200)" running 1300 -)")"
+# A resumed watch past its time limit (WATCH_MAX_SECONDS) ends at once: on its own, not lost.
+RESUMED_EXPIRED="$(verify_resumed_against "$(ENDED="$(ended -1 expired 1200)" running 1300 -)")"
+RESUMED_BLOCKED="$(verify_resumed_against "$(ENDED="$(ended -1 blocked 1200)" running 1300 -)" 600)"
 # Its mark a second older than the snapshot clock: the end left the mark just
 # before the record went, and the snapshot listed the record in between.
 RESUMED_ENDED_EDGE="$(verify_resumed_against "$(ENDED="$(ended -1 booked 999)" running 1300 -)")"
@@ -380,7 +383,8 @@ else
   echo "$RESUMED_OK"
   FAIL=1
 fi
-for case in "RESUMED_ENDED:booked" "RESUMED_CANCELLED:cancelled" "RESUMED_ENDED_EDGE:booked"; do
+for case in "RESUMED_ENDED:booked" "RESUMED_CANCELLED:cancelled" "RESUMED_ENDED_EDGE:booked" \
+  "RESUMED_EXPIRED:expired"; do
   name="${case%%:*}"
   want="${case#*:}"
   out="${!name}"
@@ -400,7 +404,8 @@ for case in \
   "RESUMED_ABANDONED:stopped (not_resumed_seat_held)" \
   "RESUMED_VANISHED:record gone with no mark of how it ended" \
   "RESUMED_OLD_END:record gone with no mark of how it ended" \
-  "RESUMED_ERROR:ended on an error (error)"; do
+  "RESUMED_ERROR:ended on an error (error)" \
+  "RESUMED_BLOCKED:ended on an error (blocked)"; do
   name="${case%%:*}"
   want="${case#*:}"
   out="${!name}"

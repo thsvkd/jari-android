@@ -14,7 +14,8 @@ export interface Scenario {
   login?: boolean;
   /** 시나리오를 바꾼 뒤 처음 몇 번의 로그인에 코레일이 답하지 않는지(HTTP 503) */
   login_unreachable?: number;
-  search?: "seats" | "sold_out" | "unavailable";
+  /** blocked 는 코레일이 strResult 없는 응답을 주는 것(차단 의심)이에요. 첫 응답에서 감시가 멈춰요. */
+  search?: "seats" | "sold_out" | "unavailable" | "blocked";
   /** 열차 목록(열차 조회·find_trains) 결과. sold_out 은 열차는 있고 모두 매진, unavailable 은 코레일 503 이에요. */
   list?: "trains" | "sold_out" | "unavailable";
   seat_after_polls?: number;
@@ -23,6 +24,10 @@ export interface Scenario {
   sold_seats?: Record<string, string[]> | null;
   /** 코레일이 호차 목록에서 뺀(잔여석 없는) 호차 번호 */
   sold_out_cars?: number[];
+  /** 조회 실패가 이만큼(초) 이어지면 감시를 멈춰요. 예약 워커가 시작할 때 읽어요. */
+  failure_stop_seconds?: number | null;
+  /** 감시를 이만큼(초) 하면 멈춰요. 예약 워커가 시작할 때 읽어요. */
+  watch_max_seconds?: number | null;
 }
 
 /** e2e 스택의 제어 서버. 가짜 코레일 시나리오와 호출 기록을 다뤄요. */

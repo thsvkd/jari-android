@@ -341,7 +341,12 @@ def test_a_started_watch_answers_in_start_watchs_words(env, booker, passengers):
     assert result["structuredContent"]["notes"] == [
         "감시를 시작했어요: 11월 1일 서울→부산 · 07:00~08:00 출발 · 열차 013",
         f"좌석 조건: 일반실만, {passengers}명, 연속 좌석",
+        WATCH_LIMIT_NOTE,
     ]
+
+
+# A watch stops on its own after WATCH_MAX_SECONDS (default an hour); the agent is told up front.
+WATCH_LIMIT_NOTE = "감시는 시작하고 1시간이 지나도 좌석을 잡지 못하면 멈춰요."
 
 
 def test_a_started_watch_without_seat_details_says_only_what_it_watches(env, booker):
@@ -363,7 +368,8 @@ def test_a_started_watch_without_seat_details_says_only_what_it_watches(env, boo
         summary=False,
     )
     assert result["structuredContent"]["notes"] == [
-        "감시를 시작했어요: 11월 1일 서울→부산 · 열차 013"
+        "감시를 시작했어요: 11월 1일 서울→부산 · 열차 013",
+        WATCH_LIMIT_NOTE,
     ]
 
 
