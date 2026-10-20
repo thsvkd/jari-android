@@ -24,7 +24,7 @@ from korail_mobile_api.read_parsers import (
 
 from korail_bot.mobile import config as mobile_config
 from korail_bot.mobile.config import MobileConfig
-from korail_bot.mobile.gateway import WAITLIST_LIMIT, WaitlistsActive
+from korail_bot.mobile.gateway import WAITLIST_LIMIT, MobileGateway, WaitlistsActive
 from korail_bot.mobile.runtime import MobileRuntime
 from korail_bot.mobile.storage import MobileStorage
 from korail_bot.services.korail_service import KorailService
@@ -778,6 +778,20 @@ def test_a_listed_standby_without_seats_is_waiting():
     service._modern_client.get_ticket_reservation_detail.return_value = detail()
 
     assert state(service) == {"PNR015": {"state": "waiting"}}
+
+
+def test_a_waiting_standby_as_korail_actually_sent_it_is_waiting_with_no_deadline():
+    # Recorded from a real standby on 2026-10-20: the list row carries a zero payment date and
+    # the detail one seat row with car 0 and no seat number.
+    service = korail()
+    row = {**history_row("PNR015"), "h_ntisu_lmt_dt": "00000000", "h_ntisu_lmt_tm": "235959"}
+    service._modern_client.get_reservation_history.return_value = history(
+        {**row, "h_rsv_tp_cd": "08", "h_jrny_sqno": "0001", "h_rsv_chg_no": "000"}
+    )
+    service._modern_client.get_ticket_reservation_detail.return_value = detail((0, ""))
+
+    assert state(service) == {"PNR015": {"state": "waiting"}}
+    assert MobileGateway._deadline(("00000000", "235959")) is None
 
 
 def test_a_listed_standby_with_seats_is_assigned_with_its_deadline():
