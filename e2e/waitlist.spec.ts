@@ -170,7 +170,8 @@ test.describe("코레일 예약 대기", () => {
   });
 
   test("예약 대기가 안 되는 매진 열차는 지금처럼 취소표 감시로 찾아요 @layout", async ({ signedIn: page, control }) => {
-    await control.scenario({ list: "sold_out" });
+    // The watch's own search stays sold out too: with seats it would book before the home shows it running.
+    await control.scenario({ list: "sold_out", search: "sold_out" });
     await searchTrains(page);
     const card = page.locator("[data-train-card='00101']");
     await expect(card.locator("[data-official-waitlist]")).toHaveCount(0);
