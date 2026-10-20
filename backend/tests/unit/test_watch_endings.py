@@ -532,6 +532,9 @@ def test_an_answer_in_between_starts_the_count_again(monkeypatch, no_sleep):
 
 def test_maintenance_keeps_the_watch_retrying_until_korail_answers(monkeypatch, no_sleep):
     monkeypatch.setattr(settings, "KORAIL_FAILURE_STOP_SECONDS", 600.0)
+    # Without jitter: 3s +/- 40% reaches 4.2s and 6s +/- 40% starts at 3.6s, so
+    # randomised waits are not always increasing even though the backoff is.
+    monkeypatch.setattr(settings, "KORAIL_SEARCH_INTERVAL_JITTER", 0.0)
     service = KorailService()
     service._logged_in = True
     seat = SimpleNamespace(rsv_id="R1")
@@ -542,7 +545,7 @@ def test_maintenance_keeps_the_watch_retrying_until_korail_answers(monkeypatch, 
     assert _loop(service) is seat
     assert service.search_trains.call_count == 5
     # Backed off in between: 3s, 6s, 12s, 24s at the default interval.
-    assert len(no_sleep) == 4 and no_sleep == sorted(no_sleep)
+    assert no_sleep == [3.0, 6.0, 12.0, 24.0]
 
 
 def test_the_stop_limit_at_zero_never_gives_up(monkeypatch, no_sleep):
