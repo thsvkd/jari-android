@@ -435,10 +435,6 @@ function matchesNode(node, patterns) {
   return patterns.some((pattern) => values.some((value) => pattern.test(value)));
 }
 
-async function waitForUi(serial, label, patterns, timeoutMs = 60_000) {
-  return waitFor(label, async () => uiNodes(serial).find((node) => node.center && matchesNode(node, patterns)), timeoutMs, 750);
-}
-
 function clickNode(serial, node, label) {
   adb(serial, ["shell", "input", "tap", String(node.center[0]), String(node.center[1])]);
   console.log(`✓ ${label}`);
@@ -469,13 +465,31 @@ async function allowUnknownSourcesIfShown(serial) {
   adb(serial, ["shell", "input", "keyevent", "4"]);
 }
 
+const INSTALL_BUTTONS = [/^Install$/i, /^Update$/i, /^설치$/, /^업데이트$/];
+
+// 설치기는 확인 창 앞에 "Staging app…" 창을 띄워요. 그 창의 하나뿐인 취소 버튼은 확인 창의 업데이트
+// 버튼 자리(또는 가운데로 옮기기 전의 위쪽)에 있어서, 덤프와 탭 사이에 확인 창으로 바뀌면 엉뚱한 버튼을
+// 눌러요. 설치/업데이트 버튼이 있는 확인 창에서, 두 번 연속 같은 자리에 있는 버튼만 돌려줘요.
+async function waitForConfirmDialogButton(serial, label, patterns) {
+  let previous;
+  return waitFor(label, async () => {
+    const nodes = uiNodes(serial).filter((node) => node.center);
+    const current = nodes.some((node) => matchesNode(node, INSTALL_BUTTONS))
+      ? nodes.find((node) => matchesNode(node, patterns))
+      : undefined;
+    const stable = current && previous && current.bounds === previous.bounds;
+    previous = current;
+    return stable ? current : undefined;
+  }, 60_000, 750);
+}
+
 async function cancelInstaller(serial) {
-  const cancel = await waitForUi(serial, "패키지 설치 취소 버튼", [/^Cancel$/i, /^취소$/]);
+  const cancel = await waitForConfirmDialogButton(serial, "패키지 설치 확인 창의 취소 버튼", [/^Cancel$/i, /^취소$/]);
   clickNode(serial, cancel, "첫 패키지 설치 취소");
 }
 
 async function confirmInstaller(serial) {
-  const install = await waitForUi(serial, "패키지 설치 확인 버튼", [/^Install$/i, /^Update$/i, /^설치$/, /^업데이트$/]);
+  const install = await waitForConfirmDialogButton(serial, "패키지 설치 확인 버튼", INSTALL_BUTTONS);
   clickNode(serial, install, "Android 시스템 패키지 설치 확인");
 }
 
