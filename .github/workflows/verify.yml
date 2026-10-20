@@ -2,7 +2,7 @@
 #   checks: 유닛·모듈 → 통합(실서버 + 가짜 코레일) → 헤드리스 e2e·레이아웃 측정
 #   device: GitHub 러너의 Android 에뮬레이터에 dev.thsvkd.jari(디버그 빌드)을 깔고 기기에서만 의미 있는 단계를 돌려요.
 #           시간 휠을 넘기는 장면은 빼요: 에뮬레이터 호스트의 소프트웨어 렌더러가 그 장면에서 말없이 죽어요(헤드리스가 대신 재요).
-#   device-full: 휠 장면까지 전부, 더 안정적인 렌더러(swangle)로. 필수 검사가 아니고 야간·수동·릴리스 태그에서만 돌아요(약 28분).
+#   device-full: 휠 장면까지 전부, 더 안정적인 렌더러(swangle)로. 필수 검사가 아니고 야간·수동·릴리스 태그에서만 돌아요(약 40분).
 # 릴리스 태그(v*)를 푸시할 때는 .githooks/pre-push 가 로컬 에뮬레이터 기기 단계 포함 npm run verify 기록을 요구해요.
 name: verify
 
@@ -138,7 +138,8 @@ jobs:
   device-full:
     if: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    # 기기 단계 제한(휠까지 45분, scripts/verify.mjs)에 에뮬레이터 준비·빌드를 더한 시간이에요.
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

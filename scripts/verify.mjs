@@ -207,8 +207,11 @@ const deviceStep = [
     const cdp = prepareDevice();
     const stopWatching = watchRunnerMemory();
     try {
-      // 결과 출력 뒤에 프로세스가 멈춰도 잡 제한까지 가지 않게 해요. 통과한 기기 단계는 15분을 넘기지 않아요.
-      run("npx playwright test --project=device", { env: { JARI_DEVICE_CDP: cdp }, timeout: 25 * 60 * 1000 });
+      // 결과 출력 뒤에 프로세스가 멈춰도 잡 제한까지 가지 않게 해요. 통과한 기기 단계는 휠을 건너뛰면
+      // 20분, 휠까지 돌면(device-full) 30분 남짓이에요. 이 제한에 걸리면 아래 releaseDevice 가 포워딩을
+      // 지워 남은 장면이 모두 CDP 연결 거부로 실패하니, 제한은 통과하는 실행보다 넉넉해야 해요.
+      const minutes = process.env.JARI_DEVICE_WHEEL === "1" ? 45 : 25;
+      run("npx playwright test --project=device", { env: { JARI_DEVICE_CDP: cdp }, timeout: minutes * 60 * 1000 });
     } finally {
       stopWatching();
       releaseDevice();
