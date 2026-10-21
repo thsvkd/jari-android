@@ -8,11 +8,11 @@
 #       릴리스(업로드)용 새 키를 만들어 JARI_ANDROID_RELEASE_* 로 저장해요. 키스토어는 디스크에 남기지 않아요.
 #
 # 이미 저장된 키는 덮어쓰지 않아요(FORCE=1 이면 덮어써요). 덮어쓰면 이전 키는 되찾을 수 없어요.
-# 위치는 JARI_DOPPLER_PROJECT / JARI_DOPPLER_CONFIG (기본 dev / dev).
+# 위치는 JARI_DOPPLER_PROJECT(기본 app-jari)의 debug → JARI_DOPPLER_CONFIG(기본 dev), release → JARI_DOPPLER_SIGNING_CONFIG(기본 signing).
 set -euo pipefail
 
-PROJECT="${JARI_DOPPLER_PROJECT:-dev}"
-CONFIG="${JARI_DOPPLER_CONFIG:-dev}"
+PROJECT="${JARI_DOPPLER_PROJECT:-app-jari}"
+if [[ "${1:-}" == "release-new" ]]; then CONFIG="${JARI_DOPPLER_SIGNING_CONFIG:-signing}"; else CONFIG="${JARI_DOPPLER_CONFIG:-dev}"; fi
 fail() { echo "doppler-store-android-keys: $*" >&2; exit 1; }
 command -v doppler >/dev/null || fail "doppler CLI 가 없어요."
 command -v keytool >/dev/null || fail "keytool(JDK)이 없어요. JAVA_HOME 을 JDK 21 로 잡아 주세요."

@@ -19,7 +19,8 @@
 # 서명키는 Doppler 에 두고 빌드 때만 꺼내요. 저장소에 없고, 디스크에는 서명하는 동안의 임시 파일뿐이에요.
 #   JARI_SIGNING_KEY         debug(기본: 지금까지 낸 릴리스와 같은 키) | release
 #   Doppler 시크릿           JARI_ANDROID_<DEBUG|RELEASE>_ 뒤에 KEYSTORE_B64 / STORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD
-#   JARI_DOPPLER_PROJECT / JARI_DOPPLER_CONFIG   Doppler 위치 (기본 dev / dev)
+#   JARI_DOPPLER_PROJECT / JARI_DOPPLER_CONFIG   Doppler 위치 (기본 app-jari / dev: debug 키·Firebase 설정·업데이트 공개키)
+#   JARI_DOPPLER_SIGNING_CONFIG                  release 키가 있는 설정 (기본 signing)
 #   JARI_KEYSTORE_FILE       Doppler 를 쓰지 못할 때만: 로컬 키스토어 파일(비밀번호 JARI_KEYSTORE_PASSWORD, 별칭 JARI_KEY_ALIAS)
 #   JARI_API_BASE_URL        운영 API 주소 (기본 https://jari.thsvkd.dev, 앱에 들어가는 공개 값이에요)
 #   JAVA_HOME                JDK 21 (기본 brew 의 openjdk@21)
@@ -34,8 +35,10 @@ fail() { echo "release-android: $*" >&2; exit 1; }
 
 KIND="${JARI_SIGNING_KEY:-debug}"
 [[ "$KIND" == "debug" || "$KIND" == "release" ]] || fail "JARI_SIGNING_KEY 는 debug 또는 release 예요."
-DOPPLER_PROJECT="${JARI_DOPPLER_PROJECT:-dev}"
+DOPPLER_PROJECT="${JARI_DOPPLER_PROJECT:-app-jari}"
 DOPPLER_CONFIG="${JARI_DOPPLER_CONFIG:-dev}"
+# release 키는 접근을 좁힌 설정에 따로 있어요.
+if [[ "$KIND" == "release" ]]; then KEY_CONFIG="${JARI_DOPPLER_SIGNING_CONFIG:-signing}"; else KEY_CONFIG="$DOPPLER_CONFIG"; fi
 API_BASE_URL="${JARI_API_BASE_URL:-https://jari.thsvkd.dev}"
 
 if [[ -z "${JAVA_HOME:-}" && -d /opt/homebrew/opt/openjdk@21 ]]; then
@@ -65,7 +68,7 @@ cleanup() {
 trap cleanup EXIT
 secret() {
   doppler secrets get "JARI_ANDROID_$(echo "$KIND" | tr '[:lower:]' '[:upper:]')_$1" --plain \
-    --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" 2>/dev/null
+    --project "$DOPPLER_PROJECT" --config "$KEY_CONFIG" 2>/dev/null
 }
 if [[ -n "${JARI_KEYSTORE_FILE:-}" ]]; then
   KEYSTORE="$JARI_KEYSTORE_FILE"
@@ -78,7 +81,7 @@ else
   chmod 600 "$TEMP_KEYSTORE"
   KEYSTORE="$TEMP_KEYSTORE"
   secret KEYSTORE_B64 | base64 --decode > "$KEYSTORE" \
-    || fail "Doppler($DOPPLER_PROJECT/$DOPPLER_CONFIG)에서 $KIND 키스토어를 꺼내지 못했어요. doppler login 과 시크릿 이름을 확인해 주세요."
+    || fail "Doppler($DOPPLER_PROJECT/$KEY_CONFIG)에서 $KIND 키스토어를 꺼내지 못했어요. doppler login 과 시크릿 이름을 확인해 주세요."
   [[ -s "$KEYSTORE" ]] || fail "$KIND 키스토어가 비어 있어요."
   JARI_STORE_PASSWORD="$(secret STORE_PASSWORD)"
   KEY_ALIAS="$(secret KEY_ALIAS)"

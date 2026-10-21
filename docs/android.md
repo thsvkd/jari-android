@@ -70,7 +70,8 @@ JARI_SIGNING_KEY=release scripts/release-android.sh # 업로드 키로 서명
 |---|---|
 | `JARI_SIGNING_KEY` | `debug`(기본) 또는 `release` |
 | `JARI_API_BASE_URL` | 앱에 넣을 API 주소(기본: 운영 서버) |
-| `JARI_DOPPLER_PROJECT`·`JARI_DOPPLER_CONFIG` | Doppler 위치(기본 `dev`/`dev`) |
+| `JARI_DOPPLER_PROJECT`·`JARI_DOPPLER_CONFIG` | Doppler 위치(기본 `app-jari`/`dev`: 디버그 키·Firebase 설정·업데이트 공개키) |
+| `JARI_DOPPLER_SIGNING_CONFIG` | 릴리스(업로드) 키와 업데이트 목록 서명키가 있는 설정(기본 `signing`) |
 | `JARI_KEYSTORE_FILE`·`JARI_KEYSTORE_PASSWORD`·`JARI_KEY_ALIAS` | Doppler를 쓰지 못할 때 로컬 키스토어 |
 | `JAVA_HOME`·`ANDROID_HOME` | 자동으로 찾지 못할 때 지정 |
 
@@ -147,7 +148,7 @@ Play는 `scripts/release-play.sh`로 새 AAB를 만들고 더 높은 `versionCod
 | `JARI_APK_UPDATE_MANIFEST_URL` | 서명된 APK 업데이트 목록의 고정 HTTPS 주소 |
 | `JARI_APK_UPDATE_PUBLIC_KEY` | RSA 공개키의 DER SPKI를 base64로 인코딩한 값(2048비트 이상) |
 
-`scripts/release-android.sh`는 두 설정을 생략한 경우 `https://github.com/thsvkd/jari-android/releases/latest/download/apk-update.json`과 Doppler `dev/dev`의 기존 공개키 `JARI_OTA_PUBLIC_KEY`를 사용합니다. 개인키는 APK에 넣지 않습니다. 자체 배포는 주소와 공개키를 모두 지정합니다.
+`scripts/release-android.sh`는 두 설정을 생략한 경우 `https://github.com/thsvkd/jari-android/releases/latest/download/apk-update.json`과 Doppler `app-jari/dev`의 기존 공개키 `JARI_OTA_PUBLIC_KEY`를 사용합니다. 개인키는 APK에 넣지 않습니다. 자체 배포는 주소와 공개키를 모두 지정합니다.
 
 ```bash
 export JARI_APK_UPDATE_MANIFEST_URL=https://updates.example.com/jari/apk-update.json
@@ -157,7 +158,7 @@ scripts/release-android.sh
 
 ### APK 업데이트 목록 만들기
 
-릴리스 APK를 먼저 만들고 실제 APK에서 패키지·버전·버전 코드를 읽어 목록을 만듭니다. `ANDROID_HOME`의 `aapt`와 `apksigner`가 필요합니다. 기존 릴리스의 APK 서명 인증서를 유지합니다. 아래 개인키는 APK 서명키와 별도인 업데이트 목록 서명키이며, 운영에서는 기존 Doppler `JARI_OTA_SIGNING_PRIVATE_KEY_PEM`을 재사용합니다. 키를 새로 만들거나 덮어쓰지 않습니다. 제한된 키는 단기 서비스 토큰으로 필요한 작업 동안만 읽고 바로 폐기합니다. 개인키를 저장소나 `VITE_` 환경에 넣지 않습니다.
+릴리스 APK를 먼저 만들고 실제 APK에서 패키지·버전·버전 코드를 읽어 목록을 만듭니다. `ANDROID_HOME`의 `aapt`와 `apksigner`가 필요합니다. 기존 릴리스의 APK 서명 인증서를 유지합니다. 아래 개인키는 APK 서명키와 별도인 업데이트 목록 서명키이며, 운영에서는 기존 Doppler `app-jari/signing`의 `JARI_OTA_SIGNING_PRIVATE_KEY_PEM`을 재사용합니다. 키를 새로 만들거나 덮어쓰지 않습니다. 제한된 키는 단기 서비스 토큰으로 필요한 작업 동안만 읽고 바로 폐기합니다. 개인키를 저장소나 `VITE_` 환경에 넣지 않습니다.
 
 ```bash
 npm run manifest:apk -- --apk dist-release/jari-<버전>-debug.apk \

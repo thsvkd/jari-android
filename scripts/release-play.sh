@@ -10,7 +10,8 @@
 # 비밀은 Doppler 에 두고 빌드 때만 꺼내요. 디스크에는 빌드하는 동안의 임시 파일뿐이고, 끝나면(실패해도) 지워요.
 #   Doppler 시크릿   JARI_ANDROID_RELEASE_KEYSTORE_B64 / _STORE_PASSWORD / _KEY_ALIAS / _KEY_PASSWORD  (업로드 키)
 #                    JARI_ANDROID_GOOGLE_SERVICES_B64  (android/app/google-services.json 을 base64 로. 없으면 푸시가 꺼진 앱이 되므로 멈춰요)
-#   JARI_DOPPLER_PROJECT / JARI_DOPPLER_CONFIG   Doppler 위치 (기본 dev / dev)
+#   JARI_DOPPLER_PROJECT / JARI_DOPPLER_CONFIG   Doppler 위치 (기본 app-jari / dev: Firebase 설정)
+#   JARI_DOPPLER_SIGNING_CONFIG                  업로드 키가 있는 설정 (기본 signing)
 #   JARI_API_BASE_URL   운영 API 주소 (기본 https://jari.thsvkd.dev)
 #   JARI_BUNDLETOOL     bundletool 명령 또는 .jar (있으면 AAB 의 매니페스트를 그것으로 읽어요. 없으면 매니페스트를 직접 살펴요)
 #   JAVA_HOME           JDK 21 (기본 brew 의 openjdk@21)
@@ -20,8 +21,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail() { echo "release-play: $*" >&2; exit 1; }
 
-DOPPLER_PROJECT="${JARI_DOPPLER_PROJECT:-dev}"
+DOPPLER_PROJECT="${JARI_DOPPLER_PROJECT:-app-jari}"
 DOPPLER_CONFIG="${JARI_DOPPLER_CONFIG:-dev}"
+# 업로드 키는 접근을 좁힌 설정에 따로 있어요.
+SIGNING_CONFIG="${JARI_DOPPLER_SIGNING_CONFIG:-signing}"
 API_BASE_URL="${JARI_API_BASE_URL:-https://jari.thsvkd.dev}"
 [[ "$API_BASE_URL" == https://* ]] || fail "운영 API 주소는 https 여야 해요: $API_BASE_URL"
 
@@ -62,8 +65,8 @@ cleanup() {
   if [[ -n "$TEMP_KEYSTORE" ]]; then rm -f "$TEMP_KEYSTORE"; fi
 }
 trap cleanup EXIT
-secret() {
-  doppler secrets get "$1" --plain --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" 2>/dev/null
+secret() { # 이름 [설정]
+  doppler secrets get "$1" --plain --project "$DOPPLER_PROJECT" --config "${2:-$DOPPLER_CONFIG}" 2>/dev/null
 }
 
 # --- Firebase 설정: 없으면 푸시가 꺼진 앱이 나가요. Play 로 내는 앱에서는 멈춰요.
@@ -89,13 +92,13 @@ node -e '
 # --- 업로드 키: 임시 파일로 복원해요. 비밀번호는 명령줄이 아니라 환경변수로 넘겨요(ps 에 보이지 않게).
 TEMP_KEYSTORE="$(mktemp "${TMPDIR:-/tmp}/jari-upload-XXXXXX")"
 chmod 600 "$TEMP_KEYSTORE"
-secret JARI_ANDROID_RELEASE_KEYSTORE_B64 | base64 --decode > "$TEMP_KEYSTORE" \
-  || fail "Doppler($DOPPLER_PROJECT/$DOPPLER_CONFIG)에서 업로드 키스토어(JARI_ANDROID_RELEASE_KEYSTORE_B64)를 꺼내지 못했어요. doppler login 과 시크릿 이름을 확인해 주세요."
+secret JARI_ANDROID_RELEASE_KEYSTORE_B64 "$SIGNING_CONFIG" | base64 --decode > "$TEMP_KEYSTORE" \
+  || fail "Doppler($DOPPLER_PROJECT/$SIGNING_CONFIG)에서 업로드 키스토어(JARI_ANDROID_RELEASE_KEYSTORE_B64)를 꺼내지 못했어요. doppler login 과 시크릿 이름을 확인해 주세요."
 [[ -s "$TEMP_KEYSTORE" ]] || fail "업로드 키스토어가 비어 있어요."
 # 내보내지(export) 않는 셸 변수예요. 비밀번호는 keytool 과 Gradle 빌드에만 그 명령의 환경으로 넘기고, npm·npx 에는 가지 않아요.
-UPLOAD_STORE_PASSWORD="$(secret JARI_ANDROID_RELEASE_STORE_PASSWORD || true)"
-UPLOAD_KEY_ALIAS="$(secret JARI_ANDROID_RELEASE_KEY_ALIAS || true)"
-UPLOAD_KEY_PASSWORD="$(secret JARI_ANDROID_RELEASE_KEY_PASSWORD || true)"
+UPLOAD_STORE_PASSWORD="$(secret JARI_ANDROID_RELEASE_STORE_PASSWORD "$SIGNING_CONFIG" || true)"
+UPLOAD_KEY_ALIAS="$(secret JARI_ANDROID_RELEASE_KEY_ALIAS "$SIGNING_CONFIG" || true)"
+UPLOAD_KEY_PASSWORD="$(secret JARI_ANDROID_RELEASE_KEY_PASSWORD "$SIGNING_CONFIG" || true)"
 [[ -n "$UPLOAD_STORE_PASSWORD" && -n "$UPLOAD_KEY_ALIAS" && -n "$UPLOAD_KEY_PASSWORD" ]] \
   || fail "업로드 키의 비밀번호·별칭 시크릿이 비어 있어요."
 
