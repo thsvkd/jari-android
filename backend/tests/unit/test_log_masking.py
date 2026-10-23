@@ -275,11 +275,23 @@ def test_ordinary_log_lines_are_not_touched(everything_logged):
     logger = get_logger("test_log_masking")
 
     logger.info(
-        "Search page %d failed (%s); chat_id=%s", 2, "KorailTransportError", -2637222897571620
+        "Search page %d failed (%s); port %d, code=%s", 2, "KorailTransportError", 8081, -8204
     )
 
     output = everything_logged()
-    assert "Search page 2 failed (KorailTransportError); chat_id=-2637222897571620" in output
+    assert "Search page 2 failed (KorailTransportError); port 8081, code=-8204" in output
+
+
+def test_a_chat_id_of_thirteen_digits_or_more_is_masked_like_the_card_it_could_be(
+    everything_logged,
+):
+    # The original redactor masks any 13-19 digit run and ours builds on it, so owners' ids (the
+    # app's are 16 digits) read chat_id=-[REDACTED_CARD] in the log: security wins over searchability.
+    logger = get_logger("test_log_masking")
+
+    logger.info("Standby check for chat_id=%s failed", -2637222897571620)
+
+    assert "chat_id=-[REDACTED_CARD] failed" in everything_logged()
 
 
 def test_the_user_facing_error_text_of_a_reservation_process_is_masked():
@@ -290,12 +302,10 @@ def test_the_user_facing_error_text_of_a_reservation_process_is_masked():
     assert "S000" in redact_text(str(error))
 
 
-def test_a_card_after_a_hyphen_is_masked_but_a_negative_id_and_korails_negative_codes_are_not():
+def test_a_card_after_a_hyphen_is_masked_and_korails_negative_codes_are_not():
     assert redact_text("카드번호-4111111111111111") == "카드번호-[REDACTED_CARD]"
     assert redact_text("4111-1111-1111-1111") == "[REDACTED_CARD]"
-    assert redact_text("chat_id=-2637222897571620") == "chat_id=-2637222897571620"
-    # An id that happens to pass Luhn is still an id when it is named as one.
-    assert redact_text("chat_id=-4111111111111111") == "chat_id=-4111111111111111"
+    assert redact_text("chat_id=-4111111111111111") == "chat_id=-[REDACTED_CARD]"
     assert redact_text("code=-8204 h_msg_cd: -2000") == "code=-8204 h_msg_cd: -2000"
 
 

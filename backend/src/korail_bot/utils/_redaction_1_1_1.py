@@ -3,8 +3,9 @@
 # Apache License 2.0 (backend/LICENSES/korail-mobile-api.txt).
 #
 # The one change: the constant imported from .constants is defined on the line that replaces the import.
-# It is the reference a differential test holds korail_bot.utils.redaction to: whatever this masks,
-# the project's version masks too. Nothing imports it outside the tests.
+# korail_bot.utils.redaction applies this first and only then its own rules to the result, so the
+# project's masking is a superset of this by construction (and tests/unit/test_redaction_superset.py
+# pins the file's digest: edit it and the test fails). Do not edit, reformat or lint this file.
 """미리보기·로그에 남으면 안 되는 값을 가립니다.
 
 :data:`SENSITIVE_KEYS` = 가려야 할 폼/응답 키 집합. 민감 키의 값은 ``[REDACTED]``,

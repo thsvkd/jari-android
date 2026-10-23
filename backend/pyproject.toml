@@ -95,7 +95,7 @@ src = ["src", "tests"]
 # The snippets in the docs are illustrations - several quote module paths or
 # older APIs on purpose - and restyling them without correcting them makes the
 # documentation look maintained when it is not.
-extend-exclude = [".claude", ".omc", "*.md", "tests/unit/_redaction_1_1_1.py"]
+extend-exclude = [".claude", ".omc", "*.md", "src/korail_bot/utils/_redaction_1_1_1.py"]
 
 [tool.ruff.lint]
 select = [
