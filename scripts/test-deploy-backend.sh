@@ -55,7 +55,7 @@ fi
 
 for needle in \
   "backup: cp -a backend" \
-  "git archive HEAD backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile" \
+  "git archive HEAD backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile backend/README.md backend/LICENSE backend/LICENSES" \
   "swap backend/src" \
   "build api" \
   "up -d --no-deps api" \
@@ -76,12 +76,60 @@ for needle in \
   fi
 done
 
+# Every source the Dockerfile COPYs (not --from) must be in the archive the deploy ships. A COPY the
+# transfer forgot builds on the developer's machine and fails on the host, after src was swapped.
+ARCHIVE_LINE="$(echo "$OUTPUT" | grep -F "git archive HEAD" | head -n 1)"
+COPY_SOURCES="$(awk '/^COPY / && $2 !~ /^--from/ { for (i = 2; i < NF; i++) print $i }' "$REPO_ROOT/backend/Dockerfile")"
+[[ -n "$COPY_SOURCES" ]] || { echo "FAIL: found no COPY source in backend/Dockerfile"; FAIL=1; }
+for source in $COPY_SOURCES; do
+  if [[ " $ARCHIVE_LINE " == *" backend/${source} "* ]]; then
+    echo "ok: the deploy archive ships backend/${source} (COPY'd by the Dockerfile)"
+  else
+    echo "FAIL: backend/Dockerfile COPYs '${source}' but the deploy archive does not ship backend/${source}"
+    FAIL=1
+  fi
+done
+
 if echo "$OUTPUT" | grep -qF "ps -eo"; then
   echo "FAIL: plan still uses 'docker exec ... ps -eo' (breaks on slim images)"
   FAIL=1
 else
   echo "ok: plan does not depend on in-container ps"
 fi
+
+echo "== swap step on a copy of the host's backend/ =="
+SWAP_DIR="$(mktemp -d)"
+trap 'rm -rf "$FAKE_BIN" "$SWAP_DIR"' EXIT
+swap_script() {
+  # The body of the heredoc that run_remote "swap backend/src, copy build files" sends.
+  awk '/run_remote "swap backend\/src/ { on = 1; next } on && /^EOF$/ { exit } on' "$DEPLOY_SCRIPT"
+}
+host_with() {  # host_with <dir> [with-licenses]
+  mkdir -p "$1/backend/src" "$1/new/backend/src" "$1/new/backend/LICENSES"
+  for f in pyproject.toml uv.lock Dockerfile README.md LICENSE; do
+    echo "old $f" >"$1/backend/$f"; echo "new $f" >"$1/new/backend/$f"
+  done
+  echo "old src" >"$1/backend/src/a.py"; echo "new src" >"$1/new/backend/src/a.py"
+  echo "new notice" >"$1/new/backend/LICENSES/notice.txt"
+  if [[ "${2:-}" == "with-licenses" ]]; then
+    mkdir -p "$1/backend/LICENSES"
+    echo "old notice" >"$1/backend/LICENSES/notice.txt"; echo "gone" >"$1/backend/LICENSES/removed.txt"
+  fi
+}
+for case in without with-licenses; do
+  host_with "$SWAP_DIR/$case" "$case"
+  swap_script | bash -s "$SWAP_DIR/$case" "$SWAP_DIR/$case/new" T1 >/dev/null
+  rc=$?
+  check "swap runs when the host has $( [[ $case == without ]] && echo no || echo an ) LICENSES dir" $rc
+  b="$SWAP_DIR/$case/backend"
+  [[ "$(cat "$b/LICENSES/notice.txt")" == "new notice" ]] && echo "ok: LICENSES is the new one ($case)" || { echo "FAIL: LICENSES not replaced ($case)"; FAIL=1; }
+  [[ ! -e "$b/LICENSES/removed.txt" && ! -e "$b/LICENSES.new" ]] && echo "ok: no stale LICENSES file or staging dir left ($case)" || { echo "FAIL: stale LICENSES leftovers ($case)"; FAIL=1; }
+  for f in pyproject.toml uv.lock Dockerfile README.md LICENSE; do
+    [[ "$(cat "$b/$f")" == "new $f" ]] && echo "ok: $f is the new one ($case)" || { echo "FAIL: $f not replaced ($case)"; FAIL=1; }
+  done
+done
+[[ "$(cat "$SWAP_DIR/with-licenses/backend/.replaced-T1/LICENSES/notice.txt")" == "old notice" ]] \
+  && echo "ok: the previous LICENSES is kept under .replaced-<ts>" || { echo "FAIL: previous LICENSES not kept"; FAIL=1; }
 
 echo "== --dry-run (whitespace in --root/--after) =="
 set +e
