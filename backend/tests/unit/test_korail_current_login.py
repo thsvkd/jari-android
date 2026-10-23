@@ -434,3 +434,47 @@ def test_the_current_client_keeps_the_library_dynapath_allowlist():
     assert client.config.dynapath.allowlist_paths == library.allowlist_paths
     assert client.config.dynapath.header_name == library.header_name
     client.close()
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        # Korail's usage restriction: HTTP 200, no strResult, only this code.
+        {"code": "-2000"},
+        # A DynaPath block code as an integer field of an otherwise ordinary reply.
+        {"strResult": "FAIL", "h_msg_cd": "", "h_msg_txt": "", "dynaCd": -8202},
+    ],
+)
+def test_a_dynapath_refusal_at_the_login_stops_the_watch_and_keeps_the_account(
+    monkeypatch, refusal
+):
+    from unittest.mock import MagicMock
+
+    from korail_bot.handlers.conversation_handler import ConversationHandler
+    from korail_bot.models import OnboardedAccount, UserProgress, UserSession
+
+    service = KorailService()
+    monkeypatch.setattr(
+        service,
+        "_build_modern_client",
+        lambda: _korail_answering_login(httpx.Response(200, json=refusal)),
+    )
+
+    # Not a wrong password, and not a login to try again every few seconds.
+    assert service.login("1234567890", "synthetic-password") is False
+    assert service.login_unavailable is True
+    assert service.login_blocked is True
+
+    storage = MagicMock()
+    storage.get_onboarded_account.return_value = OnboardedAccount(
+        chat_id=7, korail_id="01012345678", korail_pw="synthetic-password"
+    )
+    session = UserSession(chat_id=7, in_progress=True, last_action=UserProgress.STARTED)
+    storage.get_user_session.return_value = session
+    handler = ConversationHandler(storage, MagicMock(), MagicMock(), access_service=MagicMock())
+    handler._rail_service = lambda chat_id: service
+    handler.uses_server_account = lambda chat_id: False
+
+    handler.resume_with_registered_account(7, session)
+
+    storage.delete_onboarded_account.assert_not_called()

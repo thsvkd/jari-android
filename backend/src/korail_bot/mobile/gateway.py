@@ -22,7 +22,7 @@ from korail_bot.models import OnboardedAccount, PaymentStatus, SeatPreference, S
 from korail_bot.models.station_snapshot import FALLBACK_STATIONS
 from korail_bot.services.access_service import AccessDecision, AccessLevel, AccessService
 from korail_bot.services.cancellation_wait_service import train_label
-from korail_bot.services.korail_service import KorailService
+from korail_bot.services.korail_service import KorailService, korail_reply_code
 from korail_bot.services.mini_app_gateway import (
     SOLD_OUT_CLASS,
     MiniAppError,
@@ -242,7 +242,7 @@ class MobileGateway(MiniAppGateway):
                 "Could not list current Korail trains for chat_id=%s (%s code=%s)",
                 chat_id,
                 type(exc).__name__,
-                getattr(exc, "code", None),
+                korail_reply_code(exc),
             )
             raise MiniAppError(
                 "열차 목록을 불러오지 못했어요. 잠시 후 다시 조회해 주세요.", 502

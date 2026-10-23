@@ -165,24 +165,32 @@ def _maintenance_notice(exc: BaseException) -> str | None:
 
 def _answered_without_result(exc: BaseException | None) -> bool:
     """
-    Whether Korail replied with JSON that has no strResult, however the client reported it.
+    Whether Korail's reply looks like a block, however the client reported it.
 
-    korail2 reads j['strResult'] without looking (KeyError: 'strResult'). korail_mobile_api keeps
-    the decoded reply on the exception it raises (.raw), as a KorailProtocolError for a typed read,
-    as a KorailAppError with an empty code for a search or a reservation, as a KorailAuthError for
-    a login; the reply itself is the evidence, not the exception type or its wording. Korail's own
-    refusals and its maintenance notice (S000) all carry strResult=FAIL, so they never match: this
-    is the reply an account got on pit5 from 2026-10-19 02:57 UTC, after Korail had restricted it.
+    Two shapes, both of them Korail turning an account away rather than answering about a request:
+
+    - JSON with no strResult. korail2 reads j['strResult'] without looking (KeyError: 'strResult').
+      korail_mobile_api keeps the decoded reply on the exception it raises (.raw), as a
+      KorailProtocolError for a typed read, as a KorailAppError with an empty code for a search or a
+      reservation, as a KorailAuthError for a login; the reply itself is the evidence, not the
+      exception type or its wording. Korail's own refusals and its maintenance notice (S000) all
+      carry strResult=FAIL, so they never match: this is the reply an account got on pit5 from
+      2026-10-19 02:57 UTC, after Korail had restricted it.
+    - A KorailDynaPathError: the anti-automation layer's refusal on a protected path (an integer
+      block code such as -8202, or HTTP 200 {"code": "-2000"} with no strResult). 1.1.1 surfaced
+      the same replies as a missing envelope, so production has always stopped on them.
     """
     for _ in range(5):
         if exc is None:
             return False
         if isinstance(exc, KeyError) and exc.args[:1] == ("strResult",):
             return True
-        # The HTTP error body of a 5xx, the DynaPath refusal (its own verdict) and the queue's
-        # answer are replies of another kind, whatever keys they lack.
+        if isinstance(exc, KorailDynaPathError):
+            return True
+        # The HTTP error body of a 5xx and the queue's answer are replies of another kind,
+        # whatever keys they lack.
         if isinstance(exc, KorailApiError) and not isinstance(
-            exc, KorailTransportError | KorailDynaPathError | KorailNetFunnelError
+            exc, KorailTransportError | KorailNetFunnelError
         ):
             raw = exc.raw
             if isinstance(raw, dict) and "strResult" not in raw:
@@ -191,34 +199,97 @@ def _answered_without_result(exc: BaseException | None) -> bool:
     return False
 
 
-# Keys whose values a logged reply excerpt must not carry: the credentials, the member's identity,
-# reservation and card numbers, and the server's own message text (h_msg_txt can quote the request).
-# korail_mobile_api 1.x shipped a redactor for this; 2.x dropped it, so the log keeps its own. It
-# matches on key fragments rather than a list of names, so a field Korail adds stays hidden.
-_SENSITIVE_REPLY_KEY = re.compile(
-    r"pwd|password|mbr|member|cust|pnr|crd|card|nm$|name|cpno|tel|phone|btdt|email|cookie"
-    r"|session|token|seat|ret_?no|h_msg_txt",
+def korail_reply_code(exc: BaseException) -> str | int | None:
+    """
+    The code Korail gave in the reply an error carries, for a log line; None if it gave none.
+
+    Korail's result code (h_msg_cd) is on the exception. A DynaPath refusal has none: the code is
+    the integer block code, or "code", in the reply it kept. Only scalar codes are returned, never
+    the message that came with them.
+    """
+    code = getattr(exc, "code", None)
+    if code not in (None, ""):
+        return code
+    raw = getattr(exc, "raw", None)
+    if not isinstance(raw, dict):
+        return code
+    for key in ("h_msg_cd", "code"):
+        value = raw.get(key)
+        if isinstance(value, str | int) and not isinstance(value, bool) and value != "":
+            return value
+    for value in raw.values():
+        if isinstance(value, int) and not isinstance(value, bool) and value < 0:
+            return value
+    return code
+
+
+# What a logged reply excerpt may carry. An allow-list, not a mask list: the fields that tell a
+# block from an outage (the result and its code) and the one free-text field Korail's anti-macro
+# layer answers in (rtnMsg, "비정상적인 접근입니다."), run through _mask_text. Everything else,
+# h_msg_txt included (it can quote the request), is left out; the keys are logged beside it.
+# korail_mobile_api 1.x shipped a redactor for this; 2.x dropped it.
+_EXCERPT_FIELDS = ("strResult", "h_msg_cd", "h_rslt_cd", "code", "rtnMsg", "message", "msg")
+_EXCERPT_TEXT_LIMIT = 120
+
+# Names whose value is a credential or identifies the member, however they turn up in a string:
+# key=value, key: value, "key":"value", a query parameter, a cookie.
+_SENSITIVE_NAME = re.compile(
+    r"pwd|passw|mbr|member|cust|pnr|crd|card|nm$|name|cpno|tel|phone|btdt|email|cookie|session"
+    r"|token|secret|auth|key|seat|ret_?no|sid$",
     re.IGNORECASE,
 )
+_NAMED_VALUE = re.compile(
+    r"""(?P<name>["']?[A-Za-z_][\w.\-]*["']?)(?P<sep>\s*[=:]\s*)"""
+    r"""(?P<value>"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?|[^\s&,;"'<>]+)"""
+)
+_COOKIE_LINE = re.compile(r"(?i)\b(?:set-)?cookie\s*[:=]\s*[^\r\n]*")
+_BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[\w.~+/\-]+=*")
 _CARD_NUMBER = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
 
 
-def _redact_reply(value, key: str | None = None):
-    """A copy of a decoded reply with the values of sensitive keys and card-like numbers hidden."""
-    if key is not None and _SENSITIVE_REPLY_KEY.search(key):
-        return "[REDACTED]"
-    if isinstance(value, dict):
-        return {name: _redact_reply(item, str(name)) for name, item in value.items()}
-    if isinstance(value, list):
-        return [_redact_reply(item) for item in value]
-    if isinstance(value, str):
-        return _CARD_NUMBER.sub("[REDACTED_CARD]", value)
-    return value
+def _mask_named_values(text: str) -> str:
+    """Hide the value after each sensitive name; scanning resumes inside the value of any other name (a URL's query)."""
+    out = []
+    at = 0
+    while match := _NAMED_VALUE.search(text, at):
+        if _SENSITIVE_NAME.search(match.group("name")):
+            value = match.group("value")
+            quote = value[0] if value[0] in "\"'" else ""
+            out.append(text[at : match.start()])
+            out.append(f"{match.group('name')}{match.group('sep')}{quote}[REDACTED]{quote}")
+            at = match.end()
+        else:
+            out.append(text[at : match.start("value")])
+            at = match.start("value")
+    out.append(text[at:])
+    return "".join(out)
+
+
+def _mask_text(text: str) -> str:
+    """A string with the credentials in it hidden: sensitive name=value pairs, cookies, bearer tokens, card numbers."""
+    text = _COOKIE_LINE.sub("Cookie: [REDACTED]", text)
+    text = _BEARER.sub(r"\1 [REDACTED]", text)
+    text = _mask_named_values(text)
+    return _CARD_NUMBER.sub("[REDACTED_CARD]", text)
+
+
+def _reply_excerpt(payload):
+    """The allow-listed fields of a decoded reply, their text masked and shortened."""
+    if not isinstance(payload, dict):
+        return type(payload).__name__
+    shown = {}
+    for name in _EXCERPT_FIELDS:
+        value = payload.get(name)
+        if isinstance(value, str):
+            shown[name] = _mask_text(value)[:_EXCERPT_TEXT_LIMIT]
+        elif isinstance(value, int) and not isinstance(value, bool):
+            shown[name] = value
+    return shown
 
 
 def _describe_reply(response, *, body: bool) -> str:
     """
-    The top-level keys of a reply, and with body=True a redacted excerpt (200 chars), for the log.
+    The top-level keys of a reply, and with body=True the allow-listed excerpt (_reply_excerpt), for the log.
 
     Login replies go in with body=False: they can carry the member's details. Never raises.
     """
@@ -233,7 +304,7 @@ def _describe_reply(response, *, body: bool) -> str:
         keys = sorted(payload)[:30] if isinstance(payload, dict) else type(payload).__name__
         said = f"HTTP {status} DynaPath-Result={dynapath} keys={keys}"
         if body:
-            shown = _redact_reply(payload)
+            shown = _reply_excerpt(payload)
             said += f" body={json.dumps(shown, ensure_ascii=False)[:200]!r}"
         return said
     except Exception as exc:
