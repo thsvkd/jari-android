@@ -239,9 +239,10 @@ class MobileGateway(MiniAppGateway):
             raise
         except Exception as exc:
             logger.error(
-                "Could not list current Korail trains for chat_id=%s (%s)",
+                "Could not list current Korail trains for chat_id=%s (%s code=%s)",
                 chat_id,
                 type(exc).__name__,
+                getattr(exc, "code", None),
             )
             raise MiniAppError(
                 "열차 목록을 불러오지 못했어요. 잠시 후 다시 조회해 주세요.", 502

@@ -5,10 +5,12 @@ from unittest.mock import MagicMock
 
 import fakeredis
 import pytest
+from korail_mobile_api.errors import KorailAppError
 
 from korail_bot.mobile.config import MobileConfig
 from korail_bot.mobile.runtime import MobileRuntime
 from korail_bot.models import OnboardedAccount, UserSession
+from korail_bot.services.mini_app_gateway import MiniAppError
 from korail_bot.utils.timezone import utc_now
 
 OWNER = -100
@@ -94,6 +96,18 @@ def test_a_list_stopped_by_the_page_limit_says_it_is_truncated(runtime):
     runtime.rail.search_selectable_trains.return_value = []
     runtime.rail.search_cut_short = True
     assert runtime.gateway.list_trains(OWNER, TRIP)["truncated"] is True
+
+
+def test_a_list_korail_refuses_logs_the_korail_code_and_not_its_message(runtime, caplog):
+    runtime.rail.search_selectable_trains.side_effect = KorailAppError(
+        "-8204", "synthetic update notice"
+    )
+    with caplog.at_level("ERROR"):
+        with pytest.raises(MiniAppError):
+            runtime.gateway.list_trains(OWNER, TRIP)
+    [line] = [r.getMessage() for r in caplog.records if "Could not list" in r.getMessage()]
+    assert "KorailAppError code=-8204" in line
+    assert "synthetic update notice" not in line
 
 
 def test_a_window_without_trains_is_an_empty_list(runtime):
