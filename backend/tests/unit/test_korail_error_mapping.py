@@ -272,6 +272,20 @@ def test_the_codes_korail_uses_are_logged_as_they_are(code):
     assert _reply_excerpt({"h_msg_cd": code}) == {"h_msg_cd": code}
 
 
+def test_every_code_in_the_librarys_message_table_is_logged_as_it_is():
+    import json
+    from importlib.resources import files
+
+    table = json.loads(
+        (files("korail_mobile_api") / "error_messages.json").read_text(encoding="utf-8")
+    )["messages"]
+
+    assert len(table) > 10000
+    withheld = [code for code in table if _reply_excerpt({"h_msg_cd": code}) != {"h_msg_cd": code}]
+    assert withheld == []
+    assert _reply_excerpt({"h_msg_cd": "S-ERR911411"}) == {"h_msg_cd": "S-ERR911411"}
+
+
 @pytest.mark.parametrize(
     "value",
     [

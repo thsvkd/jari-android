@@ -2,13 +2,14 @@
 Masks credentials and identifiers in text bound for a log.
 
 Vendored from korail-mobile-api 1.1.1 (``korail_mobile_api/redaction.py``,
-Copyright (c) 2026 yakisoba0728, Apache License 2.0, https://github.com/yakisoba0728/korail-mobile-api).
+Copyright (c) 2026 yakisoba0728, Apache License 2.0, https://github.com/yakisoba0728/korail-mobile-api;
+license and notice: ``backend/LICENSES/korail-mobile-api.txt``).
 The library ran every exception message through it; 2.x dropped it and puts Korail's own text into
 ``str(exc)`` as it came, so the project masks at the logging boundary instead
-(:mod:`korail_bot.utils.logger`). Changes from the original: the mutation-preview helpers are gone,
+(:mod:`korail_bot.utils.log_redaction`). Changes from the original: the mutation-preview helpers are gone,
 a few session/token names are added, a percent-encoded secret is read through, and a bare
-13-19 digit number is taken for a card only when it passes the Luhn check and is not a negative id
-(the app's chat ids are negative integers that a card pattern would otherwise swallow).
+13-19 digit number is taken for a card only when it passes the Luhn check and is not the negative id of
+``chat_id=-…`` (the app's chat ids are negative integers that a card pattern would otherwise swallow).
 """
 
 import re
@@ -316,8 +317,12 @@ def is_sensitive_key(name: str) -> bool:
     return base is not None and base in SENSITIVE_KEYS
 
 
-# Digits and the separators a card number is written with; a candidate is a card when it passes Luhn.
-CARD_RE = re.compile(r"(?<![-\w])\d(?:[ -]?\d){12,18}(?!\w)")
+# Digits and the separators a card number is written with; a candidate is a card when it passes Luhn,
+# a hyphen before it or not ("카드번호-4111…" is a card). The one exemption is a negative id named as
+# one: the app's chat ids are negative integers ("chat_id=-2637222897571620"), and one in ten of
+# them would pass Luhn by chance.
+CARD_RE = re.compile(r"(?<!\w)\d(?:[ -]?\d){12,18}(?!\w)")
+_NEGATIVE_ID_BEFORE = re.compile(r"(?i)(?:chat_?id|owner|user_?id|\bid)\s*[=:]\s*-$")
 SESSION_RE = re.compile(r"(?i)(JSESSIONID=)[^&;\s]+")
 BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[\w.~+/\-]+=*")
 COOKIE_RE = re.compile(r"(?i)\b((?:set-)?cookie\s*[:=]\s*)[^\r\n]*")
@@ -344,6 +349,8 @@ def _luhn(digits: str) -> bool:
 
 def _redact_card(match: re.Match[str]) -> str:
     digits = re.sub(r"\D", "", match.group(0))
+    if _NEGATIVE_ID_BEFORE.search(match.string, 0, match.start()):
+        return match.group(0)
     return "[REDACTED_CARD]" if 13 <= len(digits) <= 19 and _luhn(digits) else match.group(0)
 
 

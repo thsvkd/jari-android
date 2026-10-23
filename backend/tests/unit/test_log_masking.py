@@ -63,6 +63,9 @@ LEAKS = [
     "txtPwd: SYNTHETIC_PASSWORD",
     "4111111111111111",
     "카드 4111 1111 1111 1111 으로",
+    # A card after a separator hyphen is a card: 1.1.1 masked it, so does the boundary.
+    "카드번호-4111111111111111",
+    "S000: 카드번호-4111111111111111",
 ]
 MARKERS = re.compile(r"SYNTHETIC_[A-Z]+|4111[ ]?1111[ ]?1111[ ]?1111")
 
@@ -285,3 +288,98 @@ def test_the_user_facing_error_text_of_a_reservation_process_is_masked():
 
     assert not MARKERS.search(redact_text(str(error)))
     assert "S000" in redact_text(str(error))
+
+
+def test_a_card_after_a_hyphen_is_masked_but_a_negative_id_and_korails_negative_codes_are_not():
+    assert redact_text("카드번호-4111111111111111") == "카드번호-[REDACTED_CARD]"
+    assert redact_text("4111-1111-1111-1111") == "[REDACTED_CARD]"
+    assert redact_text("chat_id=-2637222897571620") == "chat_id=-2637222897571620"
+    # An id that happens to pass Luhn is still an id when it is named as one.
+    assert redact_text("chat_id=-4111111111111111") == "chat_id=-4111111111111111"
+    assert redact_text("code=-8204 h_msg_cd: -2000") == "code=-8204 h_msg_cd: -2000"
+
+
+# ---------------------------------------------- what Python prints when nothing catches it
+
+CHAIN = """
+from korail_mobile_api.errors import classify_app_error
+
+cause = classify_app_error("S000", "txtPwd=SYNTHETIC_PASSWORD JSESSIONID=SYNTHETIC_SESSION")
+"""
+
+
+def run_child(code):
+    import subprocess
+    import sys
+
+    return subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=False
+    )
+
+
+def assert_child_clean(done):
+    assert done.returncode != 0
+    assert "S000" in done.stderr  # still readable
+    assert not MARKERS.search(done.stderr), done.stderr
+    assert not MARKERS.search(done.stdout)
+
+
+def test_an_uncaught_exception_with_its_causes_is_printed_masked():
+    # The path the worker took: SearchGaveUp raised from the Korail error, escaping the entry point.
+    done = run_child(
+        "import korail_bot.mobile.worker\n"
+        + CHAIN
+        + """
+from korail_bot.services.rail_service import SearchGaveUp
+try:
+    raise cause
+except Exception as error:
+    raise SearchGaveUp("blocked", f"{type(error).__name__}: {error}") from error
+"""
+    )
+
+    assert_child_clean(done)
+    assert "SearchGaveUp" in done.stderr
+
+
+def test_an_uncaught_exception_in_a_thread_is_printed_masked():
+    done = run_child(
+        "import threading\nimport korail_bot\n"
+        + CHAIN
+        + """
+def run():
+    raise RuntimeError(f"gave up: {cause}") from cause
+thread = threading.Thread(target=run, name="watch")
+thread.start()
+thread.join()
+raise SystemExit(3)
+"""
+    )
+
+    assert done.returncode == 3
+    assert "S000" in done.stderr
+    assert not MARKERS.search(done.stderr), done.stderr
+    assert "Exception in thread watch" in done.stderr
+
+
+def test_an_exception_that_cannot_be_raised_is_printed_masked():
+    done = run_child(
+        "import korail_bot\n"
+        + CHAIN
+        + """
+class Holder:
+    def __del__(self):
+        raise cause
+Holder()
+raise SystemExit(4)
+"""
+    )
+
+    assert done.returncode == 4
+    assert not MARKERS.search(done.stderr), done.stderr
+
+
+def test_a_keyboard_interrupt_still_prints_as_python_prints_it():
+    done = run_child("import korail_bot\nraise KeyboardInterrupt")
+
+    assert "KeyboardInterrupt" in done.stderr

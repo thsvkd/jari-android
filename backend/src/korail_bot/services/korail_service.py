@@ -200,9 +200,11 @@ def _answered_without_result(exc: BaseException | None) -> bool:
 
 
 # What a Korail code looks like: a negative or plain number up to six digits (-8204, -2000, 100) or
-# letters then digits (S000, P058, WRG000000, ERI411321, SEMGTK, SUPDATE). Anything else in a code
-# field is not a code - a request quoted back, a card number - and is never logged.
-_CODE_VALUE = re.compile(r"-?\d{1,6}|[A-Z]{1,7}\d{0,9}")
+# letters then digits (S000, P058, WRG000000, ERI411321, SEMGTK, SUPDATE), with the one prefix the
+# app's message table uses (S-ERR911411, API.E00000). That covers all 10,307 codes in
+# korail_mobile_api 2.6.2's table. Anything else in a code field is not a code - a request quoted
+# back, a card number (a run of 13 digits cannot match) - and is never logged.
+_CODE_VALUE = re.compile(r"-?\d{1,6}|(?:[A-Z]{1,7}[.-])?[A-Z]{1,7}\d{0,9}")
 CODE_WITHHELD = "<redacted>"
 
 
