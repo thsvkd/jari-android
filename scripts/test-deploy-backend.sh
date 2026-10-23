@@ -97,40 +97,6 @@ else
   echo "ok: plan does not depend on in-container ps"
 fi
 
-echo "== swap step on a copy of the host's backend/ =="
-SWAP_DIR="$(mktemp -d)"
-trap 'rm -rf "$FAKE_BIN" "$SWAP_DIR"' EXIT
-swap_script() {
-  # The body of the heredoc that run_remote "swap backend/src, copy build files" sends.
-  awk '/run_remote "swap backend\/src/ { on = 1; next } on && /^EOF$/ { exit } on' "$DEPLOY_SCRIPT"
-}
-host_with() {  # host_with <dir> [with-licenses]
-  mkdir -p "$1/backend/src" "$1/new/backend/src" "$1/new/backend/LICENSES"
-  for f in pyproject.toml uv.lock Dockerfile README.md LICENSE; do
-    echo "old $f" >"$1/backend/$f"; echo "new $f" >"$1/new/backend/$f"
-  done
-  echo "old src" >"$1/backend/src/a.py"; echo "new src" >"$1/new/backend/src/a.py"
-  echo "new notice" >"$1/new/backend/LICENSES/notice.txt"
-  if [[ "${2:-}" == "with-licenses" ]]; then
-    mkdir -p "$1/backend/LICENSES"
-    echo "old notice" >"$1/backend/LICENSES/notice.txt"; echo "gone" >"$1/backend/LICENSES/removed.txt"
-  fi
-}
-for case in without with-licenses; do
-  host_with "$SWAP_DIR/$case" "$case"
-  swap_script | bash -s "$SWAP_DIR/$case" "$SWAP_DIR/$case/new" T1 >/dev/null
-  rc=$?
-  check "swap runs when the host has $( [[ $case == without ]] && echo no || echo an ) LICENSES dir" $rc
-  b="$SWAP_DIR/$case/backend"
-  [[ "$(cat "$b/LICENSES/notice.txt")" == "new notice" ]] && echo "ok: LICENSES is the new one ($case)" || { echo "FAIL: LICENSES not replaced ($case)"; FAIL=1; }
-  [[ ! -e "$b/LICENSES/removed.txt" && ! -e "$b/LICENSES.new" ]] && echo "ok: no stale LICENSES file or staging dir left ($case)" || { echo "FAIL: stale LICENSES leftovers ($case)"; FAIL=1; }
-  for f in pyproject.toml uv.lock Dockerfile README.md LICENSE; do
-    [[ "$(cat "$b/$f")" == "new $f" ]] && echo "ok: $f is the new one ($case)" || { echo "FAIL: $f not replaced ($case)"; FAIL=1; }
-  done
-done
-[[ "$(cat "$SWAP_DIR/with-licenses/backend/.replaced-T1/LICENSES/notice.txt")" == "old notice" ]] \
-  && echo "ok: the previous LICENSES is kept under .replaced-<ts>" || { echo "FAIL: previous LICENSES not kept"; FAIL=1; }
-
 echo "== --dry-run (whitespace in --root/--after) =="
 set +e
 QUOTED_OUTPUT="$(PATH="$FAKE_BIN:$PATH" "$DEPLOY_SCRIPT" \
@@ -181,6 +147,159 @@ for pair in \
     echo "FAIL: image_repo('$input') = '$got', want '$want'"
     FAIL=1
   fi
+done
+
+echo "== swap step: all or nothing, a failure injected at every move =="
+# The swap runs on the host, against a backend/ that also holds things a deploy must never touch
+# (.secrets/, data the compose file mounts). Here it runs on a local copy of that shape, with a stub
+# `mv` that fails one chosen move, and the whole backend/ tree is compared with what it was.
+SWAP_DIR="$(mktemp -d)"
+trap 'rm -rf "$FAKE_BIN" "$SWAP_DIR"' EXIT
+STUB_BIN="$SWAP_DIR/stub-bin"
+mkdir -p "$STUB_BIN"
+REAL_MV="$(command -v mv)"
+cat >"$STUB_BIN/mv" <<'STUB'
+#!/usr/bin/env bash
+# Fails the first `mv` whose destination (last argument) is $FAIL_DEST (every one with $FAIL_ALWAYS).
+last="${*: -1}"
+if [[ -n "${FAIL_DEST:-}" && "$last" == "$FAIL_DEST" ]] && { [[ -n "${FAIL_ALWAYS:-}" ]] || [[ ! -e "$FAIL_MARK" ]]; }; then
+  : >"$FAIL_MARK"
+  echo "injected mv failure -> $last" >&2
+  exit 1
+fi
+exec "$REAL_MV" "$@"
+STUB
+printf '#!/usr/bin/env bash\nexit 0\n' >"$STUB_BIN/docker"
+chmod +x "$STUB_BIN/mv" "$STUB_BIN/docker"
+export REAL_MV
+
+SWAP_ITEMS=(src pyproject.toml uv.lock Dockerfile README.md LICENSE LICENSES)
+
+make_host() {  # make_host <dir> [with-licenses]
+  local dir="$1" f
+  rm -rf "$dir"
+  mkdir -p "$dir/backend/src" "$dir/backend/.secrets" "$dir/backend/data" \
+    "$dir/tmp/backend/src" "$dir/tmp/backend/LICENSES"
+  for f in pyproject.toml uv.lock Dockerfile README.md LICENSE; do
+    echo "old $f" >"$dir/backend/$f"; echo "new $f" >"$dir/tmp/backend/$f"
+  done
+  echo "old src" >"$dir/backend/src/a.py"; echo "new src" >"$dir/tmp/backend/src/a.py"
+  echo "new notice" >"$dir/tmp/backend/LICENSES/notice.txt"
+  echo "secret" >"$dir/backend/.secrets/key"; echo "rows" >"$dir/backend/data/app.db"
+  if [[ "${2:-}" == "with-licenses" ]]; then
+    mkdir -p "$dir/backend/LICENSES"
+    echo "old notice" >"$dir/backend/LICENSES/notice.txt"; echo "gone" >"$dir/backend/LICENSES/removed.txt"
+  fi
+}
+tree_of() {  # files with contents, links and directories of <dir>/backend, without the deploy's own leftovers
+  ( cd "$1/backend" && { find . -name '.replaced-*' -prune -o -type d -print; find . -name '.replaced-*' -prune -o \( -type f -o -type l \) -exec sha256sum {} +; } | LC_ALL=C sort )
+}
+run_swap() {  # run_swap <host dir>; stub PATH and failure injection come from the environment
+  swap_remote_script | PATH="$STUB_BIN:$PATH" bash -s -- "$1" "$1/tmp" T1 "${SWAP_ITEMS[@]}"
+}
+
+INJECTED=0
+for state in without with-licenses; do
+  for name in "${SWAP_ITEMS[@]}"; do
+    for stage in out in; do
+      host="$SWAP_DIR/$state-$name-$stage"
+      make_host "$host" "$state"
+      before="$(tree_of "$host")"
+      if [[ "$stage" == out ]]; then dest=".replaced-T1/$name"; else dest="$name"; fi
+      rm -f "$host.mark"
+      set +e
+      out="$(FAIL_DEST="$dest" FAIL_MARK="$host.mark" run_swap "$host" 2>&1)"
+      rc=$?
+      set -e
+      if [[ ! -e "$host.mark" ]]; then
+        # No such move in this state: an absent item is never moved out. The swap just succeeds.
+        if [[ "$stage" == out && "$state" == without && "$name" == LICENSES && $rc -eq 0 ]]; then continue; fi
+        echo "FAIL: $state/$name/$stage: the injected failure never fired (rc=$rc)"; FAIL=1; continue
+      fi
+      INJECTED=$((INJECTED + 1))
+      if [[ $rc -eq 0 ]]; then echo "FAIL: $state/$name/$stage: swap exited 0 despite a failed move"; FAIL=1; fi
+      if [[ "$(tree_of "$host")" != "$before" ]]; then
+        echo "FAIL: $state/$name/$stage: backend/ is not what it was before the deploy"; FAIL=1
+      fi
+      if [[ -e "$host/backend/.replaced-T1" ]]; then echo "FAIL: $state/$name/$stage: .replaced-T1 left behind"; FAIL=1; fi
+      grep -q "swap undone" <<<"$out" || { echo "FAIL: $state/$name/$stage: no 'swap undone' message"; FAIL=1; }
+    done
+  done
+done
+[[ "$INJECTED" -ge 27 ]] && echo "ok: $INJECTED injected move failures, each left backend/ exactly as it was and exited non-zero" \
+  || { echo "FAIL: only $INJECTED failures were injected"; FAIL=1; }
+
+# A move that cannot be undone is said loudly.
+host="$SWAP_DIR/undo-fails"
+make_host "$host" with-licenses
+set +e
+out="$(FAIL_DEST=LICENSES FAIL_ALWAYS=1 FAIL_MARK="$host.mark" run_swap "$host" 2>&1)"
+rc=$?
+set -e
+[[ $rc -ne 0 ]] && grep -q "UNDO FAILED" <<<"$out" && echo "ok: a failed undo exits non-zero and says UNDO FAILED" \
+  || { echo "FAIL: failed undo not reported (rc=$rc)"; FAIL=1; }
+
+# An archive that lacks an item changes nothing.
+host="$SWAP_DIR/short-archive"
+make_host "$host" with-licenses
+rm -rf "$host/tmp/backend/LICENSES"
+before="$(tree_of "$host")"
+set +e
+out="$(run_swap "$host" 2>&1)"
+rc=$?
+set -e
+[[ $rc -ne 0 && "$(tree_of "$host")" == "$before" ]] && echo "ok: an archive without LICENSES is refused before anything moves" \
+  || { echo "FAIL: short archive touched backend/ or exited 0 (rc=$rc)"; FAIL=1; }
+
+# The good swap, and what it leaves alone.
+for state in without with-licenses; do
+  host="$SWAP_DIR/good-$state"
+  make_host "$host" "$state"
+  set +e
+  out="$(run_swap "$host" 2>&1)"
+  rc=$?
+  set -e
+  check "swap succeeds ($state)" $rc
+  b="$host/backend"
+  [[ "$(cat "$b/LICENSES/notice.txt")" == "new notice" && ! -e "$b/LICENSES/removed.txt" ]] \
+    && echo "ok: LICENSES is the new one, with no stale file ($state)" || { echo "FAIL: LICENSES wrong ($state)"; FAIL=1; }
+  for f in pyproject.toml uv.lock Dockerfile README.md LICENSE; do
+    [[ "$(cat "$b/$f")" == "new $f" ]] || { echo "FAIL: $f not replaced ($state)"; FAIL=1; }
+  done
+  [[ "$(cat "$b/src/a.py")" == "new src" && "$(cat "$b/.secrets/key")" == secret && "$(cat "$b/data/app.db")" == rows ]] \
+    && echo "ok: src is new; .secrets and data are untouched ($state)" || { echo "FAIL: src/.secrets/data ($state)"; FAIL=1; }
+done
+[[ "$(cat "$SWAP_DIR/good-with-licenses/backend/.replaced-T1/LICENSES/notice.txt")" == "old notice" ]] \
+  && echo "ok: the previous LICENSES is kept under .replaced-<ts>" || { echo "FAIL: previous LICENSES not kept"; FAIL=1; }
+
+# What the deploy prints for a rollback (after the swap, and when it refuses before the restart) is
+# the same restore: run the printed text on a swapped copy and the tree is the pre-deploy tree.
+for state in without with-licenses; do
+  for printed in rollback_and_exit refused_before_up_and_exit; do
+    host="$SWAP_DIR/printed-$printed-$state"
+    make_host "$host" "$state"
+    before="$(tree_of "$host")"
+    run_swap "$host" >/dev/null 2>&1
+    set +e
+    text="$(
+      HOST=fake@host ROOT="$host" TS=T1 SHORT_REF=abc SERVICE=api IMAGE_NAME=img IMAGE_REPO=img SWAPPED=1 IMAGE_TAGGED=0
+      COMPOSE_FILES=(compose.yaml)
+      "$printed" 2>&1 >/dev/null
+    )"
+    set -e
+    if [[ "$printed" == rollback_and_exit ]]; then tag=ROLLBACK; else tag=RESTORE; fi
+    script="$(awk -v tag="$tag" 'index($0, "<<\x27" tag "\x27") { on = 1; next } on && $0 == tag { exit } on' <<<"$text")"
+    [[ -n "$script" ]] || { echo "FAIL: $printed printed no $tag script"; FAIL=1; continue; }
+    set +e
+    PATH="$STUB_BIN:$PATH" bash -s <<<"$script" >/dev/null 2>&1
+    rc=$?
+    set -e
+    if [[ $rc -eq 0 && "$(tree_of "$host")" == "$before" ]]; then
+      echo "ok: the rollback printed by $printed restores all seven items ($state)"
+    else
+      echo "FAIL: the rollback printed by $printed did not restore backend/ (rc=$rc, $state)"; FAIL=1
+    fi
+  done
 done
 
 echo "== transfer()/verify(): a remote failure must propagate through 'fn || rollback' =="
