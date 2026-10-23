@@ -63,6 +63,9 @@ for needle in \
   "docker top" \
   "read running searches in api" \
   "python -m korail_bot.mobile running --json" \
+  "preflight: backend dir, docker compose, compose file set, worker check" \
+  "com.docker.compose.project.config_files" \
+  "compose files differ" \
   "refuse if a running search is not resumable" \
   "wait for the resumable searches read above to be searching again"; do
   if echo "$OUTPUT" | grep -qF "$needle"; then
@@ -542,6 +545,125 @@ else
   echo "$MAIN_RESUME_OUT"
   FAIL=1
 fi
+
+echo "== preflight(): the running container's compose file set must match the requested one =="
+# Runs the real remote script locally: the fake ssh hands it to bash, and a
+# fake docker answers what preflight asks (compose version, ps -q, inspect, top).
+cat >"$FAKE_BIN/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  compose)
+    [[ "$2" == "version" ]] && exit 0
+    for arg in "$@"; do [[ "$arg" == "ps" ]] && { echo "${FAKE_CID:-}"; exit 0; }; done
+    ;;
+  inspect) echo "${FAKE_LABEL:-}" ;;
+  top) ;;
+esac
+exit 0
+EOF
+chmod +x "$FAKE_BIN/docker"
+PREFLIGHT_ROOT="$(mktemp -d)"
+mkdir "$PREFLIGHT_ROOT/backend"
+OVERLAY_LABEL="/srv/app/compose.yaml,/srv/app/pit5-edge.yaml"
+
+# preflight_case <FAKE_CID> <FAKE_LABEL> <ALLOW_COMPOSE_CHANGE> <compose file>...
+# Prints what main() did after preflight: SWAP marks the transfer step.
+preflight_case() {
+  local cid="$1" label="$2" allow="$3"; shift 3
+  (
+    set -e # as deploy-backend.sh runs; the caller turned errexit off
+    export PATH="$FAKE_BIN:$PATH" FAKE_CID="$cid" FAKE_LABEL="$label"
+    ssh() { shift; bash -c "$1"; }
+    snapshot_running() { return 0; }
+    backup() { return 0; }
+    transfer() { echo "SWAP" >&2; SWAPPED=1; }
+    build() { echo "BUILD" >&2; }
+    up() { return 0; }
+    verify() { return 0; }
+    after_hook() { return 0; }
+    verify_resumed() { return 0; }
+    HOST="fake@host"; ROOT="$PREFLIGHT_ROOT"; REF="HEAD"; SERVICE="api"; DRY_RUN=0
+    SHORT_REF="deadbee"; TS="20260101T000000Z"; FORCE=0; WORKER_PATTERN="mobile.worker"
+    ALLOW_COMPOSE_CHANGE="$allow"
+    COMPOSE_FILES=("$@"); COMPOSE_ARGS=()
+    for f in "$@"; do COMPOSE_ARGS+=(-f "$f"); done
+    main 2>&1
+    echo "MAIN_DONE"
+  )
+}
+
+set +e
+PF_MISMATCH="$(preflight_case cid1 "/srv/app/compose.yaml" 0 compose.yaml pit5-edge.yaml)"
+PF_MISMATCH_STATUS=$?
+PF_MATCH="$(preflight_case cid1 "$OVERLAY_LABEL" 0 pit5-edge.yaml compose.yaml)"
+PF_MATCH_STATUS=$?
+PF_NO_CONTAINER="$(preflight_case "" "" 0 compose.yaml pit5-edge.yaml)"
+PF_NO_CONTAINER_STATUS=$?
+PF_NO_LABEL="$(preflight_case cid1 "" 0 compose.yaml pit5-edge.yaml)"
+PF_NO_LABEL_STATUS=$?
+PF_ALLOWED="$(preflight_case cid1 "/srv/app/compose.yaml" 1 compose.yaml pit5-edge.yaml)"
+PF_ALLOWED_STATUS=$?
+PF_EXTRA_FILE="$(preflight_case cid1 "$OVERLAY_LABEL" 0 compose.yaml)"
+PF_EXTRA_FILE_STATUS=$?
+set -e
+rm -rf "$PREFLIGHT_ROOT"
+
+if [[ "$PF_MISMATCH_STATUS" -ne 0 ]] \
+  && echo "$PF_MISMATCH" | grep -qF "compose files differ: running api was created from [compose.yaml], this deploy names [compose.yaml,pit5-edge.yaml]" \
+  && echo "$PF_MISMATCH" | grep -qF -- "--allow-compose-change" \
+  && ! echo "$PF_MISMATCH" | grep -q "SWAP\|BUILD\|MAIN_DONE"; then
+  echo "ok: a different compose file set is refused before any swap or build, naming both sets"
+else
+  echo "FAIL: a different compose file set was not refused before the swap"
+  echo "$PF_MISMATCH"
+  FAIL=1
+fi
+if [[ "$PF_EXTRA_FILE_STATUS" -ne 0 ]] \
+  && echo "$PF_EXTRA_FILE" | grep -qF "created from [compose.yaml,pit5-edge.yaml], this deploy names [compose.yaml]" \
+  && ! echo "$PF_EXTRA_FILE" | grep -q "SWAP"; then
+  echo "ok: dropping an overlay is refused too"
+else
+  echo "FAIL: deploying without the overlay the container was created from was not refused"
+  echo "$PF_EXTRA_FILE"
+  FAIL=1
+fi
+for case in "PF_MATCH:the same set, in another order, from other paths" \
+  "PF_NO_CONTAINER:no running container" "PF_NO_LABEL:a container without the label"; do
+  name="${case%%:*}"
+  out="${!name}"
+  status_name="${name}_STATUS"
+  if [[ "${!status_name}" -eq 0 ]] && echo "$out" | grep -q "SWAP" && echo "$out" | grep -q "MAIN_DONE" \
+    && ! echo "$out" | grep -q "compose files differ"; then
+    echo "ok: deploy proceeds with ${case#*:}"
+  else
+    echo "FAIL: deploy did not proceed with ${case#*:}"
+    echo "$out"
+    FAIL=1
+  fi
+done
+if [[ "$PF_ALLOWED_STATUS" -eq 0 ]] \
+  && echo "$PF_ALLOWED" | grep -q "compose files differ" \
+  && echo "$PF_ALLOWED" | grep -q "continuing with the new compose file set" \
+  && echo "$PF_ALLOWED" | grep -q "SWAP" && echo "$PF_ALLOWED" | grep -q "MAIN_DONE"; then
+  echo "ok: --allow-compose-change proceeds despite a different file set, and says so"
+else
+  echo "FAIL: --allow-compose-change did not let the deploy proceed"
+  echo "$PF_ALLOWED"
+  FAIL=1
+fi
+
+echo "== --allow-compose-change / DEPLOY_ALLOW_COMPOSE_CHANGE are parsed =="
+(
+  git() { echo deadbee; }
+  parse_args --host h --root /r --allow-compose-change
+  [[ "$ALLOW_COMPOSE_CHANGE" == "1" ]]
+) && echo "ok: --allow-compose-change sets the flag" || { echo "FAIL: --allow-compose-change not parsed"; FAIL=1; }
+(
+  git() { echo deadbee; }
+  export DEPLOY_ALLOW_COMPOSE_CHANGE=1
+  source "$DEPLOY_SCRIPT"
+  [[ "$ALLOW_COMPOSE_CHANGE" == "1" ]]
+) && echo "ok: DEPLOY_ALLOW_COMPOSE_CHANGE=1 sets the flag" || { echo "FAIL: env flag not read"; FAIL=1; }
 
 if [[ "$FAIL" -eq 0 ]]; then
   echo "== all checks passed =="

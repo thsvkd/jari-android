@@ -16,6 +16,7 @@ DRY_RUN=0
 FORCE=0
 ALLOW_UNRESUMABLE=0
 SKIP_RESUME_CHECK=0
+ALLOW_COMPOSE_CHANGE="${DEPLOY_ALLOW_COMPOSE_CHANGE:-0}"
 # How long to wait, after the restart, for every search that was running to
 # be searching again in the new container: recorded under the new run, its
 # worker alive and logged in to Korail. `up -d` only returns once the old
@@ -75,6 +76,11 @@ Usage: deploy-backend.sh --host user@host --root /remote/dir [options]
                              (listed first); the rest are still checked
   --skip-resume-check        Do not read or check the running searches at all, e.g.
                              when the running image predates `korail_bot.mobile running`
+  --allow-compose-change     Deploy although the running container was created from a
+                             different set of compose files than --compose-file names
+                             (env DEPLOY_ALLOW_COMPOSE_CHANGE=1). Without it the deploy
+                             refuses: recreating from another file set loses the networks
+                             and env the old container had
 USAGE
 }
 
@@ -109,6 +115,7 @@ parse_args() {
       --force) FORCE=1; shift ;;
       --allow-unresumable) ALLOW_UNRESUMABLE=1; shift ;;
       --skip-resume-check) SKIP_RESUME_CHECK=1; shift ;;
+      --allow-compose-change) ALLOW_COMPOSE_CHANGE=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) echo "unknown arg: $1" >&2; usage; exit 1 ;;
     esac
@@ -141,15 +148,41 @@ run_remote() {
   ssh "$HOST" "$remote_cmd"
 }
 
+# The running container records the compose files it was created from (absolute
+# paths, comma-separated) in a label. `up -d` recreates it from the files named
+# now, so a different set silently drops what the old files gave it: networks,
+# env_file, environment. Only basenames are compared (the root may be spelled
+# differently), and a container or label that is not there is not a mismatch.
 preflight() {
-  run_remote "preflight: backend dir, docker compose, worker check" \
-    "$ROOT" "$SERVICE" "$WORKER_PATTERN" "$FORCE" "${COMPOSE_ARGS[@]}" <<'EOF'
+  local requested="" f
+  for f in "${COMPOSE_FILES[@]}"; do requested+="${requested:+,}${f##*/}"; done
+  run_remote "preflight: backend dir, docker compose, compose file set, worker check" \
+    "$ROOT" "$SERVICE" "$WORKER_PATTERN" "$FORCE" "$ALLOW_COMPOSE_CHANGE" "$requested" \
+    "${COMPOSE_ARGS[@]}" <<'EOF'
 set -euo pipefail
-root="$1"; service="$2"; pattern="$3"; force="$4"; shift 4
+root="$1"; service="$2"; pattern="$3"; force="$4"; allow_change="$5"; requested="$6"; shift 6
 cd "$root"
 [[ -d backend ]] || { echo "missing $root/backend" >&2; exit 1; }
 docker compose version >/dev/null
 cid="$(docker compose "$@" ps -q "$service" 2>/dev/null || true)"
+# Sorted unique basenames, one per line, of a comma-separated file list.
+basenames() { printf '%s\n' "$1" | tr ',' '\n' | sed 's|.*/||; /^$/d' | sort -u; }
+if [[ -n "$cid" ]]; then
+  running="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$cid" 2>/dev/null || true)"
+  [[ "$running" == "<no value>" ]] && running=""
+  if [[ -n "$running" ]]; then
+    have="$(basenames "$running")"
+    want="$(basenames "$requested")"
+    if [[ "$have" != "$want" ]]; then
+      echo "compose files differ: running $service was created from [$(paste -sd, - <<<"$have")], this deploy names [$(paste -sd, - <<<"$want")]" >&2
+      if [[ "$allow_change" != "1" ]]; then
+        echo "recreating it from a different file set loses the networks, env_file and environment the old container had; use the same --compose-file flags, or --allow-compose-change to do this deliberately" >&2
+        exit 1
+      fi
+      echo "continuing with the new compose file set (--allow-compose-change)"
+    fi
+  fi
+fi
 # docker top reads the host's process table for the container's PIDs, so it
 # works even when the container image has no `ps` (slim/distroless) inside it.
 # Capture the output before grepping it: piping straight into `grep -q` can
