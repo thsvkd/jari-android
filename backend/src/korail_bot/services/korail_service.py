@@ -39,6 +39,7 @@ from korail_mobile_api import (
 )
 from korail_mobile_api import mutation_payloads as _mutation_payloads
 from korail_mobile_api import payloads as _read_payloads
+from korail_mobile_api.config import enabled_dynapath_config
 from korail_mobile_api.constants import KORAIL_STANDBY_WAIT_FLAG
 from korail_mobile_api.errors import (
     KorailApiError,
@@ -69,6 +70,12 @@ from korail_bot.utils.privacy import mask_phone
 from korail_bot.utils.timezone import RAIL_TIMEZONE
 
 logger = get_logger(__name__)
+
+# The DynaPath token Korail accepts again: since 2026-10-21 it answers -8204 ("update the app")
+# to the old token the pinned korail-mobile-api 1.1.1 synthesizes (upstream issue
+# yakisoba0728/korail-mobile-api#32). This is the default 2.6.2 sends, SDK 2.0.1's
+# native-unavailable diagnostic token.
+KORAIL_DYNAPATH_TOKEN = "2!v=2&es=165489088780120535&st=Android&sv=2.0.1&ai=korailplus"
 
 # 매진이라 참고 편성이 꼭 필요할 때 훑는 날짜: 하루 뒤까지 일주일. 가장 먼 날부터 봐요.
 _SOLD_OUT_LOOKUP_OFFSETS = (7, 6, 5, 4, 3, 2, 1)
@@ -476,7 +483,12 @@ class KorailService(RailService):
 
     def _build_modern_client(self) -> KorailClient:
         """Build the current Korail mobile client with DynaPath enabled."""
-        config_options = {"enable_dynapath": True}
+        dynapath = replace(
+            enabled_dynapath_config(),
+            token_provider=lambda _context: KORAIL_DYNAPATH_TOKEN,
+            token_settings=None,
+        )
+        config_options = {"dynapath": dynapath}
         if settings.KORAIL_APP_VERSION:
             config_options["version"] = settings.KORAIL_APP_VERSION
         client = KorailClient(KorailConfig(**config_options))

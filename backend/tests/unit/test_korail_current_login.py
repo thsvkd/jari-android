@@ -10,7 +10,8 @@ from korail_mobile_api.errors import (
     KorailTransportError,
 )
 
-from korail_bot.services.korail_service import KorailService
+from korail_bot.services import korail_service
+from korail_bot.services.korail_service import KORAIL_DYNAPATH_TOKEN, KorailService
 
 
 class _ModernClient:
@@ -326,3 +327,58 @@ def test_s100_from_the_login_itself_stays_a_refusal(monkeypatch):
     assert service.login("1234567890", "synthetic-password") is False
 
     assert service.login_unavailable is False
+
+
+SCHEDULE_VIEW = "/classes/com.korail.mobile.seatMovie.ScheduleView"
+
+
+def _client_asking_through(monkeypatch, sent):
+    def reply(request):
+        sent.append(request)
+        return httpx.Response(200, json={"strResult": "SUCC", "h_msg_cd": "", "h_msg_txt": ""})
+
+    real = KorailClient
+    monkeypatch.setattr(
+        korail_service,
+        "KorailClient",
+        lambda config: real(config, transport=httpx.MockTransport(reply)),
+    )
+    return KorailService()
+
+
+def test_the_current_client_sends_the_accepted_dynapath_token_on_a_train_search(monkeypatch):
+    sent = []
+    client = _client_asking_through(monkeypatch, sent)._build_modern_client()
+
+    client.http.post_form(SCHEDULE_VIEW, {})
+
+    (request,) = sent
+    assert request.headers[client.config.dynapath.header_name] == KORAIL_DYNAPATH_TOKEN
+    assert KORAIL_DYNAPATH_TOKEN.startswith("2!")
+
+
+def test_the_legacy_adapter_gets_the_same_dynapath_token(monkeypatch):
+    service = KorailService()
+    modern = service._build_modern_client()
+    monkeypatch.setattr(service, "_build_client", lambda *_: _LegacyClient())
+    session = SimpleNamespace(jsessionid="synthetic-session", member_card_no="1", raw={})
+
+    service._activate_legacy_session(modern, session, "1234567890", "synthetic-password")
+
+    headers, _ = service._korail_instance._get_auth_headers_and_sid(
+        f"https://smart.letskorail.com{SCHEDULE_VIEW}"
+    )
+    assert headers == {modern.config.dynapath.header_name: KORAIL_DYNAPATH_TOKEN}
+    modern.close()
+
+
+def test_the_current_client_keeps_the_library_dynapath_allowlist():
+    from korail_mobile_api.config import enabled_dynapath_config
+
+    client = KorailService()._build_modern_client()
+    library = enabled_dynapath_config()
+    assert client.config.dynapath.enabled is True
+    assert client.config.dynapath.token_settings is None
+    assert client.config.dynapath.allowlist_paths == library.allowlist_paths
+    assert client.config.dynapath.header_name == library.header_name
+    client.close()
