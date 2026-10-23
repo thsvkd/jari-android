@@ -16,7 +16,9 @@ and the hook for errors that cannot be raised (a ``__del__``, a callback), are r
 that print the same text masked.
 """
 
+import contextlib
 import logging
+import os
 import sys
 import threading
 import traceback
@@ -50,45 +52,76 @@ def _redacted(record: logging.LogRecord) -> logging.LogRecord:
     return record
 
 
+_FAILED = b"unhandled exception (details redacted; logging failed)\n"
+
+
 def _masked_traceback(exc_type, exc, tb) -> str:
     """The traceback Python would print, cause and context chain and notes included, masked."""
+    return redact_text("".join(traceback.format_exception(exc_type, exc, tb)))
+
+
+def _write_fd(data: bytes) -> None:
+    while data:
+        data = data[os.write(2, data) :]
+
+
+def _report(make_text) -> None:
+    """
+    Print an unhandled exception, masked, and never raise.
+
+    A hook that raises makes Python print "Error in sys.excepthook" and then the original exception
+    through its default path, which is the unmasked text this exists to keep out. So anything that
+    goes wrong - formatting, masking, a stderr that is closed or not ready - ends in the masked text
+    on the raw file descriptor, and failing that in a fixed line that names nothing.
+    """
     try:
-        return redact_text("".join(traceback.format_exception(exc_type, exc, tb)))
-    except Exception:
-        return f"{getattr(exc_type, '__name__', 'Exception')}: [withheld: it could not be masked]\n"
-
-
-def _write(text: str) -> None:
-    stream = sys.stderr
-    if stream is not None:
-        stream.write(text)
-        stream.flush()
+        text = make_text()
+    except BaseException:
+        text = None
+    if text is not None:
+        try:
+            stream = sys.stderr
+            stream.write(text)
+            stream.flush()
+            return
+        except BaseException:
+            try:
+                _write_fd(text.encode("utf-8", "replace"))
+                return
+            except BaseException:
+                pass
+    with contextlib.suppress(BaseException):
+        _write_fd(_FAILED)
 
 
 def _excepthook(exc_type, exc, tb) -> None:
-    if issubclass(exc_type, KeyboardInterrupt):
-        sys.__excepthook__(exc_type, exc, tb)  # nothing in it to hide
-        return
-    _write(_masked_traceback(exc_type, exc, tb))
+    _report(lambda: _masked_traceback(exc_type, exc, tb))
 
 
 def _thread_excepthook(args) -> None:
     if issubclass(args.exc_type, SystemExit):
         return
-    name = args.thread.name if args.thread is not None else "<unknown>"
-    _write(
-        f"Exception in thread {name}:\n"
-        + _masked_traceback(args.exc_type, args.exc_value, args.exc_traceback)
-    )
+
+    def text():
+        name = args.thread.name if args.thread is not None else "<unknown>"
+        return f"Exception in thread {name}:\n" + _masked_traceback(
+            args.exc_type, args.exc_value, args.exc_traceback
+        )
+
+    _report(text)
 
 
 def _unraisablehook(unraisable) -> None:
-    message = unraisable.err_msg or "Exception ignored in"
-    _write(redact_text(f"{message}: {unraisable.object!r}")[:300] + "\n")
-    if unraisable.exc_type is not None:
-        _write(
-            _masked_traceback(unraisable.exc_type, unraisable.exc_value, unraisable.exc_traceback)
-        )
+    def text():
+        message = unraisable.err_msg or "Exception ignored in"
+        lines = redact_text(f"{message}: {unraisable.object!r}")[:300] + "\n"
+        if unraisable.exc_type is not None:
+            lines += _masked_traceback(
+                unraisable.exc_type, unraisable.exc_value, unraisable.exc_traceback
+            )
+        return lines
+
+    _report(text)
 
 
 def install() -> None:

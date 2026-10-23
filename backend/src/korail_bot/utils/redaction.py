@@ -7,9 +7,9 @@ license and notice: ``backend/LICENSES/korail-mobile-api.txt``).
 The library ran every exception message through it; 2.x dropped it and puts Korail's own text into
 ``str(exc)`` as it came, so the project masks at the logging boundary instead
 (:mod:`korail_bot.utils.log_redaction`). Changes from the original: the mutation-preview helpers are gone,
-a few session/token names are added, a percent-encoded secret is read through, and a bare
-13-19 digit number is taken for a card only when it passes the Luhn check and is not the negative id of
-``chat_id=-…`` (the app's chat ids are negative integers that a card pattern would otherwise swallow).
+a few session/token names are added, a percent-encoded secret is read through, and a run of
+13-19 digits is a card however it is separated, but for the negative id of ``chat_id=-…`` (see CARD_RE).
+Tests hold it to a superset of the original's masking (tests/unit/test_redaction_superset.py).
 """
 
 import re
@@ -317,12 +317,19 @@ def is_sensitive_key(name: str) -> bool:
     return base is not None and base in SENSITIVE_KEYS
 
 
-# Digits and the separators a card number is written with; a candidate is a card when it passes Luhn,
-# a hyphen before it or not ("카드번호-4111…" is a card). The one exemption is a negative id named as
-# one: the app's chat ids are negative integers ("chat_id=-2637222897571620"), and one in ten of
-# them would pass Luhn by chance.
-CARD_RE = re.compile(r"(?<!\w)\d(?:[ -]?\d){12,18}(?!\w)")
-_NEGATIVE_ID_BEFORE = re.compile(r"(?i)(?:chat_?id|owner|user_?id|\bid)\s*[=:]\s*-$")
+# A card number is any run of 13-19 digits with spaces or hyphens (any number, any dash) between
+# them: 1.1.1's rule, widened only at its edges - it is not held back by a letter just before the
+# digits ("카드번호4111…") and the separators include the no-break space and the Unicode dashes.
+# No Luhn check: a card typed wrong is still the member's.
+#
+# The one number let through is a negative id named as one. The app's chat ids are negative
+# integers (-2637222897571620, 16 digits; a Telegram supergroup's -100… is 13) and every log line
+# about a search carries one, so a digit run directly after "chat_id=-" is an id, not a card. A
+# value quoted back by Korail under that name would escape too; the price of keeping the logs
+# searchable by owner. Anything else - including a bare "-4111111111111111" - is masked.
+_SEPARATORS = r"[ \-./\u00a0\u2010-\u2015\u2212]"
+CARD_RE = re.compile(rf"(?<!\d)(?:\d{_SEPARATORS}*?){{13,19}}(?!\d)")
+_NEGATIVE_ID_BEFORE = re.compile(r"(?i)(?:chat_?id|owner|user_?id)\s*[=:]\s*-$")
 SESSION_RE = re.compile(r"(?i)(JSESSIONID=)[^&;\s]+")
 BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[\w.~+/\-]+=*")
 COOKIE_RE = re.compile(r"(?i)\b((?:set-)?cookie\s*[:=]\s*)[^\r\n]*")
@@ -337,21 +344,10 @@ SENSITIVE_KEY_VALUE_RE = re.compile(
 )
 
 
-def _luhn(digits: str) -> bool:
-    total = 0
-    for index, character in enumerate(reversed(digits)):
-        number = int(character)
-        if index % 2:
-            number = number * 2 - 9 if number > 4 else number * 2
-        total += number
-    return total % 10 == 0
-
-
 def _redact_card(match: re.Match[str]) -> str:
-    digits = re.sub(r"\D", "", match.group(0))
     if _NEGATIVE_ID_BEFORE.search(match.string, 0, match.start()):
         return match.group(0)
-    return "[REDACTED_CARD]" if 13 <= len(digits) <= 19 and _luhn(digits) else match.group(0)
+    return "[REDACTED_CARD]"
 
 
 def _redact_sensitive_key_value(match: re.Match[str]) -> str:

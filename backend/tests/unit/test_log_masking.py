@@ -379,7 +379,101 @@ raise SystemExit(4)
     assert not MARKERS.search(done.stderr), done.stderr
 
 
-def test_a_keyboard_interrupt_still_prints_as_python_prints_it():
-    done = run_child("import korail_bot\nraise KeyboardInterrupt")
+def test_a_keyboard_interrupt_prints_its_chain_masked_and_not_the_raw_context():
+    done = run_child(
+        "import korail_bot\n"
+        + CHAIN
+        + """
+try:
+    raise cause
+except Exception:
+    raise KeyboardInterrupt
+"""
+    )
 
+    assert done.returncode != 0
     assert "KeyboardInterrupt" in done.stderr
+    assert "S000" in done.stderr
+    assert not MARKERS.search(done.stderr), done.stderr
+
+
+UNCAUGHT = """
+try:
+    raise cause
+except Exception as error:
+    raise RuntimeError(f"gave up: {error}") from error
+"""
+
+BROKEN_STDERR = """
+import sys
+
+class Broken:
+    calls = 0
+    def write(self, text):
+        Broken.calls += 1
+        if Broken.calls <= LIMIT and not sys.is_finalizing():
+            raise BlockingIOError(11, "write could not complete without blocking")
+        return len(text)
+    def flush(self):
+        # (Python flushes stderr once more when it exits; that one is not the hook's.)
+        if Broken.calls <= LIMIT and not sys.is_finalizing():
+            raise BlockingIOError(11, "flush could not complete without blocking")
+
+sys.stderr = Broken()
+"""
+
+
+@pytest.mark.parametrize("limit", [1, 1_000_000])
+def test_a_stderr_that_fails_does_not_bring_back_the_unmasked_exception(limit):
+    done = run_child(
+        "import korail_bot\n" + CHAIN + BROKEN_STDERR.replace("LIMIT", str(limit)) + UNCAUGHT
+    )
+
+    # Python's own exit status for an uncaught exception, whatever the hook did.
+    assert done.returncode == 1
+    assert "Error in sys.excepthook" not in done.stderr
+    assert not MARKERS.search(done.stderr), done.stderr
+    assert not MARKERS.search(done.stdout)
+
+
+def test_a_thread_whose_stderr_fails_does_not_bring_back_the_unmasked_exception():
+    done = run_child(
+        "import threading\nimport korail_bot\n"
+        + CHAIN
+        + BROKEN_STDERR.replace("LIMIT", "1000000")
+        + """
+def run():
+    raise RuntimeError(f"gave up: {cause}") from cause
+thread = threading.Thread(target=run)
+thread.start()
+thread.join()
+raise SystemExit(5)
+"""
+    )
+
+    assert done.returncode == 5
+    assert not MARKERS.search(done.stderr), done.stderr
+
+
+def test_a_masking_that_fails_prints_a_fixed_line_and_names_nothing():
+    done = run_child(
+        "import korail_bot\nimport korail_bot.utils.log_redaction as hook\n"
+        + CHAIN
+        + """
+def broken(text):
+    raise RuntimeError("masking failed")
+hook.redact_text = broken
+"""
+        + UNCAUGHT
+    )
+
+    assert done.returncode == 1
+    assert "details redacted; logging failed" in done.stderr
+    assert not MARKERS.search(done.stderr), done.stderr
+
+
+def test_an_ordinary_uncaught_exception_still_exits_with_status_1():
+    done = run_child("import korail_bot\nraise RuntimeError('boom')")
+
+    assert done.returncode == 1
+    assert "RuntimeError: boom" in done.stderr
