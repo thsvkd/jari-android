@@ -199,28 +199,44 @@ def _answered_without_result(exc: BaseException | None) -> bool:
     return False
 
 
-def korail_reply_code(exc: BaseException) -> str | int | None:
+# What a Korail code looks like: a negative or plain number up to six digits (-8204, -2000, 100) or
+# letters then digits (S000, P058, WRG000000, ERI411321, SEMGTK, SUPDATE). Anything else in a code
+# field is not a code - a request quoted back, a card number - and is never logged.
+_CODE_VALUE = re.compile(r"-?\d{1,6}|[A-Z]{1,7}\d{0,9}")
+CODE_WITHHELD = "<redacted>"
+
+
+def _logged_code(value) -> str | None:
+    """A code as text for a log line: itself if it looks like one, CODE_WITHHELD if not, None if absent."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
+    if not isinstance(value, str) or value == "":
+        return None
+    return value if _CODE_VALUE.fullmatch(value) else CODE_WITHHELD
+
+
+def korail_reply_code(exc: BaseException) -> str | None:
     """
     The code Korail gave in the reply an error carries, for a log line; None if it gave none.
 
     Korail's result code (h_msg_cd) is on the exception. A DynaPath refusal has none: the code is
-    the integer block code, or "code", in the reply it kept. Only scalar codes are returned, never
-    the message that came with them.
+    the integer block code, or "code", in the reply it kept. Only a value shaped like a code is
+    returned (else CODE_WITHHELD), never the message that came with it.
     """
-    code = getattr(exc, "code", None)
-    if code not in (None, ""):
+    code = _logged_code(getattr(exc, "code", None))
+    if code is not None:
         return code
     raw = getattr(exc, "raw", None)
     if not isinstance(raw, dict):
-        return code
+        return None
     for key in ("h_msg_cd", "code"):
-        value = raw.get(key)
-        if isinstance(value, str | int) and not isinstance(value, bool) and value != "":
-            return value
+        code = _logged_code(raw.get(key))
+        if code is not None:
+            return code
     for value in raw.values():
         if isinstance(value, int) and not isinstance(value, bool) and value < 0:
-            return value
-    return code
+            return _logged_code(value)
+    return None
 
 
 # What a logged reply excerpt may carry: Korail's codes, and nothing it wrote in words.
@@ -228,9 +244,10 @@ def korail_reply_code(exc: BaseException) -> str | int | None:
 # A reply that looks like a block is logged so the next reader can tell a block from an outage, and
 # the reply can quote the request (a password, a session id, an address with either in its query,
 # in any spelling: percent-encoded, JSON, split by & ...). Hiding what looks sensitive in free text
-# is a list that always has one more spelling, so no free text is echoed at all:
+# is a list that always has one more spelling, so no free text is echoed at all (the logging
+# boundary masks what does get through, see utils/log_redaction):
 #
-# - the result and code fields, and only when the value is a short code (_CODE_VALUE);
+# - the result and code fields, and only when the value is shaped like a code (_CODE_VALUE);
 # - a notice Korail is known to answer in, when the text is exactly one of _KNOWN_NOTICES. The
 #   constant is logged, never the field's text, so a near miss shows as nothing.
 #
@@ -238,7 +255,6 @@ def korail_reply_code(exc: BaseException) -> str | int | None:
 # h_msg_cd, a restricted account by strResult being absent from the keys logged beside this and by
 # its notice, a DynaPath refusal by its code.
 _CODE_FIELDS = ("strResult", "h_msg_cd", "h_rslt_cd", "code")
-_CODE_VALUE = re.compile(r"[A-Za-z0-9_-]{1,16}")
 _NOTICE_FIELDS = ("rtnMsg", "h_msg_txt", "message", "msg")
 _KNOWN_NOTICES = frozenset(
     {
@@ -254,11 +270,9 @@ def _reply_excerpt(payload):
         return type(payload).__name__
     shown = {}
     for name in _CODE_FIELDS:
-        value = payload.get(name)
-        if isinstance(value, int) and not isinstance(value, bool):
-            value = str(value)
-        if isinstance(value, str) and _CODE_VALUE.fullmatch(value):
-            shown[name] = value
+        code = _logged_code(payload.get(name))
+        if code is not None:
+            shown[name] = code
     for name in _NOTICE_FIELDS:
         value = payload.get(name)
         if isinstance(value, str) and value.strip() in _KNOWN_NOTICES:

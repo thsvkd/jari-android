@@ -122,7 +122,7 @@ def test_an_http_error_whose_body_has_no_str_result_is_not_a_block(monkeypatch):
     ("refusal", "code"),
     [
         ({"code": "-2000"}, "-2000"),
-        ({"strResult": "FAIL", "h_msg_cd": "", "h_msg_txt": "", "dynaCd": -8202}, -8202),
+        ({"strResult": "FAIL", "h_msg_cd": "", "h_msg_txt": "", "dynaCd": -8202}, "-8202"),
     ],
 )
 def test_a_dynapath_refusal_is_a_failed_lookup_that_stops_the_watch_and_keeps_its_code(
@@ -265,11 +265,34 @@ def test_no_nested_or_code_field_text_of_a_logged_reply_reaches_the_log(text):
     assert not MARKER.search(said), said
 
 
-def test_a_code_is_logged_only_when_it_is_short_and_code_like():
-    assert _reply_excerpt({"h_msg_cd": "WRG000000"}) == {"h_msg_cd": "WRG000000"}
-    assert _reply_excerpt({"h_msg_cd": "A" * 17}) == {}
-    assert _reply_excerpt({"h_msg_cd": "a=b"}) == {}
-    assert _reply_excerpt({"h_msg_cd": True}) == {}
+@pytest.mark.parametrize(
+    "code", ["-8204", "S000", "WRG000000", "ERI411321", "WRR800029", "P100", "-2000", "SEMGTK"]
+)
+def test_the_codes_korail_uses_are_logged_as_they_are(code):
+    assert _reply_excerpt({"h_msg_cd": code}) == {"h_msg_cd": code}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "4111111111111111",
+        "4111 1111 1111 1111",
+        4111111111111111,
+        "txtPwd=SYNTHETIC_PASSWORD",
+        "a=b",
+        "A" * 17 + "1",
+        "s000",
+        "S000 ",
+        True,
+    ],
+)
+def test_a_code_field_that_does_not_look_like_a_code_is_never_logged(value):
+    excerpt = _reply_excerpt({"h_msg_cd": value})
+
+    if value is True:
+        assert excerpt == {}
+    else:
+        assert excerpt == {"h_msg_cd": "<redacted>"}
 
 
 def test_a_known_notice_is_logged_only_when_it_is_exactly_that_text():
