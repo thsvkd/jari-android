@@ -16,7 +16,7 @@
 
 - 진입점은 둘: `korail_bot.mobile`(API, Dockerfile CMD)과 `korail_bot.mobile.worker`(`mobile/process.py`가 spawn). 워커는 `telegramBot/telebotBackProcess.py`의 검색 루프를 그대로 쓴다.
 - 워커는 **API 컨테이너 안의 자식 프로세스**다. API를 재시작하면 워커도 죽고, 새 프로세스가 Redis의 실행 기록으로 다시 띄운다(§1.1). 배포 스크립트는 워커가 있으면 거부하고, `--force`면 재시작 뒤 재개 가능했던 검색이 모두 다시 로그인해 찾는지 확인해 아니면 실패한다.
-- 실서버: pit5, `scripts/deploy-backend.sh --host pit5 --root /home/pi/services/jari-android --compose-file compose.yaml --compose-file pit5-edge.yaml --ref <sha>`. 배포 전 이미지는 `jari-api:pre-<sha>`로 태그된다.
+- 실서버: pit5, `scripts/deploy-backend.sh --host pit5 --root /home/pi/services/jari-android --compose-file compose.yaml --compose-file pit5-edge.yaml --health-url https://jari.thsvkd.dev/api/mobile/health --ref <sha>`. `--compose-file` 두 개를 모두 줘야 한다: `pit5-edge.yaml`(호스트에만 있다)이 `edge` 네트워크(Caddy가 `jari-api-1:8081`로 연결)·구글 로그인 `env_file`·`MOBILE_PUBLIC_URL`을 더하기 때문이다. 배포 스크립트는 실행 중인 컨테이너의 compose 파일 구성이 다르면 거부한다(`--allow-compose-change`로만 진행). `--health-url`은 배포하는 쪽에서 curl로 Cloudflare→터널→Caddy→API 전체 경로를 확인한다. 배포 전 이미지는 `jari-api:pre-<sha>`로 태그된다. 절차는 [서버 운영 가이드 §7](self-hosting.md#7-원격-호스트에-배포하기).
 
 ### 1.1 재시작 중 검색 보존
 
