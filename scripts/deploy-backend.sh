@@ -437,10 +437,18 @@ EOF
   [[ "$DRY_RUN" -eq 1 ]] || IMAGE_TAGGED=1
 }
 
+# Everything backend/Dockerfile COPYs. The remote build must not depend on whatever an earlier
+# deploy left there, so each of these is shipped on every deploy (scripts/test-deploy-backend.sh
+# fails when a COPY source is missing from this list).
+TRANSFER_PATHS=(
+  backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile
+  backend/README.md backend/LICENSE backend/LICENSES
+)
+
 transfer() {
   local tmp="/tmp/deploy-backend-${TS}"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    log "DRY-RUN git archive $REF backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile | ssh $HOST tar -x -C $tmp"
+    log "DRY-RUN git archive $REF ${TRANSFER_PATHS[*]} | ssh $HOST tar -x -C $tmp"
   else
     log "transfer: archiving $REF to $HOST:$tmp"
     # This function is called as `transfer || rollback_and_exit`, which turns
@@ -449,8 +457,7 @@ transfer() {
     # fail must therefore propagate with an explicit `|| return 1`, or a
     # remote failure here would fall through silently to SWAPPED=1 below.
     ssh "$HOST" "mkdir -p '$tmp'" || return 1
-    git -c core.autocrlf=false archive "$REF" \
-      backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile \
+    git -c core.autocrlf=false archive "$REF" "${TRANSFER_PATHS[@]}" \
       | ssh "$HOST" "tar -x -C '$tmp'" || return 1
   fi
   run_remote "swap backend/src, copy build files" "$ROOT" "$tmp" "$TS" <<'EOF' || return 1
@@ -467,6 +474,16 @@ mv "$tmp/backend/src" src || {
 cp "$tmp/backend/pyproject.toml" pyproject.toml
 cp "$tmp/backend/uv.lock" uv.lock
 cp "$tmp/backend/Dockerfile" Dockerfile
+cp "$tmp/backend/README.md" README.md
+cp "$tmp/backend/LICENSE" LICENSE
+# LICENSES is a directory: the new one is staged beside the old and renamed over it, so a failed copy
+# leaves the old one in place and an old file that no longer exists does not linger in the new one.
+rm -rf LICENSES.new
+cp -a "$tmp/backend/LICENSES" LICENSES.new
+if [[ -d LICENSES ]]; then
+  mv LICENSES ".replaced-${ts}/LICENSES"
+fi
+mv LICENSES.new LICENSES
 rm -rf "$tmp"
 echo "swap ok, previous src at backend/.replaced-${ts}/src"
 EOF
@@ -555,7 +572,7 @@ rollback_and_exit() {
 backend/src on $HOST was not left changed (moving the new src into place
 itself puts the previous src back on failure); there is nothing to roll
 back. But if the swap step failed AFTER moving the new src in -- copying
-pyproject.toml/uv.lock/Dockerfile, or the final cleanup -- src was already
+the build files (pyproject.toml, uv.lock, Dockerfile, README.md, LICENSE, LICENSES), or the final cleanup -- src was already
 replaced even though this run reports failure. Check $HOST:$ROOT/backend for
 a leftover .replaced-${TS}/src before assuming nothing changed. Fix the
 issue and re-run.
