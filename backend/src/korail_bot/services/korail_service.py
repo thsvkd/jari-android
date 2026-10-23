@@ -223,73 +223,52 @@ def korail_reply_code(exc: BaseException) -> str | int | None:
     return code
 
 
-# What a logged reply excerpt may carry. An allow-list, not a mask list: the fields that tell a
-# block from an outage (the result and its code) and the one free-text field Korail's anti-macro
-# layer answers in (rtnMsg, "비정상적인 접근입니다."), run through _mask_text. Everything else,
-# h_msg_txt included (it can quote the request), is left out; the keys are logged beside it.
-# korail_mobile_api 1.x shipped a redactor for this; 2.x dropped it.
-_EXCERPT_FIELDS = ("strResult", "h_msg_cd", "h_rslt_cd", "code", "rtnMsg", "message", "msg")
-_EXCERPT_TEXT_LIMIT = 120
-
-# Names whose value is a credential or identifies the member, however they turn up in a string:
-# key=value, key: value, "key":"value", a query parameter, a cookie.
-_SENSITIVE_NAME = re.compile(
-    r"pwd|passw|mbr|member|cust|pnr|crd|card|nm$|name|cpno|tel|phone|btdt|email|cookie|session"
-    r"|token|secret|auth|key|seat|ret_?no|sid$",
-    re.IGNORECASE,
+# What a logged reply excerpt may carry: Korail's codes, and nothing it wrote in words.
+#
+# A reply that looks like a block is logged so the next reader can tell a block from an outage, and
+# the reply can quote the request (a password, a session id, an address with either in its query,
+# in any spelling: percent-encoded, JSON, split by & ...). Hiding what looks sensitive in free text
+# is a list that always has one more spelling, so no free text is echoed at all:
+#
+# - the result and code fields, and only when the value is a short code (_CODE_VALUE);
+# - a notice Korail is known to answer in, when the text is exactly one of _KNOWN_NOTICES. The
+#   constant is logged, never the field's text, so a near miss shows as nothing.
+#
+# That is enough to tell the diagnostics apart: -8204 (update required) and S000 (maintenance) by
+# h_msg_cd, a restricted account by strResult being absent from the keys logged beside this and by
+# its notice, a DynaPath refusal by its code.
+_CODE_FIELDS = ("strResult", "h_msg_cd", "h_rslt_cd", "code")
+_CODE_VALUE = re.compile(r"[A-Za-z0-9_-]{1,16}")
+_NOTICE_FIELDS = ("rtnMsg", "h_msg_txt", "message", "msg")
+_KNOWN_NOTICES = frozenset(
+    {
+        "비정상적인 접근입니다.",  # the anti-macro layer's answer to a restricted account (pit5, 2026-10-19)
+        "최신 버전으로 업데이트",  # -8204: Korail turning away a client it no longer accepts
+    }
 )
-_NAMED_VALUE = re.compile(
-    r"""(?P<name>["']?[A-Za-z_][\w.\-]*["']?)(?P<sep>\s*[=:]\s*)"""
-    r"""(?P<value>"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?|[^\s&,;"'<>]+)"""
-)
-_COOKIE_LINE = re.compile(r"(?i)\b(?:set-)?cookie\s*[:=]\s*[^\r\n]*")
-_BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[\w.~+/\-]+=*")
-_CARD_NUMBER = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
-
-
-def _mask_named_values(text: str) -> str:
-    """Hide the value after each sensitive name; scanning resumes inside the value of any other name (a URL's query)."""
-    out = []
-    at = 0
-    while match := _NAMED_VALUE.search(text, at):
-        if _SENSITIVE_NAME.search(match.group("name")):
-            value = match.group("value")
-            quote = value[0] if value[0] in "\"'" else ""
-            out.append(text[at : match.start()])
-            out.append(f"{match.group('name')}{match.group('sep')}{quote}[REDACTED]{quote}")
-            at = match.end()
-        else:
-            out.append(text[at : match.start("value")])
-            at = match.start("value")
-    out.append(text[at:])
-    return "".join(out)
-
-
-def _mask_text(text: str) -> str:
-    """A string with the credentials in it hidden: sensitive name=value pairs, cookies, bearer tokens, card numbers."""
-    text = _COOKIE_LINE.sub("Cookie: [REDACTED]", text)
-    text = _BEARER.sub(r"\1 [REDACTED]", text)
-    text = _mask_named_values(text)
-    return _CARD_NUMBER.sub("[REDACTED_CARD]", text)
 
 
 def _reply_excerpt(payload):
-    """The allow-listed fields of a decoded reply, their text masked and shortened."""
+    """The codes and known notices of a decoded reply; nothing else of it."""
     if not isinstance(payload, dict):
         return type(payload).__name__
     shown = {}
-    for name in _EXCERPT_FIELDS:
+    for name in _CODE_FIELDS:
         value = payload.get(name)
-        if isinstance(value, str):
-            shown[name] = _mask_text(value)[:_EXCERPT_TEXT_LIMIT]
-        elif isinstance(value, int) and not isinstance(value, bool):
+        if isinstance(value, int) and not isinstance(value, bool):
+            value = str(value)
+        if isinstance(value, str) and _CODE_VALUE.fullmatch(value):
             shown[name] = value
+    for name in _NOTICE_FIELDS:
+        value = payload.get(name)
+        if isinstance(value, str) and value.strip() in _KNOWN_NOTICES:
+            shown[name] = value.strip()
     return shown
 
 
 def _describe_reply(response, *, body: bool) -> str:
     """
-    The top-level keys of a reply, and with body=True the allow-listed excerpt (_reply_excerpt), for the log.
+    The top-level keys of a reply, and with body=True the codes-only excerpt (_reply_excerpt), for the log.
 
     Login replies go in with body=False: they can carry the member's details. Never raises.
     """

@@ -6,7 +6,7 @@ library's own: a lookup that failed, a lookup that found nothing and a reply tha
 are told apart by what the library gives, not by what a hand-built exception is made to say.
 """
 
-import json
+import re
 
 import httpx
 import pytest
@@ -25,7 +25,6 @@ from korail_bot.services import korail_service
 from korail_bot.services.korail_service import (
     KorailService,
     _describe_reply,
-    _mask_text,
     _reply_excerpt,
     korail_reply_code,
 )
@@ -188,77 +187,106 @@ def test_the_excerpt_of_a_reply_keeps_what_tells_a_block_from_an_outage():
     assert _reply_excerpt(body) == {
         "strResult": "FAIL",
         "h_msg_cd": "S000",
-        "code": -2000,
+        "code": "-2000",
         "rtnMsg": "비정상적인 접근입니다.",
     }
-
-
-def test_the_excerpt_leaves_out_every_field_it_was_not_told_to_keep():
-    body = {
-        "rtnMsg": "비정상적인 접근입니다.",
-        "h_msg_txt": "회원 01012345678 은 접근할 수 없습니다",
-        "strMbCrdNo": "member-card-value",
-        "txtPwd": "password-value",
-        "nested": {"pnrNo": "R123456", "note": "txtPwd=password-value"},
-    }
-
-    shown = json.dumps(_reply_excerpt(body), ensure_ascii=False)
-
-    assert "비정상적인 접근입니다." in shown
-    for hidden in ("01012345678", "member-card-value", "password-value", "R123456"):
-        assert hidden not in shown
 
 
 @pytest.mark.parametrize(
-    ("text", "hidden"),
+    ("body", "excerpt"),
     [
-        ("txtPwd=hunter2 JSESSIONID=ABC123", ("hunter2", "ABC123")),
-        ("https://smart.letskorail.com/x?txtPwd=hunter2&sid=ABC123&ok=1", ("hunter2", "ABC123")),
-        ('{"txtPwd": "hunter2", "strMbCrdNo":"777888"}', ("hunter2", "777888")),
-        ("Cookie: JSESSIONID=ABC123; other=1", ("ABC123",)),
-        ("Set-Cookie: JSESSIONID=ABC123; Path=/", ("ABC123",)),
-        ("Authorization: Bearer abc.def-ghi", ("abc.def-ghi",)),
-        ("txtPwd: hunter2", ("hunter2",)),
-        ("카드 4111 1111 1111 1111 으로", ("4111 1111 1111 1111",)),
+        # The diagnostics production relies on stay readable from codes and known notices.
+        (
+            {"strResult": "FAIL", "h_msg_cd": "-8204", "h_msg_txt": "최신 버전으로 업데이트"},
+            {"strResult": "FAIL", "h_msg_cd": "-8204", "h_msg_txt": "최신 버전으로 업데이트"},
+        ),
+        (
+            {"strResult": "FAIL", "h_msg_cd": "S000", "h_msg_txt": "시스템 점검 중입니다."},
+            {"strResult": "FAIL", "h_msg_cd": "S000"},
+        ),
+        (BLOCKED_REPLY, {"rtnMsg": "비정상적인 접근입니다."}),
+        ({"code": "-2000"}, {"code": "-2000"}),
+        ({"dynaCd": -8202}, {}),
     ],
 )
-def test_credentials_inside_a_string_are_masked(text, hidden):
-    masked = _mask_text(text)
-
-    for secret in hidden:
-        assert secret not in masked
-
-
-def test_a_masked_string_keeps_the_rest_of_its_words():
-    assert _mask_text("비정상적인 접근입니다.") == "비정상적인 접근입니다."
-    assert _mask_text("https://h/p?x=1&txtPwd=hunter2") == "https://h/p?x=1&txtPwd=[REDACTED]"
+def test_the_excerpt_tells_update_required_maintenance_and_a_restricted_account_apart(
+    body, excerpt
+):
+    assert _reply_excerpt(body) == excerpt
 
 
-def test_credentials_in_the_message_of_a_logged_reply_do_not_reach_the_log():
+# Strings a reply could quote the request in. Each carries a marker that must never be logged.
+LEAKING_TEXTS = [
+    '{"sid":"SYNTHETIC_SESSION"}',
+    "https://h/p?txt%50wd=SYNTHETIC_PASSWORD",
+    "https://h/p?next=txtPwd%3DSYNTHETIC_PASSWORD",
+    "txtPwd=SYNTHETIC_HEAD&SYNTHETIC_TAIL",
+    # The round before: a name=value pair, a cookie, a bearer token, a query, a card number.
+    "txtPwd=SYNTHETIC_PASSWORD JSESSIONID=SYNTHETIC_SESSION",
+    "https://smart.letskorail.com/x?txtPwd=SYNTHETIC_PASSWORD&sid=SYNTHETIC_SESSION&ok=1",
+    '{"txtPwd": "SYNTHETIC_PASSWORD", "strMbCrdNo":"SYNTHETIC_MEMBER"}',
+    "Cookie: JSESSIONID=SYNTHETIC_SESSION; other=1",
+    "Set-Cookie: JSESSIONID=SYNTHETIC_SESSION; Path=/",
+    "Authorization: Bearer SYNTHETIC_TOKEN",
+    "비정상적인 접근입니다. SYNTHETIC_TAIL",
+    "카드 4111 1111 1111 1111 SYNTHETIC_CARD",
+]
+MARKER = re.compile(r"SYNTHETIC_[A-Z]+|4111")
+
+
+@pytest.mark.parametrize("text", LEAKING_TEXTS)
+@pytest.mark.parametrize("field", ["rtnMsg", "h_msg_txt", "message", "msg"])
+def test_no_free_text_of_a_logged_reply_reaches_the_log(text, field):
+    response = httpx.Response(
+        200, json={"h_msg_cd": "", field: text, "txtPwd": "SYNTHETIC_PASSWORD"}
+    )
+
+    said = _describe_reply(response, body=True)
+
+    assert not MARKER.search(said), said
+
+
+@pytest.mark.parametrize("text", LEAKING_TEXTS)
+def test_no_nested_or_code_field_text_of_a_logged_reply_reaches_the_log(text):
     response = httpx.Response(
         200,
         json={
-            "h_msg_cd": "",
-            "rtnMsg": "txtPwd=hunter2 JSESSIONID=ABC123 https://h/p?strMbCrdNo=777888",
-            "message": {"nested": "txtPwd=hunter2"},
+            "strResult": text,
+            "h_msg_cd": text,
+            "h_rslt_cd": text,
+            "code": text,
+            "nested": {"rtnMsg": text},
+            "rows": [text],
         },
     )
 
     said = _describe_reply(response, body=True)
 
-    assert "rtnMsg" in said
-    for secret in ("hunter2", "ABC123", "777888"):
-        assert secret not in said
+    assert not MARKER.search(said), said
 
 
-def test_a_kept_reply_is_described_with_its_keys_and_an_allow_listed_excerpt():
-    response = httpx.Response(200, json={**BLOCKED_REPLY, "txtPwd": "password-value"})
+def test_a_code_is_logged_only_when_it_is_short_and_code_like():
+    assert _reply_excerpt({"h_msg_cd": "WRG000000"}) == {"h_msg_cd": "WRG000000"}
+    assert _reply_excerpt({"h_msg_cd": "A" * 17}) == {}
+    assert _reply_excerpt({"h_msg_cd": "a=b"}) == {}
+    assert _reply_excerpt({"h_msg_cd": True}) == {}
+
+
+def test_a_known_notice_is_logged_only_when_it_is_exactly_that_text():
+    assert _reply_excerpt({"rtnMsg": " 비정상적인 접근입니다. "}) == {
+        "rtnMsg": "비정상적인 접근입니다."
+    }
+    assert _reply_excerpt({"rtnMsg": "비정상적인 접근입니다. 계정 SYNTHETIC_TAIL"}) == {}
+
+
+def test_a_kept_reply_is_described_with_its_keys_and_its_codes():
+    response = httpx.Response(200, json={**BLOCKED_REPLY, "txtPwd": "SYNTHETIC_PASSWORD"})
 
     said = _describe_reply(response, body=True)
 
     assert "keys=['h_msg_cd', 'h_msg_txt', 'rtnMsg', 'txtPwd']" in said
     assert "비정상적인 접근입니다." in said
-    assert "password-value" not in said
+    assert not MARKER.search(said)
 
 
 def test_a_login_reply_is_described_by_its_keys_alone():
