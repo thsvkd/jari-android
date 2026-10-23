@@ -24,7 +24,10 @@ dependencies = [
     # transitive dependency of pyopenssl, which nothing imports.
     "cryptography>=46.0",
     "korail2",
-    "korail-mobile-api",
+    # Pinned exactly: this package handles credentials and its wire format follows
+    # Korail's app, so a bump is a deliberate change. The PyPI wheel is byte-identical
+    # to the v2.6.2 tag of yakisoba0728/korail-mobile-api, and uv.lock records its hash.
+    "korail-mobile-api==2.6.2",
     # Production WSGI server. Deliberately single-process: app.py starts the
     # Telegram poller and the search-process registry at import time, so a
     # forking server with several workers would give the bot token competing
@@ -71,7 +74,6 @@ default-groups = ["dev"]
 # Fork carrying the Dynapath bypass. Pinned to the commit its bypassDynapath
 # branch pointed at: the branch can move, and this package handles credentials.
 korail2 = { git = "https://github.com/dhfhfk/korail2.git", rev = "4b134266fff097ea0fd54e9f760cb128b6c8f878" }
-korail-mobile-api = { git = "https://github.com/yakisoba0728/korail-mobile-api.git", rev = "e798fbcf08e56297b4d16a5c300bd7a4f167722d" }
 
 [build-system]
 requires = ["hatchling"]

@@ -1,4 +1,3 @@
-from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -125,7 +124,6 @@ def test_waitlist_cancels_the_hold_when_follow_up_fails():
 
 def test_search_restores_leading_zeros_korail_drops_from_numeric_fields():
     from korail_mobile_api import TrainSummary
-    from korail_mobile_api.errors import KorailProtocolError
     from korail_mobile_api.payloads import validate_seat_inventory_inputs
 
     service = service_with_modern_client()
@@ -147,8 +145,9 @@ def test_search_restores_leading_zeros_korail_drops_from_numeric_fields():
             "h_seat_att_cd": 15,
         }
     )
-    with pytest.raises(KorailProtocolError):
-        validate_seat_inventory_inputs(raw, 1)
+    # The library reads the numbers as they came (it no longer refuses them in the seat-map form
+    # check), so "73500" and "1" would be sent as they are: the service restores the zeros.
+    assert (raw.train_no, raw.departure_station_code, raw.departure_time) == ("69", "1", "63000")
     service._modern_client.search_trains.return_value = one_page((raw,))
 
     (train,) = service.search_waitlist_trains(
@@ -198,10 +197,10 @@ def test_a_coupled_units_alphanumeric_class_code_passes_both_form_checks():
         }
     )
 
+    # korail_mobile_api 2.x accepts the class code as Korail sends it; the service used to widen
+    # the library's digit check for it.
     validate_seat_inventory_inputs(train, 1)
     assert _journey_fields(train)["train_class_code"] == "0A"
-    with pytest.raises(Exception, match="train_class_code"):
-        validate_seat_inventory_inputs(replace(train, train_class_code="0a"), 1)
 
 
 def row(number, clock):

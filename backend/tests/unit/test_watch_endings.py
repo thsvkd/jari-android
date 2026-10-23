@@ -44,6 +44,8 @@ from korail_bot.services.rail_service import (
 )
 from korail_bot.utils.timezone import utc_now
 
+from .korail_replies import blocked_reply
+
 CHAT = -100
 PASSWORD = "rail-password-secret"
 # korail2's search_train reads datetime.utcnow() on every call, deprecated since 3.12.
@@ -357,7 +359,7 @@ def test_a_seat_map_watch_reads_the_current_clients_way_of_saying_it():
     from korail_mobile_api.errors import KorailProtocolError
 
     service = KorailService()
-    blocked = KorailProtocolError("KORAIL response missing required envelope fields: strResult")
+    blocked = blocked_reply()
     not_json = KorailProtocolError("KORAIL response body was not valid JSON")
 
     assert service.is_block_signal(blocked)
@@ -381,7 +383,7 @@ def test_a_formation_lookup_that_answers_like_a_block_is_not_swallowed(monkeypat
     from korail_mobile_api.errors import KorailProtocolError
 
     service = KorailService()
-    blocked = KorailProtocolError("KORAIL response missing required envelope fields: strResult")
+    blocked = blocked_reply()
     monkeypatch.setattr(service, "_formation_lookup", Mock(side_effect=blocked))
     train = SimpleNamespace(
         train_no="00101", departure_date="20261003", departure_time="070000", train_class_code="00"
@@ -423,7 +425,7 @@ def test_a_later_seat_map_search_page_that_answers_like_a_block_ends_the_pass(no
     service._modern_client = Mock()
     service._modern_client.search_trains.side_effect = [
         first,
-        KorailProtocolError("KORAIL response missing required envelope fields: strResult"),
+        blocked_reply(),
     ]
 
     with pytest.raises(KorailProtocolError):

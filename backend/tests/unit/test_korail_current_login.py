@@ -1,3 +1,4 @@
+import re
 from types import SimpleNamespace
 
 import httpx
@@ -11,7 +12,7 @@ from korail_mobile_api.errors import (
 )
 
 from korail_bot.services import korail_service
-from korail_bot.services.korail_service import KORAIL_DYNAPATH_TOKEN, KorailService
+from korail_bot.services.korail_service import KorailService
 
 
 class _ModernClient:
@@ -211,11 +212,16 @@ def _korail_answering_login(login_reply):
         if request.url.path.endswith("common.code.do"):
             return httpx.Response(
                 200,
-                json={"strResult": "SUCC", "h_msg_cd": "", "h_msg_txt": "", "pwdAESCphd": "N"},
+                json={
+                    "strResult": "SUCC",
+                    "h_msg_cd": "",
+                    "h_msg_txt": "",
+                    "app.login.cphd": {"idx": "1", "key": "0123456789abcdef", "pwdAESCphd": "N"},
+                },
             )
         return login_reply
 
-    return KorailClient(KorailConfig(enable_dynapath=True), transport=httpx.MockTransport(reply))
+    return KorailClient(KorailConfig(netfunnel_enabled=False), transport=httpx.MockTransport(reply))
 
 
 @pytest.mark.parametrize(
@@ -265,7 +271,7 @@ def _korail_in_maintenance(notice=MAINTENANCE):
             )
         raise AssertionError(f"no login is sent in maintenance: {request.url.path}")
 
-    return KorailClient(KorailConfig(enable_dynapath=True), transport=httpx.MockTransport(reply))
+    return KorailClient(KorailConfig(netfunnel_enabled=False), transport=httpx.MockTransport(reply))
 
 
 def test_a_maintenance_window_is_korail_down_with_its_own_notice_not_a_refusal(monkeypatch):
@@ -346,15 +352,19 @@ def _client_asking_through(monkeypatch, sent):
     return KorailService()
 
 
-def test_the_current_client_sends_the_accepted_dynapath_token_on_a_train_search(monkeypatch):
+# The shape the library's own default token has (SDK 2.0.1's native-unavailable diagnostic).
+# The service writes no token of its own, so this asserts the format, not a value it supplies.
+LIBRARY_TOKEN = re.compile(r"2!v=2&.*&st=Android&sv=2\.0\.1&ai=korailplus")
+
+
+def test_the_current_client_sends_the_librarys_own_dynapath_token_on_a_train_search(monkeypatch):
     sent = []
     client = _client_asking_through(monkeypatch, sent)._build_modern_client()
 
     client.http.post_form(SCHEDULE_VIEW, {})
 
     (request,) = sent
-    assert request.headers[client.config.dynapath.header_name] == KORAIL_DYNAPATH_TOKEN
-    assert KORAIL_DYNAPATH_TOKEN.startswith("2!")
+    assert LIBRARY_TOKEN.fullmatch(request.headers[client.config.dynapath.header_name])
 
 
 def test_the_legacy_adapter_gets_the_same_dynapath_token(monkeypatch):
@@ -368,8 +378,50 @@ def test_the_legacy_adapter_gets_the_same_dynapath_token(monkeypatch):
     headers, _ = service._korail_instance._get_auth_headers_and_sid(
         f"https://smart.letskorail.com{SCHEDULE_VIEW}"
     )
-    assert headers == {modern.config.dynapath.header_name: KORAIL_DYNAPATH_TOKEN}
+    assert list(headers) == [modern.config.dynapath.header_name]
+    assert LIBRARY_TOKEN.fullmatch(headers[modern.config.dynapath.header_name])
     modern.close()
+
+
+def test_the_current_client_uses_the_librarys_token_provider_not_one_of_its_own():
+    client = KorailService()._build_modern_client()
+
+    assert type(client.config.dynapath.token_provider) is type(
+        KorailConfig().dynapath.token_provider
+    )
+    client.close()
+
+
+def test_the_current_client_keeps_the_requests_production_ran_on():
+    # korail_mobile_api 2.x turns both on by default; see KorailService._build_modern_client.
+    client = KorailService()._build_modern_client()
+
+    assert client.config.app_version is None
+    assert client.config.netfunnel_enabled is False
+    assert client.netfunnel is None
+    client.close()
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # Korail turns the client away (since 2026-10-21 for the old token): nothing is wrong
+        # with the password, and the library raises it from the login instead of an auth error.
+        {"strResult": "FAIL", "h_msg_cd": "-8204", "h_msg_txt": "최신 버전으로 업데이트"},
+        {"strResult": "FAIL", "h_msg_cd": "BT019", "h_msg_txt": "잠시 후 다시 이용해 주세요"},
+    ],
+)
+def test_a_login_korail_turns_the_client_away_from_is_not_a_wrong_password(monkeypatch, reply):
+    service = KorailService()
+    monkeypatch.setattr(
+        service,
+        "_build_modern_client",
+        lambda: _korail_answering_login(httpx.Response(200, json=reply)),
+    )
+
+    assert service.login("1234567890", "synthetic-password") is False
+
+    assert service.login_unavailable is True
 
 
 def test_the_current_client_keeps_the_library_dynapath_allowlist():

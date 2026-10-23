@@ -21,6 +21,8 @@ from korail_bot.services.cancellation_wait_service import (
 from korail_bot.telegramBot.telebotBackProcess import BackgroundReservationProcess, SearchStopped
 from korail_bot.utils.timezone import utc_now
 
+from .korail_replies import blocked_reply
+
 
 def target(number: str, position: int, *, possible: str = "Y") -> SimpleNamespace:
     return SimpleNamespace(
@@ -390,9 +392,7 @@ def test_a_reply_that_looks_like_a_block_ends_the_pass_without_asking_about_the_
     )
     # The real verdict, as KorailService gives it.
     rail.looks_blocked.side_effect = KorailService().looks_blocked
-    rail.seat_cars.side_effect = KorailProtocolError(
-        "KORAIL response missing required envelope fields: strResult"
-    )
+    rail.seat_cars.side_effect = blocked_reply()
 
     with pytest.raises(KorailProtocolError):
         wait.poll_once()

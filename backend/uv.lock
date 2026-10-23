@@ -835,7 +835,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=46.0" },
     { name = "firebase-admin", marker = "extra == 'mobile-push'", specifier = ">=7.0" },
     { name = "flask", specifier = ">=3.1" },
-    { name = "korail-mobile-api", git = "https://github.com/yakisoba0728/korail-mobile-api.git?rev=e798fbcf08e56297b4d16a5c300bd7a4f167722d" },
+    { name = "korail-mobile-api", specifier = "==2.6.2" },
     { name = "korail2", git = "https://github.com/dhfhfk/korail2.git?rev=4b134266fff097ea0fd54e9f760cb128b6c8f878" },
     { name = "psutil", specifier = ">=7.0" },
     { name = "redis", extras = ["hiredis"], specifier = ">=7.0" },
@@ -863,11 +863,15 @@ dev = [
 
 [[package]]
 name = "korail-mobile-api"
-version = "1.1.1"
-source = { git = "https://github.com/yakisoba0728/korail-mobile-api.git?rev=e798fbcf08e56297b4d16a5c300bd7a4f167722d#e798fbcf08e56297b4d16a5c300bd7a4f167722d" }
+version = "2.6.2"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ae/ea/21f7b55fe1270d7e8dbb49d2c576e59df89fd35af3f270579f0449c2e363/korail_mobile_api-2.6.2.tar.gz", hash = "sha256:f449458f13991c2df49b44f9bd016c1abdcb96846fc743665787fd74d741567f", size = 636278, upload-time = "2026-10-22T18:52:09.752Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/78/09a9ad3c1064923681a2cbdffc694eeea75569bf9dba0f9ea33b4e2165a2/korail_mobile_api-2.6.2-py3-none-any.whl", hash = "sha256:5593a5148e5faab36e72f424eea770a64be745a1ae7e314e3aa314dfc0d2343f", size = 512395, upload-time = "2026-10-22T18:52:08.084Z" },
 ]
 
 [[package]]

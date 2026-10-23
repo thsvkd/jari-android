@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import fakeredis
 import pytest
-from korail_mobile_api.errors import KorailAppError
+from korail_mobile_api.errors import KorailAppError, classify_app_error
 
 from korail_bot.mobile.config import MobileConfig
 from korail_bot.mobile.runtime import MobileRuntime
@@ -108,6 +108,20 @@ def test_a_list_korail_refuses_logs_the_korail_code_and_not_its_message(runtime,
     [line] = [r.getMessage() for r in caplog.records if "Could not list" in r.getMessage()]
     assert "KorailAppError code=-8204" in line
     assert "synthetic update notice" not in line
+
+
+def test_a_list_korail_turns_the_client_away_from_is_a_failure_with_its_code(runtime, caplog):
+    # What the real library raises for -8204 (2026-10-21 onward): not "no trains", not a sold-out day.
+    runtime.rail.search_selectable_trains.side_effect = classify_app_error(
+        "-8204", "최신 버전으로 업데이트"
+    )
+    with caplog.at_level("ERROR"):
+        with pytest.raises(MiniAppError) as raised:
+            runtime.gateway.list_trains(OWNER, TRIP)
+    assert raised.value.status == 502
+    [line] = [r.getMessage() for r in caplog.records if "Could not list" in r.getMessage()]
+    assert "KorailAppUpdateRequiredError code=-8204" in line
+    assert "최신 버전" not in line
 
 
 def test_a_window_without_trains_is_an_empty_list(runtime):

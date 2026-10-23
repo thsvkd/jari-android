@@ -31,6 +31,8 @@ from korail_bot.services.korail_service import KorailService
 from korail_bot.storage import redis as redis_storage
 from korail_bot.utils.timezone import RAIL_TIMEZONE, utc_now
 
+from .korail_replies import blocked_reply
+
 DEPARTS = (utc_now() + timedelta(days=3)).strftime("%Y%m%d")
 TODAY = utc_now().astimezone(RAIL_TIMEZONE).strftime("%Y%m%d")
 LATER = timedelta(minutes=11)
@@ -887,7 +889,8 @@ def test_withdrawing_sends_the_standby_number_and_journey_count():
 
     hold = service._modern_client.cancel_unpaid_hold.call_args.args[0]
     assert (hold.pnr_no, hold.journey_count, hold.str_result) == ("PNR015", "0001", "SUCC")
-    assert service._modern_client.cancel_unpaid_hold.call_args.kwargs["consent"].allow_cancel
+    # Korail's own standby screen gives a hold back with this one request, no check before it.
+    assert service._modern_client.cancel_unpaid_hold.call_args.kwargs == {"check_first": False}
 
 
 def test_a_train_korail_sent_no_standby_flag_for_is_unknown_not_ineligible():
@@ -956,17 +959,6 @@ def test_the_watch_thread_starts_once_and_stops_on_request():
 
 
 # ---------------------------------------------------------------- a reply like a block
-
-BLOCKED_REPLY = {"h_msg_cd": "", "h_msg_txt": "", "rtnMsg": "비정상적인 접근입니다."}
-
-
-def blocked_reply():
-    """What the library raises on Korail's reply without strResult."""
-    try:
-        parse_reservation_history_response(BLOCKED_REPLY)
-    except Exception as exc:
-        return exc
-    raise AssertionError("the parser took a reply without strResult")
 
 
 def test_a_look_answered_like_a_block_stops_every_standby_with_nothing_more_asked(app):
