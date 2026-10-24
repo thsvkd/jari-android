@@ -81,7 +81,7 @@ JARI_SIGNING_KEY=release scripts/release-android.sh # 업로드 키로 서명
 scripts/release-play.sh   # → dist-release/jari-<버전>-play.aab
 ```
 
-업로드 키(Doppler `JARI_ANDROID_RELEASE_*`)로 서명한 `bundleRelease` AAB를 만듭니다. 릴리스 빌드라 WebView 디버깅이 꺼집니다. Firebase 설정(`JARI_ANDROID_GOOGLE_SERVICES_B64`)이 없으면 알림이 꺼진 앱이 되므로 멈춥니다. 끝에 서명·인증서 지문, versionCode/Name, 매니페스트(디버그 불가, 광고 ID 권한 없음, targetSdk), 광고·분석 의존성이 없는지, 웹 번들의 API 주소를 확인하고 모두 통과해야 최종 파일 이름으로 옮깁니다.
+업로드 키(Doppler `JARI_ANDROID_RELEASE_*`)로 서명한 `bundleRelease` AAB를 만듭니다. 릴리스 빌드라 WebView 디버깅이 꺼집니다. Firebase 설정(`GCP_JARI_THSVKD_GOOGLE_SERVICES_B64`)이 없으면 알림이 꺼진 앱이 되므로 멈춥니다. 끝에 서명·인증서 지문, versionCode/Name, 매니페스트(디버그 불가, 광고 ID 권한 없음, targetSdk), 광고·분석 의존성이 없는지, 웹 번들의 API 주소를 확인하고 모두 통과해야 최종 파일 이름으로 옮깁니다.
 
 ### Play Console 업로드
 
@@ -107,7 +107,7 @@ scripts/doppler-store-android-keys.sh release-new                               
 
 ## 휴대폰 알림 (Firebase)
 
-- `android/app/google-services.json`은 **커밋하지 않습니다.** 릴리스 스크립트가 Doppler의 `JARI_ANDROID_GOOGLE_SERVICES_B64`를 빌드하는 동안만 풀어 넣고 끝나면 지웁니다.
+- `android/app/google-services.json`은 **커밋하지 않습니다.** 릴리스 스크립트가 Doppler의 `GCP_JARI_THSVKD_GOOGLE_SERVICES_B64`를 빌드하는 동안만 풀어 넣고 끝나면 지웁니다.
 - 파일은 현재 패키지 `dev.thsvkd.jari`로 등록한 Firebase Android 앱의 것이어야 합니다. 예전 패키지 이름으로 받은 파일은 맞지 않습니다.
 - 서버의 Admin 키(`firebase-admin.json`)와 **같은 Firebase 프로젝트**여야 합니다.
 - 파일이 없으면 알림 플러그인이 빠진 채로 빌드됩니다. 앱은 알림 등록 오류를 화면에 보여 주고 전달됐다고 표시하지 않습니다. 기기 e2e는 `-PjariNoFirebase`로 빌드해 권한·토큰이 끼지 않게 합니다.

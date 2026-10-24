@@ -9,7 +9,7 @@
 #
 # 비밀은 Doppler 에 두고 빌드 때만 꺼내요. 디스크에는 빌드하는 동안의 임시 파일뿐이고, 끝나면(실패해도) 지워요.
 #   Doppler 시크릿   JARI_ANDROID_RELEASE_KEYSTORE_B64 / _STORE_PASSWORD / _KEY_ALIAS / _KEY_PASSWORD  (업로드 키)
-#                    JARI_ANDROID_GOOGLE_SERVICES_B64  (android/app/google-services.json 을 base64 로. 없으면 푸시가 꺼진 앱이 되므로 멈춰요)
+#                    GCP_JARI_THSVKD_GOOGLE_SERVICES_B64  (android/app/google-services.json 을 base64 로. 없으면 푸시가 꺼진 앱이 되므로 멈춰요)
 #   JARI_DOPPLER_PROJECT / JARI_DOPPLER_CONFIG   Doppler 위치 (기본 app-jari / dev: Firebase 설정)
 #   JARI_DOPPLER_SIGNING_CONFIG                  업로드 키가 있는 설정 (기본 signing)
 #   JARI_API_BASE_URL   운영 API 주소 (기본 https://jari.thsvkd.dev)
@@ -70,12 +70,12 @@ secret() { # 이름 [설정]
 }
 
 # --- Firebase 설정: 없으면 푸시가 꺼진 앱이 나가요. Play 로 내는 앱에서는 멈춰요.
-SERVICES_B64="$(secret JARI_ANDROID_GOOGLE_SERVICES_B64 || true)"
-[[ -n "$SERVICES_B64" ]] || fail "Doppler($DOPPLER_PROJECT/$DOPPLER_CONFIG)에 JARI_ANDROID_GOOGLE_SERVICES_B64 가 없어요. Firebase 콘솔에서 $APP_ID 용 google-services.json 을 받아
-  doppler secrets set JARI_ANDROID_GOOGLE_SERVICES_B64=\"\$(base64 < google-services.json)\" --project $DOPPLER_PROJECT --config $DOPPLER_CONFIG
+SERVICES_B64="$(secret GCP_JARI_THSVKD_GOOGLE_SERVICES_B64 || true)"
+[[ -n "$SERVICES_B64" ]] || fail "Doppler($DOPPLER_PROJECT/$DOPPLER_CONFIG)에 GCP_JARI_THSVKD_GOOGLE_SERVICES_B64 가 없어요. Firebase 콘솔에서 $APP_ID 용 google-services.json 을 받아
+  doppler secrets set GCP_JARI_THSVKD_GOOGLE_SERVICES_B64=\"\$(base64 < google-services.json)\" --project $DOPPLER_PROJECT --config $DOPPLER_CONFIG
 로 넣은 뒤 다시 실행해 주세요."
 ( umask 077; printf '%s' "$SERVICES_B64" | base64 --decode > "$SERVICES" ) \
-  || fail "JARI_ANDROID_GOOGLE_SERVICES_B64 를 base64 로 풀지 못했어요."
+  || fail "GCP_JARI_THSVKD_GOOGLE_SERVICES_B64 를 base64 로 풀지 못했어요."
 unset SERVICES_B64
 node -e '
   const [file, appId] = process.argv.slice(1);
