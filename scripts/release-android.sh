@@ -13,7 +13,7 @@
 # Google Play 용 AAB 는 scripts/release-play.sh 가 만들어요. Play 에서 받은 앱(Play 앱 서명 키)과 이 APK(디버그 키)는
 # 같은 패키지여도 서명이 달라 서로 업데이트되지 않아요. 한 폰에서는 한쪽만 쓰고, 바꿀 때는 지우고 다시 깔아요.
 #
-# Doppler 에 JARI_ANDROID_GOOGLE_SERVICES_B64 가 있으면 빌드하는 동안만 android/app/google-services.json 으로 풀어 넣어
+# Doppler 에 GCP_JARI_THSVKD_GOOGLE_SERVICES_B64 가 있으면 빌드하는 동안만 android/app/google-services.json 으로 풀어 넣어
 # 휴대폰 알림(FCM)이 켜진 앱을 만들어요. 없으면 알림이 꺼진 앱이 되고 그렇다고 알려요. 이미 있는 파일은 그대로 써요.
 #
 # 서명키는 Doppler 에 두고 빌드 때만 꺼내요. 저장소에 없고, 디스크에는 서명하는 동안의 임시 파일뿐이에요.
@@ -107,12 +107,12 @@ APP_ID="$(sed -n 's/^ *applicationId "\([^"]*\)".*/\1/p' android/app/build.gradl
 # --- Firebase 설정(휴대폰 알림). 있으면 이 패키지의 클라이언트가 들어 있는지 먼저 봐요: 없으면 Gradle 이 빌드 중간에 멈춰요.
 SERVICES="$ROOT/android/app/google-services.json"
 if [[ ! -e "$SERVICES" ]] && command -v doppler >/dev/null; then
-  SERVICES_B64="$(doppler secrets get JARI_ANDROID_GOOGLE_SERVICES_B64 --plain \
+  SERVICES_B64="$(doppler secrets get GCP_JARI_THSVKD_GOOGLE_SERVICES_B64 --plain \
     --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" 2>/dev/null || true)"
   if [[ -n "$SERVICES_B64" ]]; then
     TEMP_SERVICES="$SERVICES"
     ( umask 077; printf '%s' "$SERVICES_B64" | base64 --decode > "$SERVICES" ) \
-      || fail "JARI_ANDROID_GOOGLE_SERVICES_B64 를 base64 로 풀지 못했어요."
+      || fail "GCP_JARI_THSVKD_GOOGLE_SERVICES_B64 를 base64 로 풀지 못했어요."
   fi
   unset SERVICES_B64
 fi
@@ -126,10 +126,10 @@ if [[ -e "$SERVICES" ]]; then
       console.error(`google-services.json 에 ${appId} 클라이언트가 없어요(있는 것: ${packages.join(", ") || "없음"}).`);
       process.exit(1);
     }
-  ' "$SERVICES" "$APP_ID" || fail "Firebase 콘솔에서 $APP_ID 앱이 든 google-services.json 을 받아 Doppler 의 JARI_ANDROID_GOOGLE_SERVICES_B64 를 바꿔 주세요."
+  ' "$SERVICES" "$APP_ID" || fail "Firebase 콘솔에서 $APP_ID 앱이 든 google-services.json 을 받아 Doppler 의 GCP_JARI_THSVKD_GOOGLE_SERVICES_B64 를 바꿔 주세요."
   echo "== 휴대폰 알림: 켜짐 (google-services.json, $APP_ID)"
 else
-  echo "== 휴대폰 알림: 꺼짐 (Doppler 에 JARI_ANDROID_GOOGLE_SERVICES_B64 가 없어요)"
+  echo "== 휴대폰 알림: 꺼짐 (Doppler 에 GCP_JARI_THSVKD_GOOGLE_SERVICES_B64 가 없어요)"
 fi
 
 VERSION="$(node -p "require('./package.json').version")"

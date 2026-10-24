@@ -228,8 +228,8 @@ Google Auth Platform에서는 홈페이지를 `<MOBILE_PUBLIC_URL>/`, 개인정�
 
 | Doppler 비밀 이름 | 서버 환경 변수 |
 |---|---|
-| `JARI_GOOGLE_CLIENT_ID` | `MOBILE_GOOGLE_CLIENT_ID` |
-| `JARI_GOOGLE_CLIENT_SECRET` | `MOBILE_GOOGLE_CLIENT_SECRET` |
+| `GCP_JARI_THSVKD_OAUTH_CLIENT_ID` | `MOBILE_GOOGLE_CLIENT_ID` |
+| `GCP_JARI_THSVKD_OAUTH_CLIENT_SECRET` | `MOBILE_GOOGLE_CLIENT_SECRET` |
 | `JARI_MOBILE_PUBLIC_URL` | `MOBILE_PUBLIC_URL` |
 
 설정이 없으면 구글 로그인 버튼을 표시하지 않고, 일부 값만 설정하면 서버가 시작 오류를 냅니다. Firebase 푸시용 `google-services.json`만으로는 구글 로그인이 활성화되지 않습니다. 승인된 앱 계정으로 로그인해 **설정 → 구글 계정 연결**에서 구글 계정을 고릅니다. 현재 앱 세션이 유효하면 로그인한 지 얼마나 지났든 앱 비밀번호를 다시 묻지 않습니다. 연결을 시작한 뒤에는 5분의 인증 유효 시간 안에 완료해야 하고, 중간에 원래 앱 세션이 만료·해제되면 연결되지 않습니다. 다음부터 로그인 화면의 **구글로 로그인**을 사용할 수 있습니다. 브라우저에서 구글 로그인을 마치면 같은 휴대폰의 자리났다 앱이 다시 열리며 끝납니다(자동으로 열리지 않으면 **자리났다 앱 열기**를 누릅니다). 4.19 이하 앱은 앱에 표시된 확인 코드를 인증 브라우저에 직접 입력하고, 표시된 계정과 요청 기기를 확인한 뒤 로그인을 허용합니다. 연결 해제도 앱 비밀번호를 묻지 않고 확인 창만 거칩니다. 요청한 세션은 로그인 경로와 관계없이 유지하고 `via_google=0`으로 전환하며, 다른 앱 세션과 계정의 진행 중인 Google 연결 흐름은 해제합니다. 연결이 없으면 세션을 건드리지 않습니다. 현재 세션 유지 수정이 포함된 서버를 먼저 배포한 뒤 앱/OTA를 배포합니다. 앱은 이전 서버의 `signedOut: true` 응답을 받으면 실제로 종료된 세션을 비우는 호환 처리를 유지합니다. Google 로그인만으로 새 회원을 만들거나 대기 회원을 승인하지 않습니다. 운영 서버에 설정을 적용하거나 재시작하는 것은 별도 운영 승인 절차를 따릅니다.
