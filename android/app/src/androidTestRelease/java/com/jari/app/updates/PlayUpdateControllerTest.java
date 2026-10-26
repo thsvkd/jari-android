@@ -42,7 +42,10 @@ public class PlayUpdateControllerTest {
             assertTrue("first apply should show the immediate flow",
                 onMain(scenario, () -> manager.get().isImmediateFlowVisible()));
             scenario.onActivity(activity -> manager.get().userRejectsUpdate());
-            controller.get().onActivityResult(Activity.RESULT_CANCELED);
+            onMain(scenario, () -> {
+                controller.get().onActivityResult(Activity.RESULT_CANCELED);
+                return null;
+            });
             assertTrue("cancelled flow should report its result", firstFinished.await(5, TimeUnit.SECONDS));
             assertEquals(Activity.RESULT_CANCELED, firstResult.get());
 
@@ -124,8 +127,11 @@ public class PlayUpdateControllerTest {
             assertTrue("apply should show the immediate flow",
                 onMain(scenario, () -> manager.get().isImmediateFlowVisible()));
 
-            controller.get().destroy();
-            controller.get().onActivityResult(Activity.RESULT_CANCELED);
+            onMain(scenario, () -> {
+                controller.get().destroy();
+                controller.get().onActivityResult(Activity.RESULT_CANCELED);
+                return null;
+            });
 
             assertEquals(0, results.get());
             assertFalse(finished.await(200, TimeUnit.MILLISECONDS));
