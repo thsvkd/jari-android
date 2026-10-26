@@ -168,7 +168,31 @@ Docker 이미지에는 알림 의존성이 이미 들어 있습니다. Docker �
 - 환경 변수로도 같은 값을 줄 수 있습니다: `DEPLOY_HOST`, `DEPLOY_ROOT`, `DEPLOY_REF`, `DEPLOY_COMPOSE_FILES`(쉼표 구분), `DEPLOY_SERVICE`, `DEPLOY_WORKER_PATTERN`.
 - 게이트웨이·프록시 등록처럼 호스트마다 다른 후속 작업은 `--after "<원격 명령>"`으로 넘깁니다. 공백이 든 값도 원격에서 한 인자로 그대로 전달됩니다.
 - 배포는 API를 다시 시작합니다. 스크립트는 재시작 전에 진행 중인 자리 찾기를 확인하고, 이어서 찾지 못할 검색이 있으면 거부합니다. 재시작 뒤에는 모든 검색이 새 컨테이너에서 다시 로그인해 찾는지 확인합니다(→ [SPEC §1.1](SPEC.md#11-재시작-중-검색-보존)).
+- 배포는 실행 중인 컨테이너가 만들어진 compose 파일 구성(컨테이너의 `com.docker.compose.project.config_files` 라벨)과 `--compose-file`이 다르면 백업·전송·빌드 전에 거부합니다. 다른 구성으로 다시 만들면 옛 컨테이너가 가진 네트워크·`env_file`·환경 변수를 잃기 때문입니다. 구성을 일부러 바꿀 때만 `--allow-compose-change`(또는 `DEPLOY_ALLOW_COMPOSE_CHANGE=1`)를 줍니다.
+- `--health-url`은 배포하는 컴퓨터에서 curl로 부릅니다. 공개 주소를 주면 프록시를 거친 실제 경로까지 확인합니다. 컨테이너 자체의 상태 확인만으로는 프록시 연결이 끊겨도 성공으로 보입니다.
 - 스크립트 자체의 회귀 검사: `bash scripts/test-deploy-backend.sh`(가짜 `ssh`를 써서 실제로 접속하지 않습니다).
+
+### 운영 서버(pit5) 배포
+
+pit5는 `compose.yaml`에 호스트 전용 `pit5-edge.yaml`(저장소에 없고 호스트의 `/home/pi/services/jari-android`에만 있습니다)을 겹쳐 씁니다. 이 파일이 더하는 것은 다음과 같습니다. 값은 호스트에만 있고 여기에 적지 않습니다.
+
+- 외부 `edge` 네트워크: pit5-caddy가 `jari-api-1:8081`로 API에 닿는 길
+- `./.secrets/google-oauth.env` `env_file`: 구글 로그인
+- `MOBILE_PUBLIC_URL`: 구글 로그인 콜백과 에이전트(MCP) 연결
+
+`--compose-file` 두 개를 모두 줘야 합니다. 빠지면 새 컨테이너에 위 세 가지가 없어 Caddy가 API를 찾지 못해 앱이 502를 받고, 구글 로그인과 에이전트 연결이 꺼집니다.
+
+```bash
+./scripts/deploy-backend.sh \
+  --host pit5 --root /home/pi/services/jari-android \
+  --compose-file compose.yaml --compose-file pit5-edge.yaml \
+  --health-url https://jari.thsvkd.dev/api/mobile/health \
+  --ref <커밋 sha>
+```
+
+`<커밋 sha>`만 바꿔 붙여 넣습니다. 먼저 끝에 `--dry-run`을 더해 계획을 확인합니다.
+
+현재 컨테이너가 `compose.yaml`만으로 만들어졌다면(`--compose-file`을 빠뜨린 배포 뒤) 오버레이를 되돌리는 배포를 한 번 해야 합니다. 스크립트는 구성이 다르다며 거부하므로 그 배포에만 `--allow-compose-change`를 더합니다. 그 뒤로는 위 명령 그대로 배포합니다.
 
 ## 8. 백업과 데이터
 
@@ -204,8 +228,8 @@ Google Auth Platform에서는 홈페이지를 `<MOBILE_PUBLIC_URL>/`, 개인정�
 
 | Doppler 비밀 이름 | 서버 환경 변수 |
 |---|---|
-| `JARI_GOOGLE_CLIENT_ID` | `MOBILE_GOOGLE_CLIENT_ID` |
-| `JARI_GOOGLE_CLIENT_SECRET` | `MOBILE_GOOGLE_CLIENT_SECRET` |
+| `GCP_JARI_THSVKD_OAUTH_CLIENT_ID` | `MOBILE_GOOGLE_CLIENT_ID` |
+| `GCP_JARI_THSVKD_OAUTH_CLIENT_SECRET` | `MOBILE_GOOGLE_CLIENT_SECRET` |
 | `JARI_MOBILE_PUBLIC_URL` | `MOBILE_PUBLIC_URL` |
 
 설정이 없으면 구글 로그인 버튼을 표시하지 않고, 일부 값만 설정하면 서버가 시작 오류를 냅니다. Firebase 푸시용 `google-services.json`만으로는 구글 로그인이 활성화되지 않습니다. 승인된 앱 계정으로 로그인해 **설정 → 구글 계정 연결**에서 구글 계정을 고릅니다. 현재 앱 세션이 유효하면 로그인한 지 얼마나 지났든 앱 비밀번호를 다시 묻지 않습니다. 연결을 시작한 뒤에는 5분의 인증 유효 시간 안에 완료해야 하고, 중간에 원래 앱 세션이 만료·해제되면 연결되지 않습니다. 다음부터 로그인 화면의 **구글로 로그인**을 사용할 수 있습니다. 브라우저에서 구글 로그인을 마치면 같은 휴대폰의 자리났다 앱이 다시 열리며 끝납니다(자동으로 열리지 않으면 **자리났다 앱 열기**를 누릅니다). 4.19 이하 앱은 앱에 표시된 확인 코드를 인증 브라우저에 직접 입력하고, 표시된 계정과 요청 기기를 확인한 뒤 로그인을 허용합니다. 연결 해제도 앱 비밀번호를 묻지 않고 확인 창만 거칩니다. 요청한 세션은 로그인 경로와 관계없이 유지하고 `via_google=0`으로 전환하며, 다른 앱 세션과 계정의 진행 중인 Google 연결 흐름은 해제합니다. 연결이 없으면 세션을 건드리지 않습니다. 현재 세션 유지 수정이 포함된 서버를 먼저 배포한 뒤 앱/OTA를 배포합니다. 앱은 이전 서버의 `signedOut: true` 응답을 받으면 실제로 종료된 세션을 비우는 호환 처리를 유지합니다. Google 로그인만으로 새 회원을 만들거나 대기 회원을 승인하지 않습니다. 운영 서버에 설정을 적용하거나 재시작하는 것은 별도 운영 승인 절차를 따릅니다.

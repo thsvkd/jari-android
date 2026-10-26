@@ -45,6 +45,7 @@ from korail_bot.telegramBot.messages import Messages
 from korail_bot.utils.formatting import format_duration
 from korail_bot.utils.logger import LoggerFactory, get_logger
 from korail_bot.utils.privacy import mask_phone
+from korail_bot.utils.redaction import redact_text
 from korail_bot.utils.timezone import (
     RAIL_TIMEZONE,
     as_utc,
@@ -651,7 +652,8 @@ class BackgroundReservationProcess:
 
             # Build detailed error message
             error_type = type(e).__name__
-            error_msg = str(e)
+            # Sent to the user's chat: Korail's own text can quote the request.
+            error_msg = redact_text(str(e))
 
             message = f"""
 ❌ 예약 프로세스 오류 발생

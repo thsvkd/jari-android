@@ -3,6 +3,11 @@
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _distribution_version
 
+from korail_bot.utils import log_redaction as _log_redaction
+
+# Before anything in the package logs: see the module.
+_log_redaction.install()
+
 #: The version, read from the installed distribution's metadata. The number
 #: itself is declared in pyproject.toml, which is the one place a release
 #: edits.

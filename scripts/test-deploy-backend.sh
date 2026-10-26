@@ -55,7 +55,7 @@ fi
 
 for needle in \
   "backup: cp -a backend" \
-  "git archive HEAD backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile" \
+  "git archive HEAD backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile backend/README.md backend/LICENSE backend/LICENSES" \
   "swap backend/src" \
   "build api" \
   "up -d --no-deps api" \
@@ -63,12 +63,29 @@ for needle in \
   "docker top" \
   "read running searches in api" \
   "python -m korail_bot.mobile running --json" \
+  "preflight: backend dir, docker compose, compose file set, worker check" \
+  "com.docker.compose.project.config_files" \
+  "compose files differ" \
   "refuse if a running search is not resumable" \
   "wait for the resumable searches read above to be searching again"; do
   if echo "$OUTPUT" | grep -qF "$needle"; then
     echo "ok: plan mentions '$needle'"
   else
     echo "FAIL: plan missing '$needle'"
+    FAIL=1
+  fi
+done
+
+# Every source the Dockerfile COPYs (not --from) must be in the archive the deploy ships. A COPY the
+# transfer forgot builds on the developer's machine and fails on the host, after src was swapped.
+ARCHIVE_LINE="$(echo "$OUTPUT" | grep -F "git archive HEAD" | head -n 1)"
+COPY_SOURCES="$(awk '/^COPY / && $2 !~ /^--from/ { for (i = 2; i < NF; i++) print $i }' "$REPO_ROOT/backend/Dockerfile")"
+[[ -n "$COPY_SOURCES" ]] || { echo "FAIL: found no COPY source in backend/Dockerfile"; FAIL=1; }
+for source in $COPY_SOURCES; do
+  if [[ " $ARCHIVE_LINE " == *" backend/${source} "* ]]; then
+    echo "ok: the deploy archive ships backend/${source} (COPY'd by the Dockerfile)"
+  else
+    echo "FAIL: backend/Dockerfile COPYs '${source}' but the deploy archive does not ship backend/${source}"
     FAIL=1
   fi
 done
@@ -130,6 +147,159 @@ for pair in \
     echo "FAIL: image_repo('$input') = '$got', want '$want'"
     FAIL=1
   fi
+done
+
+echo "== swap step: all or nothing, a failure injected at every move =="
+# The swap runs on the host, against a backend/ that also holds things a deploy must never touch
+# (.secrets/, data the compose file mounts). Here it runs on a local copy of that shape, with a stub
+# `mv` that fails one chosen move, and the whole backend/ tree is compared with what it was.
+SWAP_DIR="$(mktemp -d)"
+trap 'rm -rf "$FAKE_BIN" "$SWAP_DIR"' EXIT
+STUB_BIN="$SWAP_DIR/stub-bin"
+mkdir -p "$STUB_BIN"
+REAL_MV="$(command -v mv)"
+cat >"$STUB_BIN/mv" <<'STUB'
+#!/usr/bin/env bash
+# Fails the first `mv` whose destination (last argument) is $FAIL_DEST (every one with $FAIL_ALWAYS).
+last="${*: -1}"
+if [[ -n "${FAIL_DEST:-}" && "$last" == "$FAIL_DEST" ]] && { [[ -n "${FAIL_ALWAYS:-}" ]] || [[ ! -e "$FAIL_MARK" ]]; }; then
+  : >"$FAIL_MARK"
+  echo "injected mv failure -> $last" >&2
+  exit 1
+fi
+exec "$REAL_MV" "$@"
+STUB
+printf '#!/usr/bin/env bash\nexit 0\n' >"$STUB_BIN/docker"
+chmod +x "$STUB_BIN/mv" "$STUB_BIN/docker"
+export REAL_MV
+
+SWAP_ITEMS=(src pyproject.toml uv.lock Dockerfile README.md LICENSE LICENSES)
+
+make_host() {  # make_host <dir> [with-licenses]
+  local dir="$1" f
+  rm -rf "$dir"
+  mkdir -p "$dir/backend/src" "$dir/backend/.secrets" "$dir/backend/data" \
+    "$dir/tmp/backend/src" "$dir/tmp/backend/LICENSES"
+  for f in pyproject.toml uv.lock Dockerfile README.md LICENSE; do
+    echo "old $f" >"$dir/backend/$f"; echo "new $f" >"$dir/tmp/backend/$f"
+  done
+  echo "old src" >"$dir/backend/src/a.py"; echo "new src" >"$dir/tmp/backend/src/a.py"
+  echo "new notice" >"$dir/tmp/backend/LICENSES/notice.txt"
+  echo "secret" >"$dir/backend/.secrets/key"; echo "rows" >"$dir/backend/data/app.db"
+  if [[ "${2:-}" == "with-licenses" ]]; then
+    mkdir -p "$dir/backend/LICENSES"
+    echo "old notice" >"$dir/backend/LICENSES/notice.txt"; echo "gone" >"$dir/backend/LICENSES/removed.txt"
+  fi
+}
+tree_of() {  # files with contents, links and directories of <dir>/backend, without the deploy's own leftovers
+  ( cd "$1/backend" && { find . -name '.replaced-*' -prune -o -type d -print; find . -name '.replaced-*' -prune -o \( -type f -o -type l \) -exec sha256sum {} +; } | LC_ALL=C sort )
+}
+run_swap() {  # run_swap <host dir>; stub PATH and failure injection come from the environment
+  swap_remote_script | PATH="$STUB_BIN:$PATH" bash -s -- "$1" "$1/tmp" T1 "${SWAP_ITEMS[@]}"
+}
+
+INJECTED=0
+for state in without with-licenses; do
+  for name in "${SWAP_ITEMS[@]}"; do
+    for stage in out in; do
+      host="$SWAP_DIR/$state-$name-$stage"
+      make_host "$host" "$state"
+      before="$(tree_of "$host")"
+      if [[ "$stage" == out ]]; then dest=".replaced-T1/$name"; else dest="$name"; fi
+      rm -f "$host.mark"
+      set +e
+      out="$(FAIL_DEST="$dest" FAIL_MARK="$host.mark" run_swap "$host" 2>&1)"
+      rc=$?
+      set -e
+      if [[ ! -e "$host.mark" ]]; then
+        # No such move in this state: an absent item is never moved out. The swap just succeeds.
+        if [[ "$stage" == out && "$state" == without && "$name" == LICENSES && $rc -eq 0 ]]; then continue; fi
+        echo "FAIL: $state/$name/$stage: the injected failure never fired (rc=$rc)"; FAIL=1; continue
+      fi
+      INJECTED=$((INJECTED + 1))
+      if [[ $rc -eq 0 ]]; then echo "FAIL: $state/$name/$stage: swap exited 0 despite a failed move"; FAIL=1; fi
+      if [[ "$(tree_of "$host")" != "$before" ]]; then
+        echo "FAIL: $state/$name/$stage: backend/ is not what it was before the deploy"; FAIL=1
+      fi
+      if [[ -e "$host/backend/.replaced-T1" ]]; then echo "FAIL: $state/$name/$stage: .replaced-T1 left behind"; FAIL=1; fi
+      grep -q "swap undone" <<<"$out" || { echo "FAIL: $state/$name/$stage: no 'swap undone' message"; FAIL=1; }
+    done
+  done
+done
+[[ "$INJECTED" -ge 27 ]] && echo "ok: $INJECTED injected move failures, each left backend/ exactly as it was and exited non-zero" \
+  || { echo "FAIL: only $INJECTED failures were injected"; FAIL=1; }
+
+# A move that cannot be undone is said loudly.
+host="$SWAP_DIR/undo-fails"
+make_host "$host" with-licenses
+set +e
+out="$(FAIL_DEST=LICENSES FAIL_ALWAYS=1 FAIL_MARK="$host.mark" run_swap "$host" 2>&1)"
+rc=$?
+set -e
+[[ $rc -ne 0 ]] && grep -q "UNDO FAILED" <<<"$out" && echo "ok: a failed undo exits non-zero and says UNDO FAILED" \
+  || { echo "FAIL: failed undo not reported (rc=$rc)"; FAIL=1; }
+
+# An archive that lacks an item changes nothing.
+host="$SWAP_DIR/short-archive"
+make_host "$host" with-licenses
+rm -rf "$host/tmp/backend/LICENSES"
+before="$(tree_of "$host")"
+set +e
+out="$(run_swap "$host" 2>&1)"
+rc=$?
+set -e
+[[ $rc -ne 0 && "$(tree_of "$host")" == "$before" ]] && echo "ok: an archive without LICENSES is refused before anything moves" \
+  || { echo "FAIL: short archive touched backend/ or exited 0 (rc=$rc)"; FAIL=1; }
+
+# The good swap, and what it leaves alone.
+for state in without with-licenses; do
+  host="$SWAP_DIR/good-$state"
+  make_host "$host" "$state"
+  set +e
+  out="$(run_swap "$host" 2>&1)"
+  rc=$?
+  set -e
+  check "swap succeeds ($state)" $rc
+  b="$host/backend"
+  [[ "$(cat "$b/LICENSES/notice.txt")" == "new notice" && ! -e "$b/LICENSES/removed.txt" ]] \
+    && echo "ok: LICENSES is the new one, with no stale file ($state)" || { echo "FAIL: LICENSES wrong ($state)"; FAIL=1; }
+  for f in pyproject.toml uv.lock Dockerfile README.md LICENSE; do
+    [[ "$(cat "$b/$f")" == "new $f" ]] || { echo "FAIL: $f not replaced ($state)"; FAIL=1; }
+  done
+  [[ "$(cat "$b/src/a.py")" == "new src" && "$(cat "$b/.secrets/key")" == secret && "$(cat "$b/data/app.db")" == rows ]] \
+    && echo "ok: src is new; .secrets and data are untouched ($state)" || { echo "FAIL: src/.secrets/data ($state)"; FAIL=1; }
+done
+[[ "$(cat "$SWAP_DIR/good-with-licenses/backend/.replaced-T1/LICENSES/notice.txt")" == "old notice" ]] \
+  && echo "ok: the previous LICENSES is kept under .replaced-<ts>" || { echo "FAIL: previous LICENSES not kept"; FAIL=1; }
+
+# What the deploy prints for a rollback (after the swap, and when it refuses before the restart) is
+# the same restore: run the printed text on a swapped copy and the tree is the pre-deploy tree.
+for state in without with-licenses; do
+  for printed in rollback_and_exit refused_before_up_and_exit; do
+    host="$SWAP_DIR/printed-$printed-$state"
+    make_host "$host" "$state"
+    before="$(tree_of "$host")"
+    run_swap "$host" >/dev/null 2>&1
+    set +e
+    text="$(
+      HOST=fake@host ROOT="$host" TS=T1 SHORT_REF=abc SERVICE=api IMAGE_NAME=img IMAGE_REPO=img SWAPPED=1 IMAGE_TAGGED=0
+      COMPOSE_FILES=(compose.yaml)
+      "$printed" 2>&1 >/dev/null
+    )"
+    set -e
+    if [[ "$printed" == rollback_and_exit ]]; then tag=ROLLBACK; else tag=RESTORE; fi
+    script="$(awk -v tag="$tag" 'index($0, "<<\x27" tag "\x27") { on = 1; next } on && $0 == tag { exit } on' <<<"$text")"
+    [[ -n "$script" ]] || { echo "FAIL: $printed printed no $tag script"; FAIL=1; continue; }
+    set +e
+    PATH="$STUB_BIN:$PATH" bash -s <<<"$script" >/dev/null 2>&1
+    rc=$?
+    set -e
+    if [[ $rc -eq 0 && "$(tree_of "$host")" == "$before" ]]; then
+      echo "ok: the rollback printed by $printed restores all seven items ($state)"
+    else
+      echo "FAIL: the rollback printed by $printed did not restore backend/ (rc=$rc, $state)"; FAIL=1
+    fi
+  done
 done
 
 echo "== transfer()/verify(): a remote failure must propagate through 'fn || rollback' =="
@@ -542,6 +712,125 @@ else
   echo "$MAIN_RESUME_OUT"
   FAIL=1
 fi
+
+echo "== preflight(): the running container's compose file set must match the requested one =="
+# Runs the real remote script locally: the fake ssh hands it to bash, and a
+# fake docker answers what preflight asks (compose version, ps -q, inspect, top).
+cat >"$FAKE_BIN/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  compose)
+    [[ "$2" == "version" ]] && exit 0
+    for arg in "$@"; do [[ "$arg" == "ps" ]] && { echo "${FAKE_CID:-}"; exit 0; }; done
+    ;;
+  inspect) echo "${FAKE_LABEL:-}" ;;
+  top) ;;
+esac
+exit 0
+EOF
+chmod +x "$FAKE_BIN/docker"
+PREFLIGHT_ROOT="$(mktemp -d)"
+mkdir "$PREFLIGHT_ROOT/backend"
+OVERLAY_LABEL="/srv/app/compose.yaml,/srv/app/pit5-edge.yaml"
+
+# preflight_case <FAKE_CID> <FAKE_LABEL> <ALLOW_COMPOSE_CHANGE> <compose file>...
+# Prints what main() did after preflight: SWAP marks the transfer step.
+preflight_case() {
+  local cid="$1" label="$2" allow="$3"; shift 3
+  (
+    set -e # as deploy-backend.sh runs; the caller turned errexit off
+    export PATH="$FAKE_BIN:$PATH" FAKE_CID="$cid" FAKE_LABEL="$label"
+    ssh() { shift; bash -c "$1"; }
+    snapshot_running() { return 0; }
+    backup() { return 0; }
+    transfer() { echo "SWAP" >&2; SWAPPED=1; }
+    build() { echo "BUILD" >&2; }
+    up() { return 0; }
+    verify() { return 0; }
+    after_hook() { return 0; }
+    verify_resumed() { return 0; }
+    HOST="fake@host"; ROOT="$PREFLIGHT_ROOT"; REF="HEAD"; SERVICE="api"; DRY_RUN=0
+    SHORT_REF="deadbee"; TS="20260101T000000Z"; FORCE=0; WORKER_PATTERN="mobile.worker"
+    ALLOW_COMPOSE_CHANGE="$allow"
+    COMPOSE_FILES=("$@"); COMPOSE_ARGS=()
+    for f in "$@"; do COMPOSE_ARGS+=(-f "$f"); done
+    main 2>&1
+    echo "MAIN_DONE"
+  )
+}
+
+set +e
+PF_MISMATCH="$(preflight_case cid1 "/srv/app/compose.yaml" 0 compose.yaml pit5-edge.yaml)"
+PF_MISMATCH_STATUS=$?
+PF_MATCH="$(preflight_case cid1 "$OVERLAY_LABEL" 0 pit5-edge.yaml compose.yaml)"
+PF_MATCH_STATUS=$?
+PF_NO_CONTAINER="$(preflight_case "" "" 0 compose.yaml pit5-edge.yaml)"
+PF_NO_CONTAINER_STATUS=$?
+PF_NO_LABEL="$(preflight_case cid1 "" 0 compose.yaml pit5-edge.yaml)"
+PF_NO_LABEL_STATUS=$?
+PF_ALLOWED="$(preflight_case cid1 "/srv/app/compose.yaml" 1 compose.yaml pit5-edge.yaml)"
+PF_ALLOWED_STATUS=$?
+PF_EXTRA_FILE="$(preflight_case cid1 "$OVERLAY_LABEL" 0 compose.yaml)"
+PF_EXTRA_FILE_STATUS=$?
+set -e
+rm -rf "$PREFLIGHT_ROOT"
+
+if [[ "$PF_MISMATCH_STATUS" -ne 0 ]] \
+  && echo "$PF_MISMATCH" | grep -qF "compose files differ: running api was created from [compose.yaml], this deploy names [compose.yaml,pit5-edge.yaml]" \
+  && echo "$PF_MISMATCH" | grep -qF -- "--allow-compose-change" \
+  && ! echo "$PF_MISMATCH" | grep -q "SWAP\|BUILD\|MAIN_DONE"; then
+  echo "ok: a different compose file set is refused before any swap or build, naming both sets"
+else
+  echo "FAIL: a different compose file set was not refused before the swap"
+  echo "$PF_MISMATCH"
+  FAIL=1
+fi
+if [[ "$PF_EXTRA_FILE_STATUS" -ne 0 ]] \
+  && echo "$PF_EXTRA_FILE" | grep -qF "created from [compose.yaml,pit5-edge.yaml], this deploy names [compose.yaml]" \
+  && ! echo "$PF_EXTRA_FILE" | grep -q "SWAP"; then
+  echo "ok: dropping an overlay is refused too"
+else
+  echo "FAIL: deploying without the overlay the container was created from was not refused"
+  echo "$PF_EXTRA_FILE"
+  FAIL=1
+fi
+for case in "PF_MATCH:the same set, in another order, from other paths" \
+  "PF_NO_CONTAINER:no running container" "PF_NO_LABEL:a container without the label"; do
+  name="${case%%:*}"
+  out="${!name}"
+  status_name="${name}_STATUS"
+  if [[ "${!status_name}" -eq 0 ]] && echo "$out" | grep -q "SWAP" && echo "$out" | grep -q "MAIN_DONE" \
+    && ! echo "$out" | grep -q "compose files differ"; then
+    echo "ok: deploy proceeds with ${case#*:}"
+  else
+    echo "FAIL: deploy did not proceed with ${case#*:}"
+    echo "$out"
+    FAIL=1
+  fi
+done
+if [[ "$PF_ALLOWED_STATUS" -eq 0 ]] \
+  && echo "$PF_ALLOWED" | grep -q "compose files differ" \
+  && echo "$PF_ALLOWED" | grep -q "continuing with the new compose file set" \
+  && echo "$PF_ALLOWED" | grep -q "SWAP" && echo "$PF_ALLOWED" | grep -q "MAIN_DONE"; then
+  echo "ok: --allow-compose-change proceeds despite a different file set, and says so"
+else
+  echo "FAIL: --allow-compose-change did not let the deploy proceed"
+  echo "$PF_ALLOWED"
+  FAIL=1
+fi
+
+echo "== --allow-compose-change / DEPLOY_ALLOW_COMPOSE_CHANGE are parsed =="
+(
+  git() { echo deadbee; }
+  parse_args --host h --root /r --allow-compose-change
+  [[ "$ALLOW_COMPOSE_CHANGE" == "1" ]]
+) && echo "ok: --allow-compose-change sets the flag" || { echo "FAIL: --allow-compose-change not parsed"; FAIL=1; }
+(
+  git() { echo deadbee; }
+  export DEPLOY_ALLOW_COMPOSE_CHANGE=1
+  source "$DEPLOY_SCRIPT"
+  [[ "$ALLOW_COMPOSE_CHANGE" == "1" ]]
+) && echo "ok: DEPLOY_ALLOW_COMPOSE_CHANGE=1 sets the flag" || { echo "FAIL: env flag not read"; FAIL=1; }
 
 if [[ "$FAIL" -eq 0 ]]; then
   echo "== all checks passed =="

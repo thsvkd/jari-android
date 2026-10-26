@@ -16,6 +16,7 @@ DRY_RUN=0
 FORCE=0
 ALLOW_UNRESUMABLE=0
 SKIP_RESUME_CHECK=0
+ALLOW_COMPOSE_CHANGE="${DEPLOY_ALLOW_COMPOSE_CHANGE:-0}"
 # How long to wait, after the restart, for every search that was running to
 # be searching again in the new container: recorded under the new run, its
 # worker alive and logged in to Korail. `up -d` only returns once the old
@@ -75,6 +76,11 @@ Usage: deploy-backend.sh --host user@host --root /remote/dir [options]
                              (listed first); the rest are still checked
   --skip-resume-check        Do not read or check the running searches at all, e.g.
                              when the running image predates `korail_bot.mobile running`
+  --allow-compose-change     Deploy although the running container was created from a
+                             different set of compose files than --compose-file names
+                             (env DEPLOY_ALLOW_COMPOSE_CHANGE=1). Without it the deploy
+                             refuses: recreating from another file set loses the networks
+                             and env the old container had
 USAGE
 }
 
@@ -109,6 +115,7 @@ parse_args() {
       --force) FORCE=1; shift ;;
       --allow-unresumable) ALLOW_UNRESUMABLE=1; shift ;;
       --skip-resume-check) SKIP_RESUME_CHECK=1; shift ;;
+      --allow-compose-change) ALLOW_COMPOSE_CHANGE=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) echo "unknown arg: $1" >&2; usage; exit 1 ;;
     esac
@@ -141,15 +148,41 @@ run_remote() {
   ssh "$HOST" "$remote_cmd"
 }
 
+# The running container records the compose files it was created from (absolute
+# paths, comma-separated) in a label. `up -d` recreates it from the files named
+# now, so a different set silently drops what the old files gave it: networks,
+# env_file, environment. Only basenames are compared (the root may be spelled
+# differently), and a container or label that is not there is not a mismatch.
 preflight() {
-  run_remote "preflight: backend dir, docker compose, worker check" \
-    "$ROOT" "$SERVICE" "$WORKER_PATTERN" "$FORCE" "${COMPOSE_ARGS[@]}" <<'EOF'
+  local requested="" f
+  for f in "${COMPOSE_FILES[@]}"; do requested+="${requested:+,}${f##*/}"; done
+  run_remote "preflight: backend dir, docker compose, compose file set, worker check" \
+    "$ROOT" "$SERVICE" "$WORKER_PATTERN" "$FORCE" "$ALLOW_COMPOSE_CHANGE" "$requested" \
+    "${COMPOSE_ARGS[@]}" <<'EOF'
 set -euo pipefail
-root="$1"; service="$2"; pattern="$3"; force="$4"; shift 4
+root="$1"; service="$2"; pattern="$3"; force="$4"; allow_change="$5"; requested="$6"; shift 6
 cd "$root"
 [[ -d backend ]] || { echo "missing $root/backend" >&2; exit 1; }
 docker compose version >/dev/null
 cid="$(docker compose "$@" ps -q "$service" 2>/dev/null || true)"
+# Sorted unique basenames, one per line, of a comma-separated file list.
+basenames() { printf '%s\n' "$1" | tr ',' '\n' | sed 's|.*/||; /^$/d' | sort -u; }
+if [[ -n "$cid" ]]; then
+  running="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$cid" 2>/dev/null || true)"
+  [[ "$running" == "<no value>" ]] && running=""
+  if [[ -n "$running" ]]; then
+    have="$(basenames "$running")"
+    want="$(basenames "$requested")"
+    if [[ "$have" != "$want" ]]; then
+      echo "compose files differ: running $service was created from [$(paste -sd, - <<<"$have")], this deploy names [$(paste -sd, - <<<"$want")]" >&2
+      if [[ "$allow_change" != "1" ]]; then
+        echo "recreating it from a different file set loses the networks, env_file and environment the old container had; use the same --compose-file flags, or --allow-compose-change to do this deliberately" >&2
+        exit 1
+      fi
+      echo "continuing with the new compose file set (--allow-compose-change)"
+    fi
+  fi
+fi
 # docker top reads the host's process table for the container's PIDs, so it
 # works even when the container image has no `ps` (slim/distroless) inside it.
 # Capture the output before grepping it: piping straight into `grep -q` can
@@ -404,10 +437,104 @@ EOF
   [[ "$DRY_RUN" -eq 1 ]] || IMAGE_TAGGED=1
 }
 
+# Everything backend/Dockerfile COPYs. The remote build must not depend on whatever an earlier
+# deploy left there, so each of these is shipped on every deploy (scripts/test-deploy-backend.sh
+# fails when a COPY source is missing from this list).
+TRANSFER_PATHS=(
+  backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile
+  backend/README.md backend/LICENSE backend/LICENSES
+)
+
+# The remote half of the swap, as one text the automatic step and the printed rollback both send, so
+# the two cannot drift. backend/ also holds things a deploy must not touch (.secrets/, anything the
+# compose file mounts), so only the named items are ever moved.
+#
+#   swap_apply   ROOT TMP TS ITEM...  move each existing ITEM into backend/.replaced-TS/ (noting in
+#                                     MANIFEST which existed and which did not), then move the new
+#                                     ones from TMP/backend/ in place
+#   swap_restore ROOT TS              put back exactly what swap_apply replaced: items that existed
+#                                     come back from .replaced-TS/, items that did not are removed
+#
+# Both stop at the first failing command and return 1 (no `set -e`: it is off inside the `if` that
+# calls them).
+read -r -d '' SWAP_LIB <<'LIB' || true
+swap_apply() {
+  local root="$1" tmp="$2" ts="$3" name saved
+  shift 3
+  saved=".replaced-${ts}"
+  cd "$root/backend" || return 1
+  for name in "$@"; do
+    [[ -e "$tmp/backend/$name" ]] || { echo "the archive has no backend/$name" >&2; return 1; }
+  done
+  mkdir -p "$saved" || return 1
+  : >"$saved/MANIFEST" || return 1
+  for name in "$@"; do
+    if [[ -e "$name" || -L "$name" ]]; then
+      # Noted before the move: restoring treats "existed" as "back it up, or leave it where it is".
+      printf 'existed %s\n' "$name" >>"$saved/MANIFEST" || return 1
+      mv -- "$name" "$saved/$name" || return 1
+    else
+      printf 'absent %s\n' "$name" >>"$saved/MANIFEST" || return 1
+    fi
+  done
+  for name in "$@"; do
+    mv -- "$tmp/backend/$name" "$name" || return 1
+  done
+}
+
+swap_restore() {
+  local root="$1" ts="$2" state name saved
+  saved=".replaced-${ts}"
+  cd "$root/backend" || return 1
+  [[ -f "$saved/MANIFEST" ]] || { echo "nothing to restore: backend/$saved/MANIFEST is missing" >&2; return 1; }
+  while read -r state name; do
+    case "$state" in
+      existed)
+        if [[ -e "$saved/$name" || -L "$saved/$name" ]]; then
+          rm -rf -- "$name" || return 1
+          mv -- "$saved/$name" "$name" || return 1
+        fi
+        ;;
+      absent)
+        rm -rf -- "$name" || return 1
+        ;;
+    esac
+  done <"$saved/MANIFEST"
+}
+LIB
+
+# The whole script the swap step runs: the library, then all-or-nothing around it.
+swap_remote_script() {
+  printf '%s\n' "$SWAP_LIB"
+  cat <<'BODY'
+set -uo pipefail
+root="$1"; tmp="$2"; ts="$3"; shift 3
+if swap_apply "$root" "$tmp" "$ts" "$@"; then
+  rm -rf -- "$tmp"
+  echo "swap ok: backend/ holds the new files; the previous ones are in backend/.replaced-${ts}/"
+else
+  echo "swap failed: putting the previous files back" >&2
+  if swap_restore "$root" "$ts"; then
+    rm -rf -- "$root/backend/.replaced-${ts}"
+    echo "swap undone: backend/ is as it was before this deploy" >&2
+  else
+    echo "UNDO FAILED: backend/ is half-swapped; the previous files are in $root/backend/.replaced-${ts}/ (MANIFEST lists them)" >&2
+  fi
+  exit 1
+fi
+BODY
+}
+
+# What the printed rollback runs on the host to put the whole replaced set back.
+restore_remote_snippet() {
+  printf '%s\n' "$SWAP_LIB"
+  printf "swap_restore '%s' '%s'\n" "$ROOT" "$TS"
+}
+
 transfer() {
   local tmp="/tmp/deploy-backend-${TS}"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    log "DRY-RUN git archive $REF backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile | ssh $HOST tar -x -C $tmp"
+    log "DRY-RUN git archive $REF ${TRANSFER_PATHS[*]} | ssh $HOST tar -x -C $tmp"
   else
     log "transfer: archiving $REF to $HOST:$tmp"
     # This function is called as `transfer || rollback_and_exit`, which turns
@@ -416,27 +543,11 @@ transfer() {
     # fail must therefore propagate with an explicit `|| return 1`, or a
     # remote failure here would fall through silently to SWAPPED=1 below.
     ssh "$HOST" "mkdir -p '$tmp'" || return 1
-    git -c core.autocrlf=false archive "$REF" \
-      backend/src backend/pyproject.toml backend/uv.lock backend/Dockerfile \
+    git -c core.autocrlf=false archive "$REF" "${TRANSFER_PATHS[@]}" \
       | ssh "$HOST" "tar -x -C '$tmp'" || return 1
   fi
-  run_remote "swap backend/src, copy build files" "$ROOT" "$tmp" "$TS" <<'EOF' || return 1
-set -euo pipefail
-root="$1"; tmp="$2"; ts="$3"
-cd "$root/backend"
-mkdir -p ".replaced-${ts}"
-mv src ".replaced-${ts}/src"
-mv "$tmp/backend/src" src || {
-  mv ".replaced-${ts}/src" src
-  echo "swap rolled back: could not move new src into place" >&2
-  exit 1
-}
-cp "$tmp/backend/pyproject.toml" pyproject.toml
-cp "$tmp/backend/uv.lock" uv.lock
-cp "$tmp/backend/Dockerfile" Dockerfile
-rm -rf "$tmp"
-echo "swap ok, previous src at backend/.replaced-${ts}/src"
-EOF
+  swap_remote_script | run_remote "swap backend/src, copy build files" "$ROOT" "$tmp" "$TS" \
+    "${TRANSFER_PATHS[@]#backend/}" || return 1
   SWAPPED=1
 }
 
@@ -518,15 +629,19 @@ EOF
 rollback_and_exit() {
   if [[ "$SWAPPED" -ne 1 ]]; then
     cat >&2 <<MSG
-[deploy] FAILED before the swap step reported success. In the common case
-backend/src on $HOST was not left changed (moving the new src into place
-itself puts the previous src back on failure); there is nothing to roll
-back. But if the swap step failed AFTER moving the new src in -- copying
-pyproject.toml/uv.lock/Dockerfile, or the final cleanup -- src was already
-replaced even though this run reports failure. Check $HOST:$ROOT/backend for
-a leftover .replaced-${TS}/src before assuming nothing changed. Fix the
-issue and re-run.
+[deploy] FAILED before the swap step reported success. The swap step puts the
+previous files back itself when one of its moves fails, and says so ("swap
+undone"); in that case backend/ on $HOST is as it was and there is nothing to
+roll back. If it says "UNDO FAILED", or the connection dropped in the middle
+of the step, backend/ may be half-swapped: look for $ROOT/backend/.replaced-${TS}/
+(MANIFEST lists what was moved out) and run the restore below. Fix the issue
+and re-run.
+
+  ssh $HOST bash -s <<'RESTORE'
+set -euo pipefail
 MSG
+    restore_remote_snippet >&2
+    printf 'RESTORE\n' >&2
     exit 1
   fi
   local docker_rollback
@@ -536,19 +651,21 @@ MSG
     docker_rollback="# no pre-deploy image tag exists (no running $SERVICE container at backup time, or its image was a bare sha256 ID with no name:tag to restore) -- restore the image from backend.bak-${TS} or rebuild it instead"
   fi
   cat >&2 <<MSG
-[deploy] FAILED after the file swap. Roll back on $HOST with:
+[deploy] FAILED after the file swap. Roll back on $HOST with (it puts back every
+file the swap replaced - src, pyproject.toml, uv.lock, Dockerfile, README.md, LICENSE,
+LICENSES - and removes any that did not exist before; nothing else in backend/ is touched):
 
   ssh $HOST bash -s <<'ROLLBACK'
 set -euo pipefail
-cd '$ROOT/backend'
-rm -rf src
-mv '.replaced-${TS}/src' src
+MSG
+  restore_remote_snippet >&2
+  cat >&2 <<MSG
 cd '$ROOT'
 ${docker_rollback}
 docker compose $(printf -- '-f %q ' "${COMPOSE_FILES[@]}") up -d --no-deps '$SERVICE'
 ROLLBACK
 
-Full pre-deploy backend/ is also at $ROOT/backend.bak-${TS} if src alone is not enough.
+Full pre-deploy backend/ is also at $ROOT/backend.bak-${TS}.
 MSG
   exit 1
 }
@@ -572,20 +689,21 @@ refused_before_up_and_exit() {
   if [[ "$IMAGE_TAGGED" -eq 1 ]]; then
     docker_restore="docker tag '${IMAGE_REPO}:pre-${SHORT_REF}' '${IMAGE_NAME}'"
   else
-    docker_restore="# no pre-deploy image tag exists; the next build from the restored src rebuilds it"
+    docker_restore="# no pre-deploy image tag exists; the next build from the restored files rebuilds it"
   fi
   cat >&2 <<MSG
 [deploy] REFUSED right before the restart. Nothing was restarted and the
-running searches are untouched, but backend/src on $HOST is already the new
+running searches are untouched, but backend/ on $HOST already holds the new
 version and the $SERVICE image was rebuilt from it (the running container
 still runs the old image). Re-run the deploy once those searches are done,
-or put the old version back WITHOUT restarting:
+or put the old version back WITHOUT restarting (every file the swap replaced
+is put back, and any that did not exist before is removed):
 
   ssh $HOST bash -s <<'RESTORE'
 set -euo pipefail
-cd '$ROOT/backend'
-rm -rf src
-mv '.replaced-${TS}/src' src
+MSG
+  restore_remote_snippet >&2
+  cat >&2 <<MSG
 ${docker_restore}
 RESTORE
 MSG

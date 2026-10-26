@@ -29,7 +29,6 @@ from korail_mobile_api import (
     KorailReservationJobType,
     KorailSeatAssignment,
     KorailSeatClass,
-    MutationConsent,
     ReservationHoldResponse,
     SeatCarListResponse,
     SeatInventoryResponse,
@@ -37,21 +36,21 @@ from korail_mobile_api import (
     TrainSearchQuery,
     TrainSummary,
 )
-from korail_mobile_api import mutation_payloads as _mutation_payloads
-from korail_mobile_api import payloads as _read_payloads
 from korail_mobile_api.constants import KORAIL_STANDBY_WAIT_FLAG
 from korail_mobile_api.errors import (
     KorailApiError,
     KorailAppError,
+    KorailAppUpdateRequiredError,
     KorailAuthError,
+    KorailDynaPathError,
     KorailNetFunnelError,
     KorailNoResultsError,
     KorailProtocolError,
+    KorailRateLimitError,
     KorailServiceUnavailableError,
     KorailSoldOutError,
     KorailTransportError,
 )
-from korail_mobile_api.redaction import redact_mapping
 
 from korail_bot.config.settings import settings
 from korail_bot.models import ReservationOutcome, SeatPreference, SeatTarget
@@ -88,9 +87,16 @@ _KORAIL_PAGE_ROWS = 10
 # above all - is Korail answering, and asking again gets the same answer.
 # OSError covers a socket failure that escaped the client's own wrapping,
 # requests' included.
+#
+# KorailAppUpdateRequiredError (-8204 since 2026-10-21: Korail turns the client away) and
+# KorailRateLimitError are answers about the client and the traffic, not about the
+# credentials: the library raises them from the login in place of a KorailAuthError, and
+# reading them as a wrong password would tell the member to change a correct one.
 _LOGIN_UNAVAILABLE = (
     KorailTransportError,
     KorailServiceUnavailableError,
+    KorailAppUpdateRequiredError,
+    KorailRateLimitError,
     KorailNetFunnelError,
     KorailProtocolError,
     OSError,
@@ -111,14 +117,17 @@ def _korail_unreachable(exc: BaseException) -> bool:
     """
     Whether a failed login is one of _LOGIN_UNAVAILABLE, however it arrived.
 
-    The login POST itself turns every KorailAppError into a KorailAuthError
-    (korail_mobile_api session._login), SEMGTK included, so Korail being down
-    for maintenance at that moment reads as a wrong password unless the cause
-    underneath is looked at.
+    The library raises Korail's service-down, app-update and rate-limit answers to the login POST
+    as themselves and turns every other refusal into a KorailAuthError (session._finish_login),
+    which carries the reply in .raw but no cause. An error from a library that wrapped its cause
+    (a KorailAuthError raised from one of _LOGIN_UNAVAILABLE) is read through as well.
     """
     if isinstance(exc, _KorailUnreachable):
         return True
     if isinstance(exc, KorailAuthError) and isinstance(exc.__cause__, _LOGIN_UNAVAILABLE):
+        return True
+    # Whatever type the library gave a reply without strResult, it is no verdict on the credentials.
+    if _answered_without_result(exc):
         return True
     if _maintenance_notice(exc) is not None:
         return True
@@ -156,29 +165,126 @@ def _maintenance_notice(exc: BaseException) -> str | None:
 
 def _answered_without_result(exc: BaseException | None) -> bool:
     """
-    Whether Korail replied with JSON that has no strResult, however the client reported it.
+    Whether Korail's reply looks like a block, however the client reported it.
 
-    korail2 reads j['strResult'] without looking (KeyError: 'strResult'); korail_mobile_api
-    names the missing envelope field in a KorailProtocolError. Korail's own refusals and its
-    maintenance notice (S000) all carry strResult=FAIL, so they never match: this is the reply
-    an account got on pit5 from 2026-10-19 02:57 UTC, after Korail had restricted it.
+    Two shapes, both of them Korail turning an account away rather than answering about a request:
+
+    - JSON with no strResult. korail2 reads j['strResult'] without looking (KeyError: 'strResult').
+      korail_mobile_api keeps the decoded reply on the exception it raises (.raw), as a
+      KorailProtocolError for a typed read, as a KorailAppError with an empty code for a search or a
+      reservation, as a KorailAuthError for a login; the reply itself is the evidence, not the
+      exception type or its wording. Korail's own refusals and its maintenance notice (S000) all
+      carry strResult=FAIL, so they never match: this is the reply an account got on pit5 from
+      2026-10-19 02:57 UTC, after Korail had restricted it.
+    - A KorailDynaPathError: the anti-automation layer's refusal on a protected path (an integer
+      block code such as -8202, or HTTP 200 {"code": "-2000"} with no strResult). 1.1.1 surfaced
+      the same replies as a missing envelope, so production has always stopped on them.
     """
     for _ in range(5):
         if exc is None:
             return False
         if isinstance(exc, KeyError) and exc.args[:1] == ("strResult",):
             return True
-        if isinstance(exc, KorailApiError):
-            text = str(exc)
-            if "missing required envelope fields" in text and "strResult" in text:
+        if isinstance(exc, KorailDynaPathError):
+            return True
+        # The HTTP error body of a 5xx and the queue's answer are replies of another kind,
+        # whatever keys they lack.
+        if isinstance(exc, KorailApiError) and not isinstance(
+            exc, KorailTransportError | KorailNetFunnelError
+        ):
+            raw = exc.raw
+            if isinstance(raw, dict) and "strResult" not in raw:
                 return True
         exc = exc.__cause__
     return False
 
 
+# What a Korail code looks like: a negative or plain number up to six digits (-8204, -2000, 100) or
+# letters then digits (S000, P058, WRG000000, ERI411321, SEMGTK, SUPDATE), with the one prefix the
+# app's message table uses (S-ERR911411, API.E00000). That covers all 10,307 codes in
+# korail_mobile_api 2.6.2's table. Anything else in a code field is not a code - a request quoted
+# back, a card number (a run of 13 digits cannot match) - and is never logged.
+_CODE_VALUE = re.compile(r"-?\d{1,6}|(?:[A-Z]{1,7}[.-])?[A-Z]{1,7}\d{0,9}")
+CODE_WITHHELD = "<redacted>"
+
+
+def _logged_code(value) -> str | None:
+    """A code as text for a log line: itself if it looks like one, CODE_WITHHELD if not, None if absent."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
+    if not isinstance(value, str) or value == "":
+        return None
+    return value if _CODE_VALUE.fullmatch(value) else CODE_WITHHELD
+
+
+def korail_reply_code(exc: BaseException) -> str | None:
+    """
+    The code Korail gave in the reply an error carries, for a log line; None if it gave none.
+
+    Korail's result code (h_msg_cd) is on the exception. A DynaPath refusal has none: the code is
+    the integer block code, or "code", in the reply it kept. Only a value shaped like a code is
+    returned (else CODE_WITHHELD), never the message that came with it.
+    """
+    code = _logged_code(getattr(exc, "code", None))
+    if code is not None:
+        return code
+    raw = getattr(exc, "raw", None)
+    if not isinstance(raw, dict):
+        return None
+    for key in ("h_msg_cd", "code"):
+        code = _logged_code(raw.get(key))
+        if code is not None:
+            return code
+    for value in raw.values():
+        if isinstance(value, int) and not isinstance(value, bool) and value < 0:
+            return _logged_code(value)
+    return None
+
+
+# What a logged reply excerpt may carry: Korail's codes, and nothing it wrote in words.
+#
+# A reply that looks like a block is logged so the next reader can tell a block from an outage, and
+# the reply can quote the request (a password, a session id, an address with either in its query,
+# in any spelling: percent-encoded, JSON, split by & ...). Hiding what looks sensitive in free text
+# is a list that always has one more spelling, so no free text is echoed at all (the logging
+# boundary masks what does get through, see utils/log_redaction):
+#
+# - the result and code fields, and only when the value is shaped like a code (_CODE_VALUE);
+# - a notice Korail is known to answer in, when the text is exactly one of _KNOWN_NOTICES. The
+#   constant is logged, never the field's text, so a near miss shows as nothing.
+#
+# That is enough to tell the diagnostics apart: -8204 (update required) and S000 (maintenance) by
+# h_msg_cd, a restricted account by strResult being absent from the keys logged beside this and by
+# its notice, a DynaPath refusal by its code.
+_CODE_FIELDS = ("strResult", "h_msg_cd", "h_rslt_cd", "code")
+_NOTICE_FIELDS = ("rtnMsg", "h_msg_txt", "message", "msg")
+_KNOWN_NOTICES = frozenset(
+    {
+        "비정상적인 접근입니다.",  # the anti-macro layer's answer to a restricted account (pit5, 2026-10-19)
+        "최신 버전으로 업데이트",  # -8204: Korail turning away a client it no longer accepts
+    }
+)
+
+
+def _reply_excerpt(payload):
+    """The codes and known notices of a decoded reply; nothing else of it."""
+    if not isinstance(payload, dict):
+        return type(payload).__name__
+    shown = {}
+    for name in _CODE_FIELDS:
+        code = _logged_code(payload.get(name))
+        if code is not None:
+            shown[name] = code
+    for name in _NOTICE_FIELDS:
+        value = payload.get(name)
+        if isinstance(value, str) and value.strip() in _KNOWN_NOTICES:
+            shown[name] = value.strip()
+    return shown
+
+
 def _describe_reply(response, *, body: bool) -> str:
     """
-    The top-level keys of a reply, and with body=True a redacted excerpt (200 chars), for the log.
+    The top-level keys of a reply, and with body=True the codes-only excerpt (_reply_excerpt), for the log.
 
     Login replies go in with body=False: they can carry the member's details. Never raises.
     """
@@ -193,7 +299,7 @@ def _describe_reply(response, *, body: bool) -> str:
         keys = sorted(payload)[:30] if isinstance(payload, dict) else type(payload).__name__
         said = f"HTTP {status} DynaPath-Result={dynapath} keys={keys}"
         if body:
-            shown = redact_mapping(payload) if isinstance(payload, dict) else payload
+            shown = _reply_excerpt(payload)
             said += f" body={json.dumps(shown, ensure_ascii=False)[:200]!r}"
         return said
     except Exception as exc:
@@ -232,44 +338,6 @@ _TRAIN_FIELD_WIDTHS = {
 _NO_REMAINING_SEATS_CODE = "ERI411321"
 # "동일한 예약 내역이 있습니다": this account already holds the train.
 DUPLICATE_RESERVATION_CODE = "WRR800029"
-
-# The second unit of a coupled train carries a class code like "0A" (pit5,
-# 2026-09-22: KTX-산천 9069 beside 069's "07"). The pinned korail_mobile_api
-# accepts only two decimal digits there and refuses the row before any
-# request is sent, in the seat-map form check and in the reservation one; the
-# Korail app forwards the value verbatim, so both are widened to [0-9A-Z]{2}.
-# ponytail: patches the pinned library's private validators; drop when
-# upstream accepts alphanumeric class codes.
-_CLASS_CODE_RE = re.compile(r"[0-9A-Z]{2}")
-
-
-def _accept_alphanumeric_class_codes() -> None:
-    digits = _read_payloads._required_ascii_digits
-    decimal = _mutation_payloads._required_digits
-
-    def ascii_digits(value, name, *, lengths):
-        if (
-            name == "train_class_code"
-            and isinstance(value, str)
-            and _CLASS_CODE_RE.fullmatch(value)
-        ):
-            return value
-        return digits(value, name, lengths=lengths)
-
-    def decimal_digits(value, *, field):
-        if (
-            field == "train_class_code"
-            and isinstance(value, str)
-            and _CLASS_CODE_RE.fullmatch(value)
-        ):
-            return value
-        return decimal(value, field=field)
-
-    _read_payloads._required_ascii_digits = ascii_digits
-    _mutation_payloads._required_digits = decimal_digits
-
-
-_accept_alphanumeric_class_codes()
 
 # Re-exported: these used to be defined here, and half the codebase imports
 # them from this module. Moving them to rail_service.py is not a reason to
@@ -475,8 +543,19 @@ class KorailService(RailService):
         return client
 
     def _build_modern_client(self) -> KorailClient:
-        """Build the current Korail mobile client with DynaPath enabled."""
-        config_options = {"enable_dynapath": True}
+        """
+        Build the current Korail mobile client.
+
+        The DynaPath token is the library's default (SDK 2.0.1's `2!` diagnostic header); nothing
+        here writes one. Two defaults of korail_mobile_api 2.x are held at what the 1.1.1 client
+        this service ran on did, the requests production has been answered to, until a live look
+        says otherwise:
+
+        - no AppVersion field (2.x sends 7.0.8 on every request; 1.1.1 sent none);
+        - no NetFunnel queue pass (2.x asks korail's queue host before each search and, fail-closed,
+          before each reservation; 1.1.1 never did).
+        """
+        config_options: dict = {"app_version": None, "netfunnel_enabled": False}
         if settings.KORAIL_APP_VERSION:
             config_options["version"] = settings.KORAIL_APP_VERSION
         client = KorailClient(KorailConfig(**config_options))
@@ -1311,7 +1390,6 @@ class KorailService(RailService):
         try:
             hold = client.reserve(
                 train,
-                consent=MutationConsent(allow_reserve=True, dry_run=False),
                 passengers=KorailPassengerCounts(adult=passenger_count),
                 seat_class=self._seat_class(seat_class),
                 job_type=job_type,
@@ -1397,10 +1475,7 @@ class KorailService(RailService):
         client = self._modern_client
         if not self._logged_in or client is None:
             raise ValueError("예약을 취소하려면 먼저 로그인해 주세요.")
-        return client.cancel_unpaid_hold(
-            hold,
-            consent=MutationConsent(allow_cancel=True, dry_run=False),
-        )
+        return client.cancel_unpaid_hold(hold, check_first=False)
 
     @staticmethod
     def describe_waitlist_train(train) -> dict:
@@ -1825,10 +1900,8 @@ class KorailService(RailService):
         client = self._modern_client
         if client is None:
             raise ValueError("코레일에 로그인한 뒤 예약 대기를 신청해 주세요.")
-        reserve_consent = MutationConsent(allow_reserve=True, dry_run=False)
         hold = client.reserve(
             train,
-            consent=reserve_consent,
             passengers=KorailPassengerCounts(adult=passenger_count),
             seat_class=KorailSeatClass.GENERAL,
             job_type=KorailReservationJobType.STANDBY,
@@ -1836,17 +1909,13 @@ class KorailService(RailService):
         try:
             client.confirm_standby_hold(
                 hold,
-                consent=reserve_consent,
                 allow_seat_class_change=False,
                 sms_notify=False,
                 phone_no=None,
             )
         except Exception:
             try:
-                client.cancel_unpaid_hold(
-                    hold,
-                    consent=MutationConsent(allow_cancel=True, dry_run=False),
-                )
+                client.cancel_unpaid_hold(hold, check_first=False)
             except Exception as cancel_error:
                 logger.error(
                     "Could not cancel incomplete Korail standby hold (%s)",
@@ -1992,7 +2061,7 @@ class KorailService(RailService):
             pnr_no=str(rsv_id).strip(),
             journey_count=str(journey_count or "1").strip(),
         )
-        client.cancel_unpaid_hold(hold, consent=MutationConsent(allow_cancel=True, dry_run=False))
+        client.cancel_unpaid_hold(hold, check_first=False)
         logger.info("Korail standby withdrawn")
         return True
 
